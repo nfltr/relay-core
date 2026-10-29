@@ -6,6 +6,13 @@ such change is listed here with its migration; a patch version
 (v0.N.M) does not change it. `make check-api` holds each release to the
 changes listed (from the first tag on).
 
+## v0.2.3 (2026-10-29)
+
+- The HTTP edge sets `X-Real-IP` to the visitor's address as accepted, the
+  same value as `X-Forwarded-For`; a visitor's own `X-Real-IP` is still
+  removed first. Requires github.com/nfltr/relay client v0.19.11. No API
+  change.
+
 ## v0.2.1 (2026-10-29)
 
 - `scripts/check-publish.sh` holds its denylisted names as SHA-256
