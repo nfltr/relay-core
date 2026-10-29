@@ -6,6 +6,12 @@ such change is listed here with its migration; a patch version
 (v0.N.M) does not change it. `make check-api` holds each release to the
 changes listed (from the first tag on).
 
+## v0.2.5 (2026-10-29)
+
+- Requires github.com/nfltr/link v0.10.18 (senders waiting in a
+  connection's write buffer are woken one at a time; the wire is
+  unchanged), relay proto v0.19.4 and client v0.19.13. No API change.
+
 ## v0.2.4 (2026-10-29)
 
 - Requires github.com/nfltr/relay client v0.19.12 (v0.19.11's agent ran

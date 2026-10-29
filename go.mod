@@ -10,11 +10,11 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/nfltr/link v0.10.17
-	github.com/nfltr/link/peerlink/quiclink v0.4.17
+	github.com/nfltr/link v0.10.18
+	github.com/nfltr/link/peerlink/quiclink v0.4.18
 	github.com/nfltr/quic-go v0.63.1-nfltr.2
-	github.com/nfltr/relay/client v0.19.12
-	github.com/nfltr/relay/proto v0.19.3
+	github.com/nfltr/relay/client v0.19.13
+	github.com/nfltr/relay/proto v0.19.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/spf13/pflag v1.0.10
@@ -34,6 +34,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/flynn/noise v1.1.0 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.0.0-rc.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
@@ -64,9 +65,6 @@ require (
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	go.opentelemetry.io/otel/metric v1.45.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.45.0 // indirect
-	go.opentelemetry.io/otel/trace v1.45.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/sys v0.48.0 // indirect
