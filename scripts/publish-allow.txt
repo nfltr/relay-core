@@ -1,0 +1,2 @@
+# check-publish.sh allowlist: "<file>: <finding> -- <reason>".
+core/identity/template_test.go: email a@x.io -- a template test's sample subject, not a mailbox

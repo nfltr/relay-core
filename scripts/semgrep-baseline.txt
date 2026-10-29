@@ -1,0 +1,12 @@
+# semgrep baseline (scripts/sast-baseline.py): accepted or false-positive
+# findings, triaged by rule.
+# Regenerate only after triaging every new finding:
+#   scripts/check-semgrep.sh --update
+math-random-used core/session/dispatcher_grpc.go 6015cc9b848e6a73  # "math/rand"
+no-direct-write-to-responsewriter core/relaystatus/relaystatus.go defd68831afd18ea  # _, _ = w.Write(body) // #nosec G705 -- protojson body served as application/json
+no-direct-write-to-responsewriter frontend/http/proxy.go 316bb776b1e74d90  # n, writeErr := w.Write(chunk.Response.Payload)
+no-direct-write-to-responsewriter frontend/http/proxy.go 453f12d93b8476eb  # n, writeErr := w.Write(buffered.Response.Payload)
+no-direct-write-to-responsewriter frontend/http/proxy.go 759297787d35bd7c  # n, writeErr = w.Write(buffered.Response.Payload)
+no-direct-write-to-responsewriter frontend/http/proxy.go ef2f72d999ca5b9e  # totalBytes, _ := w.Write(data.Response.Payload)
+no-direct-write-to-responsewriter frontend/http/proxy.go ef2f72d999ca5b9e  # totalBytes, _ := w.Write(data.Response.Payload)
+use-of-sha1 internal/platform/wsconn/wsconn.go acbf7896be5f7f66  # h := sha1.New() // #nosec G401 -- SHA-1 is mandated by RFC 6455 for Sec-WebSocke
