@@ -5,11 +5,13 @@ package session
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
 )
 
 // The core's wiring and drain, as every composition runs them
@@ -154,6 +156,9 @@ func (c *Core) ServeAgents(ctx context.Context, logger *slog.Logger, s GRPCStopp
 	// or failed) the stop waiter and the reaper end too.
 	logger.Info("serving gRPC", "address", l.Addr().String())
 	err := serve(l)
+	if errors.Is(err, grpc.ErrServerStopped) {
+		err = nil // the stop (ctx ended) came before serving began
+	}
 	cancel()
 	if werr := eg.Wait(); err == nil {
 		err = werr
