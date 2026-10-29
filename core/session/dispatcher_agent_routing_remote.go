@@ -55,7 +55,7 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 			// one. A cross-pod relay that can never even connect is exactly
 			// the failure this metric exists to surface.
 			logger.Error("failed to dial peer for target agent", "error", err)
-			metrics.RegisterPodToPodConnectionFailure("")
+			metrics.RegisterPodToPodConnectionFailure()
 		}
 		metrics.RegisterA2ARequest("remote", "error")
 		metrics.RegisterA2AError("not_found")
@@ -125,7 +125,7 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 				}
 				logStreamLifecycleWithLogger(logger, "failed to receive response from remote pod", err)
 				if !isExpectedStreamDisconnect(err) {
-					metrics.RegisterPodToPodConnectionFailure(peerResult.targetPodIP)
+					metrics.RegisterPodToPodConnectionFailure()
 				}
 				return fmt.Errorf("%v: %w", err, podToPodStreamErr)
 			}

@@ -42,6 +42,12 @@ func RecordChainAnswer(path string, refused bool, code string, hops uint8, laten
 	}
 	chainAnswers.WithLabelValues(path, result, code, hopsLabel(hops)).Inc()
 	chainAnswerSeconds.WithLabelValues(path).Observe(latency.Seconds())
+	switch path {
+	case "connect":
+		ObserveTransferOpen(PathConnect, latency)
+	case "replica":
+		ObserveTransferOpen(PathReplica, latency)
+	}
 }
 
 // RecordChainAbort counts one forwarded session's abort. allow:wrapper

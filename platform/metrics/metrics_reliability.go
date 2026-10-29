@@ -10,13 +10,12 @@ import (
 // --- Connection-break and reliability metrics ---
 
 var (
-	podToPodConnectionFailures = auto.NewCounterVec(
+	podToPodConnectionFailures = auto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: dispatcherNamespace,
 			Name:      "pod_to_pod_connection_failures_total",
 			Help:      "Total pod-to-pod gRPC connection/stream failures.",
 		},
-		[]string{"target_pod"},
 	)
 
 	brokerMessageDecodeErrors = auto.NewCounter(
@@ -53,9 +52,10 @@ var (
 	)
 )
 
-// RegisterPodToPodConnectionFailure counts a failed connection to another replica, by its address.
-func RegisterPodToPodConnectionFailure(targetPod string) {
-	podToPodConnectionFailures.WithLabelValues(targetPod).Inc()
+// RegisterPodToPodConnectionFailure counts a failed connection to another
+// replica. No label names the replica: an address label is never deleted.
+func RegisterPodToPodConnectionFailure() {
+	podToPodConnectionFailures.Inc()
 }
 
 // RegisterBrokerMessageDecodeError counts a broker message that failed to decode.

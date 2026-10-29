@@ -124,7 +124,9 @@ func newAgentLink(d *TCPDispatcher, addr net.Addr) *agentLink {
 	l.tcp = mustNode(peerlink.New(peerlink.Config{
 		Listener: l.ln,
 		Link:     link.Config{Window: TCPDataWindow, Auth: agentLinkTokens{l}},
-		Observer: func(string) link.Observer { return agentLinkObserver{l: l} },
+		Observer: func(string) link.Observer {
+			return agentLinkObserver{Observer: metrics.TransferObserver(metrics.PathTCPLink, true), l: l}
+		},
 		ServedPeer: func(nc net.Conn, id link.Identity) string {
 			tc, ok := nc.(*agentLinkConn)
 			if !ok {
@@ -177,6 +179,8 @@ func (d *TCPDispatcher) AgentLinkQUIC(pc net.PacketConn, tc *tls.Config) (serve 
 		return nil, err
 	}
 	return func(context.Context) error {
+		// The Node's bytes, its ended connections' too, read at each scrape.
+		defer metrics.TrackTransferConn(metrics.PathTCPQUIC, l.quic.Stats)()
 		return l.quic.Serve(refuseAgentSessions) // until the gRPC port closes (drain)
 	}, nil
 }
@@ -397,6 +401,7 @@ func (l *agentLink) silent(token, transport string) {
 	}
 	p.silentOnce.Do(func() {
 		metrics.RecordAgentLinkConnection(transport, "silent")
+		metrics.TransferError(linkPath(transport), metrics.TransferDeadPeer)
 		l.d.logger.Info("agent link silent past its liveness timeout: the agent's stream ends", "agent_id", p.agent, "transport", transport)
 		close(p.silent)
 	})
@@ -408,8 +413,8 @@ var errAgentLinkSilent = status.Error(codes.Unavailable, "the agent link went si
 // agentLinkObserver sees the TCP agent link's connections end: one that
 // ended silent (link.ErrDeadPeer) ends its primary (silent).
 type agentLinkObserver struct {
-	link.NopObserver
-	l *agentLink
+	link.Observer // its credit waits and ABORTs (metrics.TransferObserver)
+	l             *agentLink
 }
 
 func (o agentLinkObserver) ConnDown(id link.Identity, err error) {
@@ -533,10 +538,32 @@ func (l *agentLink) open(ctx context.Context, p *tcpAgentStream, open *pb.TCPDat
 		l.d.logger.Debug("agent link: open failed; the frame streams take the session", "agent_id", p.agent, "error", err)
 		return nil, nil, false, nil
 	}
-	metrics.RecordAgentLinkSession(transport, sessionKind(open))
+	kind := sessionKind(open)
+	metrics.RecordAgentLinkSession(transport, kind)
 	metrics.AddAgentLinkOpenSessions(transport, 1)
 	p.linkSessions.Add(1)
-	return s, sync.OnceFunc(func() { metrics.AddAgentLinkOpenSessions(transport, -1); p.linkSessions.Add(-1) }), true, nil
+	// An HTTP session is the HTTP leaf's to count (http_link); the agent
+	// link's own are its tcp and e2ee sessions.
+	path, counted := linkPath(transport), kind != "http"
+	var began time.Time
+	if counted {
+		began = metrics.TransferBegin(path)
+	}
+	return s, sync.OnceFunc(func() {
+		metrics.AddAgentLinkOpenSessions(transport, -1)
+		p.linkSessions.Add(-1)
+		if counted {
+			metrics.TransferEnd(path, began)
+		}
+	}), true, nil
+}
+
+// linkPath is the transfer path of an agent-link transport.
+func linkPath(transport string) metrics.Path {
+	if transport == dataplane.AgentLinkQUIC {
+		return metrics.PathTCPQUIC
+	}
+	return metrics.PathTCPLink
 }
 
 func sessionKind(open *pb.TCPData) string {

@@ -19,7 +19,7 @@ import (
 // relaytest's TestMetricsNameNobody applies to every series the running
 // relay serves: no label name containing any of these words.
 func TestNoIdentifyingLabels(t *testing.T) {
-	forbidden := regexp.MustCompile(`(?i)agent|owner|account|user|key|ip|addr|peer|share|subdomain|email|tenant|worker|pod_id|pool`)
+	forbidden := regexp.MustCompile(`(?i)agent|owner|account|user|key|ip|addr|peer|share|subdomain|email|tenant|worker|pod|pool`)
 	vars := regexp.MustCompile(`variableLabels: \{([^}]*)\}`)
 	ch := make(chan *prometheus.Desc, 1024)
 	all.Describe(ch)

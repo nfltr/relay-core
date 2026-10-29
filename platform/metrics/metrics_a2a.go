@@ -51,11 +51,22 @@ var (
 // routeType is "local" or "remote"; status is "ok", "error", "deadline_exceeded", "cancelled".
 func RegisterA2ARequest(routeType, status string) {
 	a2aRequestsTotal.WithLabelValues(routeType, status).Inc()
+	TransferOpened(PathA2A, a2aResults[status])
+}
+
+// a2aResults are A2A statuses by the transfer result they count as; the
+// others count as "other".
+var a2aResults = map[string]string{
+	"ok":                  "ok",
+	"draining":            "ERROR_REASON_RELAY_DRAINING",
+	"target_disconnected": "ERROR_REASON_AGENT_OFFLINE",
+	"denied":              "ERROR_REASON_UNAUTHENTICATED",
 }
 
 // RegisterA2ALatency records the end-to-end latency of an A2A transaction.
 func RegisterA2ALatency(routeType string, durationMs float64) {
 	a2aLatencyHis.WithLabelValues(routeType).Observe(durationMs)
+	PathA2A.series().duration.Observe(durationMs / 1000)
 }
 
 // RegisterA2AError records an A2A error.
@@ -67,9 +78,11 @@ func RegisterA2AError(errorType string) {
 // IncrA2AActiveSessions increments the active A2A session gauge.
 func IncrA2AActiveSessions() {
 	a2aActiveSessions.Inc()
+	transfers.activeN[PathA2A].Add(1)
 }
 
 // DecrA2AActiveSessions decrements the active A2A session gauge.
 func DecrA2AActiveSessions() {
 	a2aActiveSessions.Dec()
+	transfers.activeN[PathA2A].Add(-1)
 }

@@ -6,6 +6,35 @@ such change is listed here with its migration; a patch version
 (v0.N.M) does not change it. `make check-api` holds each release to the
 changes listed (from the first tag on).
 
+## Unreleased
+
+- Requires github.com/nfltr/link v0.11.0 (connection counters:
+  `Conn.Stats`, `Observer.SessionAbort`, `Credit.SetObserver`) and
+  peerlink/quiclink v0.5.0 (`Node.Stats`).
+- The transfer families: every data path reports the same shape, labelled
+  by a closed `path` (`metrics.Path`, `metrics.PathNames`: http_link,
+  http_grpc, sni, connect, ssh, tcp_link, tcp_quic, tcp_dataconn,
+  tcp_grpc, a2a, replica, wg, p2p_relay, mailbox, blob, accounts):
+  `nfltr_relay_transfer_opens_total{path,result}`, `_active{path}`,
+  `_bytes_total{path,direction}` (counted while bytes flow: link
+  connections' `Stats` and quiclink's `Node.Stats` read at scrape, ended
+  connections kept, so counters never go back), `_errors_total{path,reason,code}`
+  (a link ABORT's code), `_open_seconds`, `_first_byte_seconds`,
+  `_duration_seconds{path}`, `_stall_seconds_total`, `_stalls_total`
+  (credit waits, gRPC fallback streams' too) and `_queued_bytes{path}`.
+  Nothing allocates per session or byte and nothing runs between scrapes
+  (`TestTransferHotPathAllocs`). Recorded here: the agent transports
+  (tcp_link, tcp_quic, tcp_dataconn, tcp_grpc), sni, connect, http_link
+  and http_grpc opens, a2a, and replica answers; relay-server records its
+  own paths through the same functions (`TransferBegin`/`TransferEnd`,
+  `TransferOpened`, `TransferError`, `TransferAbort`, `AddTransferBytes`,
+  `TrackTransferConn`, `TransferObserver`).
+- `grpc_server_handling_seconds` (gRPC handling time; a stream's
+  lifetime), buckets `metrics.SecondsBuckets` (1 ms to 60 s, 12).
+- API change: `metrics.RegisterPodToPodConnectionFailure()` takes no
+  argument; `pod_to_pod_connection_failures_total` lost its `target_pod`
+  label (a replica address, never deleted). Callers drop the argument.
+
 ## v0.2.5 (2026-10-29)
 
 - Requires github.com/nfltr/link v0.10.18 (senders waiting in a

@@ -156,7 +156,8 @@ func (d *TCPDispatcher) serveDataConn(c net.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), DataPlaneSniffTimeout)
 	defer cancel()
 	lc, id, err := link.Server(ctx, c, link.Config{
-		Window: TCPDataWindow, Auth: bindTokens{d}, Observer: dataConnObserver{logger: d.logger},
+		Window: TCPDataWindow, Auth: bindTokens{d},
+		Observer: dataConnObserver{Observer: metrics.TransferObserver(metrics.PathTCPDataConn, false), logger: d.logger},
 	})
 	if err != nil {
 		var ve *link.VersionError
@@ -168,6 +169,7 @@ func (d *TCPDispatcher) serveDataConn(c net.Conn) {
 		return
 	}
 	metrics.RecordDataConnection(lc.Version(), "agent")
+	defer metrics.TrackTransferConn(metrics.PathTCPDataConn, lc.Stats)()
 	dc := dataplane.Wrap(lc)
 	defer dc.Close() //nolint:errcheck
 	// Bound once the reply went out: a session placed here meanwhile would
@@ -210,14 +212,15 @@ func (b bindTokens) Verify(_ context.Context, _ tls.ConnectionState, method byte
 // dataConnObserver logs and counts a data connection the link ended
 // because its agent fell silent (version 2 liveness).
 type dataConnObserver struct {
-	link.NopObserver
-	logger *slog.Logger
+	link.Observer // its ABORTs (its credit waits are in its Stats)
+	logger        *slog.Logger
 }
 
 func (o dataConnObserver) ConnDown(id link.Identity, err error) {
 	if errors.Is(err, link.ErrDeadPeer) {
 		o.logger.Warn("tcp data connection: agent silent past its liveness", "agent_id", id.Subject)
 		metrics.RegisterTCPTunnelError("dead_peer")
+		metrics.TransferError(metrics.PathTCPDataConn, metrics.TransferDeadPeer)
 	}
 }
 
@@ -233,7 +236,9 @@ func grpcCredit(ctx context.Context, send func(*pb.TCPData)) *link.Credit {
 	if err != nil {
 		return nil
 	}
-	return link.NewCredit(tcpGRPCWindow, w, func(sid string, n int) { send(dataplane.WindowFrame(sid, n)) })
+	cr := link.NewCredit(tcpGRPCWindow, w, func(sid string, n int) { send(dataplane.WindowFrame(sid, n)) })
+	cr.SetObserver(metrics.TransferObserver(metrics.PathTCPGRPC, true))
+	return cr
 }
 
 // grpcCreditFrame applies a frame received on a gRPC stream with credit:

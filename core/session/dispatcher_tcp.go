@@ -299,6 +299,11 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		return errTCPSessionRefused
 	}
 
+	path := streamPath(as)
+	began := metrics.TransferBegin(path)
+	defer metrics.TransferEnd(path, began)
+	firstByte := true
+
 	// Send open frame so the agent dials ep.TargetAddr.
 	as.send(&pb.TCPData{SessionId: sessionID, AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, Open: true, E2Ee: ep.E2EE, ClientAddr: ep.ClientAddr})
 	go d.pumpToAgent(conn, as, sessionID, sess)
@@ -325,6 +330,10 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 				<-sess.closed // the client's bytes still go to the agent until it ends too
 			}
 			return nil
+		}
+		if firstByte {
+			firstByte = false
+			metrics.ObserveTransferFirstByte(path, time.Since(began))
 		}
 		err := writeBatch(bufs)
 		clear(bufs)

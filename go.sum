@@ -158,10 +158,10 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/nfltr/link v0.10.18 h1:n2xVXqP4ZXmW/GKBzdVog8Gw58PddEvGe5MOfE8g1oI=
-github.com/nfltr/link v0.10.18/go.mod h1:VGids407ezjoetV5F61JjkK6ri8aI9bJAcQrFLaLiks=
-github.com/nfltr/link/peerlink/quiclink v0.4.18 h1:EBG5hMe2DcvWaRSnSBGGpbmyK57w3MtiiahSuHTJGvY=
-github.com/nfltr/link/peerlink/quiclink v0.4.18/go.mod h1:ALJC67RXIwmDtv6YhEavADyz4j0CFPFu46oCnaFOqVw=
+github.com/nfltr/link v0.11.0 h1:3/NT7g4ABnhFVmWRR/Dgg4diBN4t7vd4IXtNqKvuhdA=
+github.com/nfltr/link v0.11.0/go.mod h1:VGids407ezjoetV5F61JjkK6ri8aI9bJAcQrFLaLiks=
+github.com/nfltr/link/peerlink/quiclink v0.5.0 h1:3wXO4qGAW9s3ilp783hRXotyim+KP6C5tLgVOys5znE=
+github.com/nfltr/link/peerlink/quiclink v0.5.0/go.mod h1:Hn8HZexrol5Y8N5bQ/MH9udhyhcQBv4dghSxSxaRbv0=
 github.com/nfltr/quic-go v0.63.1-nfltr.2 h1:lO4X1/sAhQEyLcsSqDlw06gx3u8+3rb4LzZ9ROsbn6M=
 github.com/nfltr/quic-go v0.63.1-nfltr.2/go.mod h1:KlJwkQMVhFf/rlYdkm18TkxbgyKn1UO4AtWyo/hOj10=
 github.com/nfltr/relay/client v0.19.13 h1:A3wfiqPbKw5bIvHtiCWo3AHuSqeyNnSVJwUgaIRwf9w=

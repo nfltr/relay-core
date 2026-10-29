@@ -92,7 +92,7 @@ func TestA2AActiveSessions(t *testing.T) {
 }
 
 func TestRegisterPodToPodConnectionFailure(t *testing.T) {
-	RegisterPodToPodConnectionFailure("10.0.0.1")
+	RegisterPodToPodConnectionFailure()
 }
 
 func TestRegisterBrokerMessageDecodeError(t *testing.T) {

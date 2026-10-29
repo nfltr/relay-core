@@ -76,7 +76,7 @@ func (d *Dispatcher) cleanupPeerStream(result *PodRelayStream, agentID string, r
 		return
 	}
 	logger.Error("error occurred during pod to pod streaming", "error", retErr)
-	metrics.RegisterPodToPodConnectionFailure(result.targetPodIP)
+	metrics.RegisterPodToPodConnectionFailure()
 	result.cleanup()
 }
 
@@ -209,7 +209,7 @@ func (d *Dispatcher) RelayTunnel(incomingStream relayTunnelStream) (retErr error
 				// call is even set up (that defer only runs for a stream that
 				// dialed successfully and later broke).
 				logger.Error("failed to dial peer for RelayTunnel target", "error", dialErr)
-				metrics.RegisterPodToPodConnectionFailure("")
+				metrics.RegisterPodToPodConnectionFailure()
 			}
 			return dialErr
 		}

@@ -24,6 +24,7 @@ import (
 	"github.com/nfltr/relay-core/internal/platform/requestid"
 	"github.com/nfltr/relay-core/platform/clientgen"
 	appconfig "github.com/nfltr/relay-core/platform/config"
+	"github.com/nfltr/relay-core/platform/metrics"
 	"github.com/nfltr/relay/proto/wire/grpccodec"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/viper"
@@ -79,7 +80,9 @@ func NewGRPCServer(logger *slog.Logger, opts ...GRPCServerOption) *grpc.Server {
 	}
 	// Setup metrics — register in the default Prometheus registry so they are scraped.
 	// Use Register (not MustRegister) to tolerate repeated calls in tests.
-	srvMetrics := grpc_prom.NewServerMetrics()
+	// grpc_server_handling_seconds: a unary call's handling time, a
+	// stream's lifetime (past 60 s in the +Inf bucket).
+	srvMetrics := grpc_prom.NewServerMetrics(grpc_prom.WithServerHandlingTimeHistogram(grpc_prom.WithHistogramBuckets(metrics.SecondsBuckets)))
 	if err := prometheus.Register(srvMetrics); err != nil {
 		// If metrics were already registered (a relay started again in
 		// this process), count into the registered collectors: a new,

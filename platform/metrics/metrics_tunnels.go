@@ -109,21 +109,36 @@ var (
 func RegisterSNIRouterConnection() {
 	sniRouterConnections.Inc()
 	sniRouterActiveConnections.Inc()
+	transferStarted(PathSNI)
 }
 
 // DeregisterSNIRouterConnection decrements the active E2EE connection gauge.
 func DeregisterSNIRouterConnection() {
 	sniRouterActiveConnections.Dec()
+	transfers.activeN[PathSNI].Add(-1)
 }
 
 // RegisterSNIRouterDuration records the duration of an E2EE TLS passthrough session.
 func RegisterSNIRouterDuration(durationSec float64) {
 	sniRouterDuration.Observe(durationSec)
+	PathSNI.series().duration.Observe(durationSec)
 }
 
 // RegisterSNIRouterError records an SNI router error.
 func RegisterSNIRouterError(errorType string) {
 	sniRouterErrors.WithLabelValues(errorType).Inc()
+	if reason, refused := sniRefusals[errorType]; refused {
+		TransferOpened(PathSNI, reason)
+	}
+}
+
+// sniRefusals are the SNI router's errors before a connection opens, by
+// the transfer result they count as.
+var sniRefusals = map[string]string{
+	"share_store":      "ERROR_REASON_DIRECTORY_UNAVAILABLE",
+	"resolve":          "ERROR_REASON_AGENT_NOT_FOUND",
+	"share_ip_refused": "ERROR_REASON_SHARE_IP_REFUSED",
+	"parse":            "ERROR_REASON_PROTOCOL_UNSUPPORTED",
 }
 
 // ---------------------------------------------------------------------------
@@ -177,22 +192,28 @@ var (
 // answer's reason, a bounded enum name).
 func RecordConnectSession(e2ee bool, result string) {
 	connectSessions.WithLabelValues(strconv.FormatBool(e2ee), result).Inc()
+	if result != "open" { // an open counts as it starts (RegisterSSHProxyConnection)
+		TransferOpened(PathConnect, result)
+	}
 }
 
 // RegisterSSHProxyConnection records a new SSH proxy session.
 func RegisterSSHProxyConnection(path string) {
 	sshProxyConnections.WithLabelValues(path).Inc()
 	sshProxyActiveConnections.Inc()
+	transferStarted(PathConnect) // every connect session counts here, ssh-proxy's too
 }
 
 // DeregisterSSHProxyConnection decrements the active SSH proxy gauge.
 func DeregisterSSHProxyConnection() {
 	sshProxyActiveConnections.Dec()
+	transfers.activeN[PathConnect].Add(-1)
 }
 
 // RegisterSSHProxyDuration records completed SSH proxy session duration.
 func RegisterSSHProxyDuration(durationSec float64) {
 	sshProxyDuration.Observe(durationSec)
+	PathConnect.series().duration.Observe(durationSec)
 }
 
 // RegisterSSHProxyError records an SSH proxy error.

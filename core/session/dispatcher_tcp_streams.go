@@ -662,6 +662,9 @@ func (d *TCPDispatcher) sendLoop(agentID string, as *tcpAgentStream, stream tcpF
 		if err := stream.Send(frame); err != nil {
 			return err
 		}
+		if as.DC == nil { // a data connection's bytes are its link connection's (serveDataConn)
+			metrics.AddTransferBytes(metrics.PathTCPGRPC, len(frame.GetData()), 0)
+		}
 		// A data connection buffers frames: one write for all that
 		// were queued.
 		if flush != nil && len(as.SendCh) == 0 {
@@ -690,6 +693,9 @@ func (d *TCPDispatcher) recvLoop(as *tcpAgentStream, stream tcpFrameStream, onCo
 		// dispatched to sessions.  They carry protocol-level signals such
 		// as certificate rotation notifications.
 		sid := frame.GetSessionId()
+		if as.DC == nil {
+			metrics.AddTransferBytes(metrics.PathTCPGRPC, 0, len(frame.GetData()))
+		}
 		if as.DC == nil && as.cr != nil { // a gRPC stream with credit: grants and charges here
 			if err := grpcCreditFrame(as.cr, frame); err != nil {
 				return err
@@ -705,6 +711,7 @@ func (d *TCPDispatcher) recvLoop(as *tcpAgentStream, stream tcpFrameStream, onCo
 			d.logger.Warn("tcp session reset: its client took none of its bytes",
 				"agent_id", as.agent, "session", frame.GetSessionId(), "stall", d.SessionStall)
 			metrics.RegisterTCPTunnelError("stalled")
+			metrics.TransferError(streamPath(as), metrics.TransferStalled)
 		}
 	}
 }
@@ -947,3 +954,12 @@ var errTCPSessionLost = status.Error(codes.Unavailable, "tcp session lost: the a
 // errTCPSessionStalled ends a session reset because its client took none of
 // its bytes for the stall bound (tcpSessionStall).
 var errTCPSessionStalled = status.Error(codes.ResourceExhausted, "tcp session reset: its client took none of its bytes")
+
+// streamPath is the transfer path of a session on as: its data
+// connection's, or the gRPC frame streams'.
+func streamPath(as *tcpAgentStream) metrics.Path {
+	if as.DC != nil {
+		return metrics.PathTCPDataConn
+	}
+	return metrics.PathTCPGRPC
+}

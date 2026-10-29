@@ -47,7 +47,15 @@ var agentHTTPRequests = auto.NewCounterVec(prometheus.CounterOpts{
 
 // RecordAgentHTTPRequest counts one request to an agent on path ("link",
 // "grpc"). allow:wrapper
-func RecordAgentHTTPRequest(path string) { agentHTTPRequests.WithLabelValues(path).Inc() }
+func RecordAgentHTTPRequest(path string) {
+	agentHTTPRequests.WithLabelValues(path).Inc()
+	switch path {
+	case "link":
+		PathHTTPLink.series().ok.Inc()
+	case "grpc":
+		PathHTTPGRPC.series().ok.Inc()
+	}
+}
 
 // RecordDataConnection counts one data-connection hello of link wire
 // version (bounded: "1", "2", else "other") on kind ("agent", "connect").
