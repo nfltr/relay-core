@@ -98,16 +98,16 @@ var clientProxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-H
 
 // setForwardedHeaders gives the agent's service what a reverse proxy at
 // the edge forwards: the host the visitor asked for, the scheme it used and
-// its address. The agent keeps them (and Origin, Referer) and by default
+// its address (X-Forwarded-For and X-Real-IP, the same value). The agent keeps them (and Origin, Referer) and by default
 // sends X-Forwarded-Host as Host. Only the replica the visitor reached runs
 // it: a peer replica's forward keeps them (peers.go).
 func setForwardedHeaders(r *http.Request) {
 	for _, k := range clientProxyHeaders {
 		r.Header.Del(k)
 	}
-	// One backing array for the three values, an address validated without
+	// One backing array for the four values, an address validated without
 	// an allocation: front's budget (TestFrontAllocBudget).
-	v := make([]string, 3)
+	v := make([]string, 4)
 	v[0], v[1] = r.Host, "http"
 	if r.TLS != nil {
 		v[1] = "https"
@@ -118,8 +118,8 @@ func setForwardedHeaders(r *http.Request) {
 		host = r.RemoteAddr
 	}
 	if _, err := netip.ParseAddr(host); err == nil {
-		v[2] = host
-		r.Header["X-Forwarded-For"] = v[2:3:3]
+		v[2], v[3] = host, host
+		r.Header["X-Forwarded-For"], r.Header["X-Real-Ip"] = v[2:3:3], v[3:4:4]
 	}
 }
 

@@ -91,7 +91,8 @@ type TCPEndpoint struct {
 	// ClientAddr, on an E2EE connection, is the visitor's IP address as
 	// the relay accepted its connection (RouteConnection), sent to the
 	// agent in the open (pb.TCPData.ClientAddr): the agent ends the
-	// visitor's TLS and gives it to the backend as X-Forwarded-For.
+	// visitor's TLS and gives it to the backend as X-Forwarded-For and
+	// X-Real-IP.
 	ClientAddr string
 }
 

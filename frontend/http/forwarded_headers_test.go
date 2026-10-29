@@ -21,8 +21,9 @@ import (
 )
 
 // What reaches an agent from a visitor's request: the relay's own
-// X-Forwarded-For/Host/Proto (never the visitor's copies), and Origin and
-// Referer untouched, on every way a request reaches the agent.
+// X-Forwarded-For/Host/Proto and X-Real-IP (never the visitor's copies),
+// and Origin and Referer untouched, on every way a request reaches the
+// agent.
 
 const fwdPublicHost = "app.share.example"
 
@@ -48,7 +49,7 @@ func visitorRequest(tlsOn bool) *http.Request {
 func wantForwarded(proto string) map[string]string {
 	return map[string]string{
 		"X-Forwarded-Host": fwdPublicHost, "X-Forwarded-Proto": proto, "X-Forwarded-For": "203.0.113.7",
-		"Forwarded": "", "X-Real-Ip": "",
+		"Forwarded": "", "X-Real-Ip": "203.0.113.7",
 		"Origin": "https://" + fwdPublicHost, "Referer": "https://" + fwdPublicHost + "/page?x=1",
 	}
 }
