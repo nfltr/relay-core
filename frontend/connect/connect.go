@@ -20,7 +20,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/identity"
@@ -134,6 +133,7 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, refusal.Msg+"; this tunnel is plain (nfltr before v2.1.6 opens no other): update nfltr (nfltr update)", http.StatusUpgradeRequired)
 		return
 	case errors.As(err, &refusal):
+		metrics.RecordConnectSession(false, refusal.Reason.String())
 		http.Error(w, refusal.Msg, Status(refusal.Reason))
 		return
 	case err == nil && f.Core.TCPDispatcher == nil:
@@ -146,7 +146,7 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Per-tunnel lines are Debug: a client opening a connection per request
 	// (HTTP over tcp-connect) made them a fifth of the relay's CPU. The
-	// ssh_proxy metrics count and time every tunnel; failures stay Warn.
+	// transfer metrics (path connect) count and time every tunnel; failures stay Warn.
 	logger := logging.With(f.Logger, "agent_id", agentID, "target", targetAddr, "remote", r.RemoteAddr)
 	logger.Debug("ssh proxy: connecting to agent")
 
@@ -167,7 +167,7 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	agentConn, err := f.Core.TCPDispatcher.DialAgentWithRetry(ctx, agentID, targetAddr, retries, interval)
 	if err != nil {
 		logger.Warn("ssh proxy: dial agent failed", "error", err)
-		metrics.RegisterSSHProxyError("dial")
+		metrics.RecordConnectSession(false, relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE.String())
 		http.Error(w, "agent temporarily unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -175,12 +175,7 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	metrics.RecordConnectSession(false, "open")
 	f.audit(r, agentID, open, "allowed", "")
 
-	start := time.Now()
-	metrics.RegisterSSHProxyConnection("local")
-	defer func() {
-		metrics.DeregisterSSHProxyConnection()
-		metrics.RegisterSSHProxyDuration(time.Since(start).Seconds())
-	}()
+	defer metrics.TransferEnd(metrics.PathConnect, metrics.TransferBegin(metrics.PathConnect))
 	switch {
 	case stream:
 		serveStream(w, r, agentConn)
@@ -190,7 +185,6 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ws, err := wsconn.Upgrade(w, r)
 		if err != nil {
 			logger.Error("ssh proxy: WebSocket upgrade failed", "error", err)
-			metrics.RegisterSSHProxyError("ws_upgrade")
 			return
 		}
 		defer ws.Close() //nolint:errcheck
@@ -206,14 +200,12 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func serveHijacked(w http.ResponseWriter, agentConn net.Conn, logger *slog.Logger) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		metrics.RegisterSSHProxyError("hijack")
 		http.Error(w, "server does not support connection hijacking", http.StatusInternalServerError)
 		return
 	}
 	clientConn, buf, err := hj.Hijack()
 	if err != nil {
 		logger.Error("ssh proxy: hijack failed", "error", err)
-		metrics.RegisterSSHProxyError("hijack")
 		return
 	}
 	defer clientConn.Close() //nolint:errcheck

@@ -10,7 +10,6 @@ import (
 	"log/slog"
 
 	"github.com/nfltr/link/peerlink"
-	"github.com/nfltr/relay-core/platform/metrics"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -50,7 +49,7 @@ func (d *TCPDispatcher) ServeLinkTCP(s PeerSession, ep TCPEndpoint) {
 		if ep.Share != "" && !as.enforcesShare(ep.Share) {
 			d.logger.Warn("tcp tunnel: share connection refused: its stream does not enforce the share's policy",
 				"agent_id", ep.AgentID, "share", ep.Share)
-			metrics.RegisterSNIRouterError(sniErrShareUnenforced)
+			shareUnenforced()
 			return nil, nil, dataplane.Refusal(relayv1.ErrorReason_ERROR_REASON_SHARE_POLICY_UNENFORCED, errShareUnenforced.Error())
 		}
 		out, release, err := d.onwardLocal(ctx, ep, as)

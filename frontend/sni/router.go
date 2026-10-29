@@ -31,6 +31,7 @@ import (
 	"github.com/nfltr/relay-core/core/frontend"
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/platform/metrics"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 )
 
 // target is where an E2EE host name leads: the share's grant and code,
@@ -146,7 +147,7 @@ func (s *Router) handleConn(ctx context.Context, conn net.Conn) {
 	sni, peeked, err := session.ExtractSNI(conn)
 	if err != nil {
 		s.logger.Debug("sni: failed to extract SNI", "error", err, "remote", conn.RemoteAddr())
-		metrics.RegisterSNIRouterError("parse")
+		metrics.TransferOpened(metrics.PathSNI, relayv1.ErrorReason_ERROR_REASON_PROTOCOL_UNSUPPORTED.String())
 		return
 	}
 

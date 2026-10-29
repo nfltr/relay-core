@@ -8,6 +8,28 @@ changes listed (from the first tag on).
 
 ## Unreleased
 
+- The per-frontend families the transfer families replace are deleted
+  (no dual reporting): `rpc_server_dispatcher_tcp_tunnel_*` (sessions
+  count on the tcp_* path they ride; a session forwarded to the replica
+  holding its agent on path replica, a replica it cannot reach as a
+  refused open `ERROR_REASON_TARGET_UNREACHABLE`), `_sni_router_*` (path
+  sni; its refusals as `nfltr_relay_transfer_opens_total` results:
+  parse `PROTOCOL_UNSUPPORTED`, resolve `AGENT_NOT_FOUND`, share store
+  `DIRECTORY_UNAVAILABLE`, `SHARE_IP_REFUSED`, `SHARE_POLICY_UNENFORCED`),
+  `_ssh_proxy_*` (every connect session, path connect; a released
+  client's tunnel now counts every refusal and a failed dial
+  (`AGENT_OFFLINE`) in `connect_sessions_total` too) and
+  `rpc_server_proxy_request_duration_milliseconds`
+  (`rpc_server_proxy_http_request_duration_seconds`, route `proxy`).
+  API change: `metrics.RegisterTCPTunnelConnection`,
+  `DeregisterTCPTunnelConnection`, `RegisterTCPTunnelDuration`,
+  `RegisterTCPTunnelError`, `RegisterSNIRouterConnection`,
+  `DeregisterSNIRouterConnection`, `RegisterSNIRouterDuration`,
+  `RegisterSNIRouterError`, `RegisterSSHProxyConnection`,
+  `DeregisterSSHProxyConnection`, `RegisterSSHProxyDuration`,
+  `RegisterSSHProxyError` and `RegisterRequestDuration` are removed;
+  callers use `TransferBegin`/`TransferEnd` and `TransferOpened` with
+  their path. Guard: `TestReplacedFamiliesStayRetired`.
 - Requires github.com/nfltr/link v0.11.0 (connection counters:
   `Conn.Stats`, `Observer.SessionAbort`, `Credit.SetObserver`) and
   peerlink/quiclink v0.5.0 (`Node.Stats`).

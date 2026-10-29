@@ -1,0 +1,14 @@
+Incompatible changes:
+- ./platform/metrics.DeregisterSNIRouterConnection: removed
+- ./platform/metrics.DeregisterSSHProxyConnection: removed
+- ./platform/metrics.DeregisterTCPTunnelConnection: removed
+- ./platform/metrics.RegisterRequestDuration: removed
+- ./platform/metrics.RegisterSNIRouterConnection: removed
+- ./platform/metrics.RegisterSNIRouterDuration: removed
+- ./platform/metrics.RegisterSNIRouterError: removed
+- ./platform/metrics.RegisterSSHProxyConnection: removed
+- ./platform/metrics.RegisterSSHProxyDuration: removed
+- ./platform/metrics.RegisterSSHProxyError: removed
+- ./platform/metrics.RegisterTCPTunnelConnection: removed
+- ./platform/metrics.RegisterTCPTunnelDuration: removed
+- ./platform/metrics.RegisterTCPTunnelError: removed

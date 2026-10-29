@@ -44,10 +44,6 @@ func TestRegisterTimeoutRequests(t *testing.T) {
 	RegisterTimeoutRequests()
 }
 
-func TestRegisterRequestDuration(t *testing.T) {
-	RegisterRequestDuration("GET", "200", 150.0)
-}
-
 func TestRegisterLatencyIntroduced(t *testing.T) {
 	RegisterLatencyIntroduced("GET", "200", 42.0)
 }

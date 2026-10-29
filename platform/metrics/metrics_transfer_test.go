@@ -5,6 +5,7 @@ package metrics
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,4 +136,22 @@ func scrape(t *testing.T, p Path) map[string]float64 {
 		}
 	}
 	return out
+}
+
+// TestReplacedFamiliesStayRetired: the per-frontend families the transfer
+// families replaced (nfltr's observability plan, phase OBS7) are not
+// registered again; their sessions count on path sni, connect, replica and
+// the tcp_* paths.
+func TestReplacedFamiliesStayRetired(t *testing.T) {
+	retired := []string{"_tcp_tunnel_", "_sni_router_", "_ssh_proxy_", "rpc_server_proxy_request_duration_milliseconds"}
+	ch := make(chan *prometheus.Desc, 1024)
+	all.Describe(ch)
+	close(ch)
+	for d := range ch {
+		for _, name := range retired {
+			if strings.Contains(d.String(), name) {
+				t.Errorf("%s is registered again: %s", name, d)
+			}
+		}
+	}
 }

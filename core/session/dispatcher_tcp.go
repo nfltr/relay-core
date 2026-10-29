@@ -20,6 +20,7 @@ import (
 	"github.com/nfltr/relay-core/internal/platform/auth"
 	"github.com/nfltr/relay-core/internal/platform/logging"
 	"github.com/nfltr/relay-core/platform/metrics"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -254,11 +255,6 @@ func (d *TCPDispatcher) HandleConn(ctx context.Context, conn net.Conn, ep TCPEnd
 		return
 	}
 
-	metrics.RegisterTCPTunnelConnection("local")
-	defer func() {
-		metrics.DeregisterTCPTunnelConnection()
-		metrics.RegisterTCPTunnelDuration(time.Since(start).Seconds())
-	}()
 	_ = d.handleLocalConn(conn, ep, as) // a visitor conn: the caller closes it either way
 }
 
@@ -272,7 +268,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 	if ep.Share != "" && !as.enforcesShare(ep.Share) {
 		d.logger.Warn("tcp tunnel: share connection refused: its stream does not enforce the share's policy",
 			"agent_id", ep.AgentID, "share", ep.Share, "remote", conn.RemoteAddr())
-		metrics.RegisterSNIRouterError(sniErrShareUnenforced)
+		shareUnenforced()
 		return errTCPSessionRefused
 	}
 	open := &pb.TCPData{AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, E2Ee: ep.E2EE, ClientAddr: ep.ClientAddr}
@@ -295,7 +291,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 	if ep.Share != "" && !as.enforcesShare(ep.Share) {
 		d.logger.Warn("tcp tunnel: share connection refused: its stream does not enforce the share's policy",
 			"agent_id", ep.AgentID, "share", ep.Share, "remote", conn.RemoteAddr())
-		metrics.RegisterSNIRouterError(sniErrShareUnenforced)
+		shareUnenforced()
 		return errTCPSessionRefused
 	}
 
@@ -410,7 +406,7 @@ func (d *TCPDispatcher) RouteConnection(ctx context.Context, conn net.Conn, agen
 	if share != "" && as != nil && !as.enforcesShare(share) {
 		d.logger.Warn("sni route: share connection refused: its agent does not enforce the share's policy",
 			"agent_id", agentID, "share", share, "remote", conn.RemoteAddr())
-		metrics.RegisterSNIRouterError(sniErrShareUnenforced)
+		shareUnenforced()
 		return
 	}
 
@@ -419,11 +415,6 @@ func (d *TCPDispatcher) RouteConnection(ctx context.Context, conn net.Conn, agen
 		return
 	}
 
-	metrics.RegisterTCPTunnelConnection("local-e2ee")
-	defer func() {
-		metrics.DeregisterTCPTunnelConnection()
-		metrics.RegisterTCPTunnelDuration(time.Since(start).Seconds())
-	}()
 	_ = d.handleLocalConn(conn, ep, as) // a visitor conn: the caller closes it either way
 }
 
@@ -448,14 +439,11 @@ func (d *TCPDispatcher) forwardToPod(ctx context.Context, conn net.Conn, ep TCPE
 	s, err := d.openLink(ctx, ep)
 	if err != nil {
 		logger.Warn("tcp tunnel: cannot forward to the agent's replica", "error", err)
-		metrics.RegisterTCPTunnelError("dial")
+		metrics.TransferOpened(metrics.PathReplica, relayv1.ErrorReason_ERROR_REASON_TARGET_UNREACHABLE.String())
 		return
 	}
-	metrics.RegisterTCPTunnelConnection(path)
-	defer func() {
-		metrics.DeregisterTCPTunnelConnection()
-		metrics.RegisterTCPTunnelDuration(time.Since(start).Seconds())
-	}()
+	metrics.TransferBegin(metrics.PathReplica)
+	defer metrics.TransferEnd(metrics.PathReplica, start)
 	_ = peerlink.Join(conn, s)
 }
 

@@ -47,7 +47,6 @@ func TestNoIdentifyingLabels(t *testing.T) {
 // names and a three-digit code, else "other".
 func TestHTTPLabelsBounded(t *testing.T) {
 	RegisterRequestsTotal("ALICE-HUB", "12345", "other")
-	RegisterRequestDuration("ALICE-HUB", "-1", 1)
 	RegisterLatencyIntroduced("ALICE-HUB", "2000", 1)
 	RegisterRPCRequestPayloadSize("ALICE-HUB", 1)
 	RegisterRPCResponsePayloadSize("ALICE-HUB", "20x", 1)

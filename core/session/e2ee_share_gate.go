@@ -7,6 +7,8 @@ import (
 	"context"
 	"slices"
 
+	"github.com/nfltr/relay-core/platform/metrics"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -15,10 +17,11 @@ import (
 // (the agent SDK's sharePolicyHeader), one value per share code.
 const tcpSharePolicyHeader = "x-nfltr-share-policy"
 
-// sniErrShareUnenforced is the metric error type
-// (dispatcher_sni_router_errors_total) of a share connection no agent
-// stream enforcing the share could take (frontend/sni counts the others).
-const sniErrShareUnenforced = "share_policy_unenforced"
+// shareUnenforced counts a share connection no agent stream enforcing the
+// share could take, on sni (frontend/sni counts the other refusals).
+func shareUnenforced() {
+	metrics.TransferOpened(metrics.PathSNI, relayv1.ErrorReason_ERROR_REASON_SHARE_POLICY_UNENFORCED.String())
+}
 
 // sharesEnforcedBy reads the shares an agent's ConnectTCP stream names.
 func sharesEnforcedBy(ctx context.Context) []string {

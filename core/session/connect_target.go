@@ -11,7 +11,6 @@ import (
 
 	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/platform/config"
-	"github.com/nfltr/relay-core/platform/metrics"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 )
@@ -88,7 +87,6 @@ func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bo
 			return refuse(relayv1.ErrorReason_ERROR_REASON_FEATURE_UNSUPPORTED, "TCP tunneling is not enabled (set tcp.enabled=true)")
 		}
 		if r := d.connectService(agentID, port); r != nil {
-			metrics.RegisterSSHProxyError("unknown_service")
 			return "", "", r
 		}
 		return agentID, port, nil
@@ -102,7 +100,6 @@ func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bo
 	// A service agent's sessions name a service (agent_services.go); the
 	// agent dials only its own table, so a port means nothing to it.
 	if services, _ := d.AgentServices(agentID); len(services) > 0 {
-		metrics.RegisterSSHProxyError("service_required")
 		return refuse(relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT, fmt.Sprintf("agent %s serves named services (%s): connect to %s/<service>", agentID, agentservices.Format(services), agentID))
 	}
 	host := rules.TargetHost

@@ -90,7 +90,6 @@ func (f *Frontend) serveSession(r *http.Request, caller identity.Principal, open
 			return nil, nil, refuse(refusal.AgentID, refusal.Reason, refusal.Msg)
 		case errors.As(err, &dial):
 			f.Logger.Warn("connect: dial agent failed", "agent_id", dial.AgentID, "target", dial.TargetAddr, "error", dial.Err)
-			metrics.RegisterSSHProxyError("dial")
 			if errors.Is(err, session.ErrAgentAnswers) {
 				return nil, nil, refuse(dial.AgentID, relayv1.ErrorReason_ERROR_REASON_FEATURE_UNSUPPORTED, dial.Err.Error())
 			}
@@ -105,14 +104,12 @@ func (f *Frontend) serveSession(r *http.Request, caller identity.Principal, open
 		}
 		metrics.RecordConnectSession(e2ee, "open")
 		f.audit(r, out.AgentID, open, "allowed", "")
-		start := time.Now()
-		metrics.RegisterSSHProxyConnection("local")
+		began := metrics.TransferBegin(metrics.PathConnect)
 		return out.Session, func() {
 			if out.Release != nil {
 				out.Release()
 			}
-			metrics.DeregisterSSHProxyConnection()
-			metrics.RegisterSSHProxyDuration(time.Since(start).Seconds())
+			metrics.TransferEnd(metrics.PathConnect, began)
 		}, nil
 	})
 }

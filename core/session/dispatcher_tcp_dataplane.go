@@ -219,7 +219,6 @@ type dataConnObserver struct {
 func (o dataConnObserver) ConnDown(id link.Identity, err error) {
 	if errors.Is(err, link.ErrDeadPeer) {
 		o.logger.Warn("tcp data connection: agent silent past its liveness", "agent_id", id.Subject)
-		metrics.RegisterTCPTunnelError("dead_peer")
 		metrics.TransferError(metrics.PathTCPDataConn, metrics.TransferDeadPeer)
 	}
 }

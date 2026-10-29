@@ -710,7 +710,6 @@ func (d *TCPDispatcher) recvLoop(as *tcpAgentStream, stream tcpFrameStream, onCo
 		if as.Dispatch(frame, d.SessionStall) {
 			d.logger.Warn("tcp session reset: its client took none of its bytes",
 				"agent_id", as.agent, "session", frame.GetSessionId(), "stall", d.SessionStall)
-			metrics.RegisterTCPTunnelError("stalled")
 			metrics.TransferError(streamPath(as), metrics.TransferStalled)
 		}
 	}

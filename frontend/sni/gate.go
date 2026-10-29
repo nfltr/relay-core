@@ -21,16 +21,10 @@ import (
 
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/platform/metrics"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 )
 
 var errShareIPRefused = errors.New("client address is not in the share's IP allowlist")
-
-// Metric error types (dispatcher_sni_router_errors_total) of refused share
-// connections.
-const (
-	sniErrShareIP    = "share_ip_refused"
-	sniErrShareStore = "share_store"
-)
 
 // admitClient checks the share's IP allowlist for a client at ip.
 func (t target) admitClient(ip net.IP) error {
@@ -67,29 +61,26 @@ func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher
 	target, err := resolver.resolve(sni)
 	if errors.Is(err, errShareStore) {
 		logger.Warn("sni: share store unavailable; e2ee connection refused", "sni", sni, "error", err, "remote", conn.RemoteAddr())
-		metrics.RegisterSNIRouterError(sniErrShareStore)
+		metrics.TransferOpened(metrics.PathSNI, relayv1.ErrorReason_ERROR_REASON_DIRECTORY_UNAVAILABLE.String())
 		_ = conn.Close()
 		return
 	}
 	if err != nil {
 		logger.Debug("sni: hostname resolution failed", "sni", sni, "error", err, "remote", conn.RemoteAddr())
-		metrics.RegisterSNIRouterError("resolve")
+		metrics.TransferOpened(metrics.PathSNI, relayv1.ErrorReason_ERROR_REASON_AGENT_NOT_FOUND.String())
 		_ = conn.Close()
 		return
 	}
 	if err := target.admitClient(remoteIP(conn.RemoteAddr())); err != nil {
 		logger.Info("sni: share connection refused", "share", target.Share, "agent_id", target.AgentID, "remote", conn.RemoteAddr(), "reason", err)
-		metrics.RegisterSNIRouterError(sniErrShareIP)
+		metrics.TransferOpened(metrics.PathSNI, relayv1.ErrorReason_ERROR_REASON_SHARE_IP_REFUSED.String())
 		_ = conn.Close()
 		return
 	}
 	logger.Debug("sni: routing e2ee connection", "sni", sni, "agent_id", target.AgentID, "service", target.Service, "remote", conn.RemoteAddr())
 
-	metrics.RegisterSNIRouterConnection()
-	defer func() {
-		metrics.DeregisterSNIRouterConnection()
-		metrics.RegisterSNIRouterDuration(time.Since(start).Seconds())
-	}()
+	metrics.TransferBegin(metrics.PathSNI)
+	defer metrics.TransferEnd(metrics.PathSNI, start)
 	// The agent sees the complete ClientHello, then the rest of the handshake.
 	d.RouteConnection(ctx, &session.PrefixConn{Conn: conn, Prefix: peeked}, target.AgentID, target.Service, target.enforcedShare())
 }

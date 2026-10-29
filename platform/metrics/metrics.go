@@ -92,16 +92,6 @@ var (
 		},
 	)
 
-	requestDurationHis = auto.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: proxyNamespace,
-			Name:      "request_duration_milliseconds",
-			Help:      "Histogram of HTTP request durations",
-			Buckets:   timingBuckets,
-		},
-		[]string{"method", "status"}, // Labels for the histogram.
-	)
-
 	rpcServerAgentLatencyHis = auto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: proxyNamespace,
@@ -176,11 +166,6 @@ func RegisterRequestsTotal(method, status, apiType string) {
 // RegisterTimeoutRequests counts a request that timed out.
 func RegisterTimeoutRequests() {
 	timeoutRequests.Inc()
-}
-
-// RegisterRequestDuration observes a request's duration in milliseconds.
-func RegisterRequestDuration(method, status string, duration float64) {
-	requestDurationHis.WithLabelValues(httpMethod(method), httpStatus(status)).Observe(duration)
 }
 
 // RegisterLatencyIntroduced observes the latency the relay and agent added, in milliseconds.

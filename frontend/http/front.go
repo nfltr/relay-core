@@ -79,7 +79,6 @@ func (ing *Ingress) front(next http.Handler) http.Handler {
 		latencyIntroduced := (m.RequestAtAgent - m.RequestAtHTTPServer) + (m.ResponseAtHTTPServer - m.ResponseAtAgent)
 
 		metrics.RegisterLatencyIntroduced(r.Method, status, float64(latencyIntroduced))
-		metrics.RegisterRequestDuration(r.Method, status, float64(elapsed.Milliseconds()))
 
 		if ing.logger.Enabled(r.Context(), slog.LevelDebug) {
 			logger := ing.logger.With("AgentID", m.AgentID, "type", "proxy", "transaction_id", UUID)
