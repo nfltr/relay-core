@@ -1,15 +1,19 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build unix
+
 package httpingress
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,12 +22,12 @@ import (
 
 // slowReadBackend reads a request body step bytes at a time with a pause
 // after each step, and answers with how many it read; read and doneAt are
-// how many it has read and when it read the last one. Its connections
-// take a small receive buffer: what the agent has written to it and it has
-// not read yet stays small, so its drain is the agent's chunks in flight,
-// whose acks the relay sees, not bytes in socket buffers, which no proxy
-// sees.
-func slowReadBackend(t *testing.T, step int, pause time.Duration) (srv *httptest.Server, read, doneAt *atomic.Int64) {
+// how many it has read and when it read the last one. It serves on ln, or
+// without one on connections with a 64 KiB receive buffer: what the agent
+// has written to it and it has not read yet stays small, so its drain is
+// what the agent holds and reports, not bytes in socket buffers, which no
+// proxy sees.
+func slowReadBackend(t *testing.T, ln net.Listener, step int, pause time.Duration) (srv *httptest.Server, read, doneAt *atomic.Int64) {
 	read, doneAt = new(atomic.Int64), new(atomic.Int64)
 	srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, step)
@@ -40,7 +44,12 @@ func slowReadBackend(t *testing.T, step int, pause time.Duration) (srv *httptest
 		doneAt.Store(time.Now().UnixNano())
 		_, _ = io.WriteString(w, strconv.FormatInt(n, 10))
 	}))
-	srv.Listener = smallReadBuffer{srv.Listener}
+	if ln == nil {
+		ln = smallReadBuffer{srv.Listener}
+	} else {
+		_ = srv.Listener.Close()
+	}
+	srv.Listener = ln
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv, read, doneAt
@@ -59,7 +68,7 @@ func TestUploadDrainToSlowBackendIsProgress(t *testing.T) {
 	// (chunking.UploadWindow) drain for about 4 s, past it. One pause per
 	// chunk: a loaded machine stretches it by one wake-up's lateness, not
 	// by one per small read.
-	backend, read, doneAt := slowReadBackend(t, 1<<20, time.Second)
+	backend, read, doneAt := slowReadBackend(t, smallWindowListener(t), 1<<20, time.Second)
 	url, _ := startGRPCHTTPPath(t, backend.URL)
 	viper.Set("default.request.timeout", timeout)
 
@@ -94,7 +103,7 @@ func TestUploadDrainToSlowBackendIsProgressLink(t *testing.T) {
 	// packages took 2.2 s); it drains the agent's window for 8 s, past it.
 	// The drain is four grants long whatever the pace, so the two margins
 	// trade against each other.
-	backend, read, doneAt := slowReadBackend(t, 1<<20, 500*time.Millisecond)
+	backend, read, doneAt := slowReadBackend(t, nil, 1<<20, 500*time.Millisecond)
 	_, url := startAgentHTTPLink(t, backend.URL)
 	viper.Set("default.request.timeout", timeout)
 
@@ -115,14 +124,33 @@ func TestUploadDrainToSlowBackendIsProgressLink(t *testing.T) {
 	}
 }
 
-type smallReadBuffer struct{ net.Listener }
-
-func (l smallReadBuffer) Accept() (net.Conn, error) {
-	c, err := l.Listener.Accept()
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetReadBuffer(64 << 10)
+// smallWindowListener listens on loopback with a 16 KiB receive buffer and
+// a 1400-byte MSS, both set before the handshake. The agent's side then
+// buffers little too: Linux grows a sender's send buffer with its
+// congestion window times its MSS, and loopback's 64 KiB MSS let the
+// agent's kernel take about 3 MiB of an upload ahead of a slow backend, so
+// the agent acked chunks the backend read seconds later
+// (TestUploadDrainToSlowBackendIsProgress went 504 on Linux, not on macOS).
+// A 16 KiB window paces bulk reads on a loaded machine, so only the test
+// that needs it takes it.
+func smallWindowListener(t *testing.T) net.Listener {
+	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
+		var err error
+		if cerr := c.Control(func(fd uintptr) {
+			err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 16<<10)
+			// macOS refuses an MSS above its default before a connection;
+			// its send buffers stay small without it.
+			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_MAXSEG, 1400)
+		}); cerr != nil {
+			return cerr
+		}
+		return err
+	}}
+	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	return c, err
+	return l
 }
 
 // endTimer records when its reader returned EOF.
@@ -137,4 +165,14 @@ func (e *endTimer) Read(p []byte) (int, error) {
 		e.at.Store(time.Now().UnixNano())
 	}
 	return n, err
+}
+
+type smallReadBuffer struct{ net.Listener }
+
+func (l smallReadBuffer) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetReadBuffer(64 << 10)
+	}
+	return c, err
 }
