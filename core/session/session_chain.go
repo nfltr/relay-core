@@ -274,6 +274,19 @@ func (c *SessionConn) WriteTo(w io.Writer) (int64, error) {
 	return io.Copy(w, struct{ io.Reader }{c.Session})
 }
 
+// OnGrant has f called with each window update the agent sends for the
+// session, as its reader takes what was written (link's Session.OnGrant):
+// a writer whose writes all returned sees them still draining. It reports
+// false for a session whose transport reports none (QUIC, the frame
+// streams).
+func (c *SessionConn) OnGrant(f func(n int)) bool {
+	g, ok := c.Session.(interface{ OnGrant(func(int)) })
+	if ok {
+		g.OnGrant(f)
+	}
+	return ok
+}
+
 // dialedSession is a session DialAgent returned to a caller that is no
 // Forward hop (the browser terminal, released clients' tunnels, the agent
 // HTTP transport): its close runs release once, and ctx's end closes it.

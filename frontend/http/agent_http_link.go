@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"strings"
 	"sync"
@@ -53,7 +54,10 @@ type agentHTTPState struct {
 	idle     *time.Timer
 	timeout  time.Duration
 	timedOut bool
-	mu       sync.Mutex
+	// responded: the response began or the request ended; the session's
+	// grants no longer restart idle.
+	responded bool
+	mu        sync.Mutex
 }
 
 type agentHTTPStateKey struct{}
@@ -103,6 +107,7 @@ func newAgentHTTP(d *session.TCPDispatcher, logger *slog.Logger, relayCookie fun
 		BufferPool:    agentHTTPBuffers,
 		ModifyResponse: func(resp *http.Response) error {
 			st := resp.Request.Context().Value(agentHTTPStateKey{}).(*agentHTTPState)
+			st.respond()
 			if resp.StatusCode == http.StatusSwitchingProtocols {
 				// An upgraded connection (WebSocket) has no idle bound, and
 				// its body is the connection ReverseProxy copies both ways.
@@ -155,6 +160,15 @@ func (a *agentHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	})
 	defer st.idle.Stop()
+	defer st.respond()
+	// After the body's last byte the agent may still feed what its window
+	// holds to a slow backend: each grant of the session is progress
+	// (TestUploadDrainToSlowBackendIsProgressLink).
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		if g, ok := info.Conn.(interface{ OnGrant(func(int)) bool }); ok {
+			g.OnGrant(st.granted)
+		}
+	}})
 	r = r.WithContext(context.WithValue(ctx, agentHTTPStateKey{}, st))
 	if a.maxBody > 0 && r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, a.maxBody)
@@ -163,6 +177,25 @@ func (a *agentHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = &idleBody{ReadCloser: r.Body, st: st} // an upload's progress restarts the bound
 	}
 	a.rp.ServeHTTP(w, r)
+}
+
+// granted restarts the idle bound until the response begins: the agent
+// took more of the request. A pooled session keeps it, as a no-op, until
+// its next request's.
+func (st *agentHTTPState) granted(int) {
+	st.mu.Lock()
+	if !st.responded {
+		st.idle.Reset(st.timeout)
+	}
+	st.mu.Unlock()
+}
+
+// respond ends granted's restarts, before ModifyResponse sets the bound
+// (or stops it for an upgrade).
+func (st *agentHTTPState) respond() {
+	st.mu.Lock()
+	st.responded = true
+	st.mu.Unlock()
 }
 
 func (st *agentHTTPState) didTimeOut() bool {

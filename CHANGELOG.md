@@ -8,6 +8,12 @@ changes listed (from the first tag on).
 
 ## Unreleased
 
+- An upload on an agent's HTTP session (the agent link) no longer gets a
+  504 while the agent still feeds what its receive window holds to a slow
+  backend after the body's last byte: each window update the agent sends
+  for the session restarts `default.request.timeout` until the response
+  begins (link v0.11.1 `Session.OnGrant`). Sessions on QUIC carry no such
+  signal yet.
 - An upload over a ConnectHTTP stream no longer gets a 504 while the
   agent still feeds the chunks in flight after the last one to a slow
   backend: each chunk the agent acks after the last one was published

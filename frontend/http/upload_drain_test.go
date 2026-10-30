@@ -80,6 +80,41 @@ func TestUploadDrainToSlowBackendIsProgress(t *testing.T) {
 	}
 }
 
+// TestUploadDrainToSlowBackendIsProgressLink is
+// TestUploadDrainToSlowBackendIsProgress on an agent's HTTP session: after
+// the relay wrote an upload's last byte, the agent still feeds what its
+// receive window holds (up to 16 MiB) to a slow backend; each window
+// update the agent sends as it reads is progress on the request's
+// timeout.
+func TestUploadDrainToSlowBackendIsProgressLink(t *testing.T) {
+	const timeout = 5 * time.Second
+	// The agent grants a quarter of its window, 4 MiB, at a time: the
+	// backend's pauses take 2 s of each 4 MiB, which leaves 3 s inside the
+	// timeout for a loaded machine to move them (make ci's parallel -race
+	// packages took 2.2 s); it drains the agent's window for 8 s, past it.
+	// The drain is four grants long whatever the pace, so the two margins
+	// trade against each other.
+	backend, read, doneAt := slowReadBackend(t, 1<<20, 500*time.Millisecond)
+	_, url := startAgentHTTPLink(t, backend.URL)
+	viper.Set("default.request.timeout", timeout)
+
+	const n = 16 << 20
+	var sentAt atomic.Int64
+	body := &endTimer{r: io.LimitReader(&patternReader{}, n), at: &sentAt}
+	resp, err := http.Post(url+"/upload", "application/octet-stream", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(got) != strconv.Itoa(n) {
+		t.Fatalf("%d %q %v after the client's last byte, the backend at %d of %d bytes", resp.StatusCode, got, time.Since(time.Unix(0, sentAt.Load())), read.Load(), n)
+	}
+	if drain := time.Duration(doneAt.Load() - sentAt.Load()); drain < timeout {
+		t.Fatalf("the backend's drain after the client's last byte took %v, under the %v timeout: the test did not exercise it", drain, timeout)
+	}
+}
+
 type smallReadBuffer struct{ net.Listener }
 
 func (l smallReadBuffer) Accept() (net.Conn, error) {
