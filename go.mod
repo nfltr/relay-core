@@ -11,10 +11,10 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/nfltr/link v0.11.2
-	github.com/nfltr/link/peerlink/quiclink v0.5.2
+	github.com/nfltr/link/peerlink/quiclink v0.5.3
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261030112406-3f0877f63743
-	github.com/nfltr/relay/client v0.20.2
-	github.com/nfltr/relay/proto v0.19.6
+	github.com/nfltr/relay/client v0.20.3
+	github.com/nfltr/relay/proto v0.19.7
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/spf13/pflag v1.0.10
