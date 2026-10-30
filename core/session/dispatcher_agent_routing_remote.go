@@ -89,6 +89,7 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 			return fmt.Errorf("%v: %w", err, podToPodStreamErr)
 		}
 		logger.Debug("sent first request to remote pod")
+		metrics.AddTransferBytes(metrics.PathA2A, len(firstMsg.GetPayload()), 0)
 		if firstMsg.GetEom() {
 			return nil
 		}
@@ -108,6 +109,7 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 					return fmt.Errorf("%v: %w", err, podToPodStreamErr)
 				}
 				logger.Debug("sent request to remote pod")
+				metrics.AddTransferBytes(metrics.PathA2A, len(msg.GetPayload()), 0)
 				if msg.GetEom() {
 					return nil
 				}
@@ -117,7 +119,7 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 
 	// Goroutine 2: relay responses from the remote pod back to the source agent.
 	eg.Go(func() error {
-		for {
+		for first := true; ; first = false {
 			resp, err := peerStream.Recv()
 			if err != nil {
 				if err == io.EOF {
@@ -141,6 +143,7 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 				return err
 			}
 			d.markAgentStreamAlive(sourceStream, resp)
+			metrics.A2AResponse(len(resp.GetPayload()), first, routeStart)
 			logger.Debug("relayed remote response to source agent")
 			if resp.GetEom() {
 				logger.Debug("agent-to-agent transaction completed via remote pod (EOM)")

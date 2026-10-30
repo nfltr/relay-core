@@ -96,6 +96,7 @@ func (o *chainObserver) Hop(e link.HopEvent) {
 		}
 		metrics.RecordChainAnswer(o.path, refused, code, hops, e.Latency)
 	case link.HopEnded:
+		metrics.RecordChainEnded(o.path, e.In, e.Out)
 		if o.release != nil {
 			o.release()
 		}

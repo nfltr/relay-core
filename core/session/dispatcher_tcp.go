@@ -276,7 +276,9 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		if err != nil {
 			return errTCPSessionRefused
 		}
-		_ = peerlink.Join(conn, s)
+		// The link's connections count its bytes; its first byte is the
+		// visitor's (agentLinkPath).
+		_ = peerlink.Join(metrics.CountConn(conn, agentLinkPath(s), time.Now(), false, false), s)
 		release()
 		return nil
 	}
@@ -442,9 +444,9 @@ func (d *TCPDispatcher) forwardToPod(ctx context.Context, conn net.Conn, ep TCPE
 		metrics.TransferOpened(metrics.PathReplica, relayv1.ErrorReason_ERROR_REASON_TARGET_UNREACHABLE.String())
 		return
 	}
-	metrics.TransferBegin(metrics.PathReplica)
+	began := metrics.TransferBegin(metrics.PathReplica)
 	defer metrics.TransferEnd(metrics.PathReplica, start)
-	_ = peerlink.Join(conn, s)
+	_ = peerlink.Join(metrics.CountConn(conn, metrics.PathReplica, began, false, true), s)
 }
 
 // openLink opens a session on the replica link to ep's agent; ctx carries

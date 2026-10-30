@@ -105,12 +105,12 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 		// that serves HTTP sessions gets it on one (agent_http_link.go).
 		if ing.link != nil && ing.core.TCPDispatcher.ServesHTTP(agentID) {
 			metrics.RecordAgentHTTPRequest("link")
-			ing.link.ServeHTTP(w, r)
+			ing.link.ServeHTTP(metrics.CountHTTP(w, r, metrics.PathHTTPLink, time.Now()), r)
 			return
 		}
 		metrics.RecordAgentHTTPRequest("grpc")
 		stripHopByHopHeaders(r.Header)
-		ing.proxy.ServeHTTP(w, r)
+		ing.proxy.ServeHTTP(metrics.CountHTTP(w, r, metrics.PathHTTPGRPC, time.Now()), r)
 		return
 	}
 	proxy := ing.peers.Get(dispatcherURL)

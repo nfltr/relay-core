@@ -558,6 +558,16 @@ func (l *agentLink) open(ctx context.Context, p *tcpAgentStream, open *pb.TCPDat
 	}), true, nil
 }
 
+// agentLinkPath is the transfer path of a session on the agent link.
+// ponytail: a QUIC session's local address is UDP; a transport other than
+// link/TCP and QUIC needs its own case.
+func agentLinkPath(s net.Conn) metrics.Path {
+	if a := s.LocalAddr(); a != nil && a.Network() == "udp" {
+		return metrics.PathTCPQUIC
+	}
+	return metrics.PathTCPLink
+}
+
 // linkPath is the transfer path of an agent-link transport.
 func linkPath(transport string) metrics.Path {
 	if transport == dataplane.AgentLinkQUIC {

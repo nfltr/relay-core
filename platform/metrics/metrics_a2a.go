@@ -4,6 +4,8 @@
 package metrics
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -85,4 +87,13 @@ func IncrA2AActiveSessions() {
 func DecrA2AActiveSessions() {
 	a2aActiveSessions.Dec()
 	transfers.activeN[PathA2A].Add(-1)
+}
+
+// A2AResponse counts a response's payload relayed from an A2A call's
+// target, the call's first (since began) its first byte.
+func A2AResponse(n int, first bool, began time.Time) {
+	AddTransferBytes(PathA2A, 0, n)
+	if first {
+		ObserveTransferFirstByte(PathA2A, time.Since(began))
+	}
 }

@@ -161,7 +161,8 @@ func (a *tcpAgentStream) enqueue(f *pb.TCPData) {
 		return
 	}
 	select {
-	case a.SendCh <- f:
+	case a.SendCh <- f: // a data connection's bytes are its link connection's (serveDataConn)
+		metrics.AddTransferBytes(metrics.PathTCPGRPC, len(f.GetData()), 0)
 	case <-a.Done:
 	}
 }
@@ -661,9 +662,6 @@ func (d *TCPDispatcher) sendLoop(agentID string, as *tcpAgentStream, stream tcpF
 		}
 		if err := stream.Send(frame); err != nil {
 			return err
-		}
-		if as.DC == nil { // a data connection's bytes are its link connection's (serveDataConn)
-			metrics.AddTransferBytes(metrics.PathTCPGRPC, len(frame.GetData()), 0)
 		}
 		// A data connection buffers frames: one write for all that
 		// were queued.

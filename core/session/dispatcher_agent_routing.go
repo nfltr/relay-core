@@ -446,6 +446,7 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 			return err
 		}
 		logger.Debug("sent first request to target agent")
+		metrics.AddTransferBytes(metrics.PathA2A, len(firstMsg.GetPayload()), 0)
 		if firstMsg.GetEom() {
 			return nil
 		}
@@ -463,6 +464,7 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 					return err
 				}
 				logger.Debug("sent request to target agent")
+				metrics.AddTransferBytes(metrics.PathA2A, len(msg.GetPayload()), 0)
 				if msg.GetEom() {
 					return nil
 				}
@@ -501,7 +503,7 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 
 	// Goroutine 3: relay responses from per-session channel back to source.
 	eg.Go(func() error {
-		for {
+		for first := true; ; first = false {
 			select {
 			case <-egCtx.Done():
 				return egCtx.Err()
@@ -514,6 +516,7 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 					return err
 				}
 				d.markAgentStreamAlive(sourceStream, resp)
+				metrics.A2AResponse(len(resp.GetPayload()), first, routeStart)
 				logger.Debug("relayed response to source agent")
 				if resp.GetEom() {
 					logger.Debug("agent-to-agent transaction completed (EOM)")

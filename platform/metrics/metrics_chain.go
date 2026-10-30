@@ -50,6 +50,15 @@ func RecordChainAnswer(path string, refused bool, code string, hops uint8, laten
 	}
 }
 
+// RecordChainEnded counts a forwarded session's bytes, in (origin to far
+// end: to the agent) and out, on the path whose opens it counted: connect
+// (a replica's forwards count on the replica that sent them).
+func RecordChainEnded(path string, in, out int64) {
+	if path == "connect" {
+		AddTransferBytes(PathConnect, int(in), int(out))
+	}
+}
+
 // RecordChainAbort counts one forwarded session's abort. allow:wrapper
 func RecordChainAbort(path, code string, hops uint8) {
 	chainAborts.WithLabelValues(path, code, hopsLabel(hops)).Inc()

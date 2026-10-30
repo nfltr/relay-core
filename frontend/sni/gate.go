@@ -79,8 +79,9 @@ func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher
 	}
 	logger.Debug("sni: routing e2ee connection", "sni", sni, "agent_id", target.AgentID, "service", target.Service, "remote", conn.RemoteAddr())
 
-	metrics.TransferBegin(metrics.PathSNI)
+	began := metrics.TransferBegin(metrics.PathSNI)
 	defer metrics.TransferEnd(metrics.PathSNI, start)
 	// The agent sees the complete ClientHello, then the rest of the handshake.
-	d.RouteConnection(ctx, &session.PrefixConn{Conn: conn, Prefix: peeked}, target.AgentID, target.Service, target.enforcedShare())
+	visitor := metrics.CountConn(&session.PrefixConn{Conn: conn, Prefix: peeked}, metrics.PathSNI, began, false, true)
+	d.RouteConnection(ctx, visitor, target.AgentID, target.Service, target.enforcedShare())
 }

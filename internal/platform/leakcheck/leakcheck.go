@@ -92,6 +92,10 @@ func RunFunc(run func() int, ignore ...string) int {
 	if code != 0 {
 		return code
 	}
+	if u := uncountedTransfers(); len(u) > 0 {
+		fmt.Fprintf(os.Stderr, "leakcheck: transfer paths that opened sessions without counting them (metrics.CountConn, CountHTTP):\n  %s\n", strings.Join(u, "\n  "))
+		return 1
+	}
 	var l []string
 	for deadline := time.Now().Add(Wait); ; {
 		if t, ok := http.DefaultTransport.(*http.Transport); ok {

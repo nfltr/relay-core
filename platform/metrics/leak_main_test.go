@@ -10,5 +10,9 @@ import (
 	"github.com/nfltr/relay-core/internal/platform/leakcheck"
 )
 
-// TestMain fails the package when its tests leave goroutines running.
-func TestMain(m *testing.M) { os.Exit(leakcheck.Run(m)) }
+// TestMain fails the package when its tests leave goroutines running. Its
+// tests count transfers with no session behind them: no transfer check.
+func TestMain(m *testing.M) {
+	leakcheck.SkipTransfers = true
+	os.Exit(leakcheck.Run(m))
+}
