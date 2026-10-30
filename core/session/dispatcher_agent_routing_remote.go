@@ -33,7 +33,9 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 	err error,
 ) {
 	if err != nil {
+		result := "error"
 		if status.Code(err) == codes.NotFound {
+			result = "target_disconnected" // the target is offline, as on the local path (ERROR_REASON_AGENT_OFFLINE)
 			// codes.NotFound covers both "no pod dialer configured" (single-pod
 			// deployments, e.g. the standalone GCE VM, where cross-pod relay is
 			// never expected to work at all) and a genuinely unregistered
@@ -57,7 +59,7 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 			logger.Error("failed to dial peer for target agent", "error", err)
 			metrics.RegisterPodToPodConnectionFailure()
 		}
-		metrics.RegisterA2ARequest("remote", "error")
+		metrics.RegisterA2ARequest("remote", result)
 		metrics.RegisterA2AError("not_found")
 		metrics.RegisterA2ALatency("remote", float64(time.Since(routeStart).Milliseconds()))
 		d.sendAgentToAgentError(sourceStream, firstMsg, codes.NotFound, "target agent not connected", logger)
