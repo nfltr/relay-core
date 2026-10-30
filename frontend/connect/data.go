@@ -96,6 +96,13 @@ func (f *Frontend) serveSession(r *http.Request, caller identity.Principal, open
 			if errors.Is(err, session.ErrDirectoryUnavailable) {
 				return nil, nil, refuse(dial.AgentID, relayv1.ErrorReason_ERROR_REASON_DIRECTORY_UNAVAILABLE, "the relay's directory is unavailable")
 			}
+			if errors.Is(err, session.ErrReplicaUnreachable) {
+				// Connected to a replica this one could not reach: not
+				// offline; its no-route refusal passes as it is.
+				metrics.RecordConnectSession(e2ee, "replica_unreachable")
+				f.audit(r, dial.AgentID, open, "denied", dial.Err.Error())
+				return nil, nil, dial.Err
+			}
 			metrics.RecordConnectSession(e2ee, relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE.String())
 			f.audit(r, dial.AgentID, open, "denied", dial.Err.Error())
 			return nil, nil, session.ErrFor(dial.Err, relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE, "agent %s is not connected", dial.AgentID)

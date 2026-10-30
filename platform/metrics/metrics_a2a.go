@@ -70,7 +70,7 @@ func RegisterA2ALatency(routeType string, durationMs float64) {
 }
 
 // RegisterA2AError records an A2A error.
-// errorType is "deadline_exceeded", "cancelled", "not_found", "routing_error", "remote_routing_error".
+// errorType is "deadline_exceeded", "cancelled", "not_found", "replica_unreachable", "routing_error", "remote_routing_error".
 func RegisterA2AError(errorType string) {
 	a2aErrorsTotal.WithLabelValues(errorType).Inc()
 }

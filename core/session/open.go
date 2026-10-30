@@ -28,6 +28,10 @@ var (
 	// ErrDirectoryUnavailable: the relay could not read where the agent
 	// is (directory.ErrUnavailable): its own failure, not the agent's.
 	ErrDirectoryUnavailable = errors.New("directory unavailable")
+	// ErrReplicaUnreachable: the agent is connected to another replica of
+	// the relay, which this one could not reach (the replica link's
+	// link.CodeNoRoute refusal): not offline; the caller may try again.
+	ErrReplicaUnreachable = errors.New("replica unreachable")
 )
 
 // Target is what a caller opens: a service of an agent, as the caller
@@ -94,8 +98,22 @@ func (e *DialError) Is(target error) bool {
 		return target == ErrRefused
 	case errors.Is(e.Err, directory.ErrUnavailable):
 		return target == ErrDirectoryUnavailable
+	case noRoute(e.Err) != nil:
+		return target == ErrReplicaUnreachable
 	}
 	return target == ErrOffline
+}
+
+// noRoute is err's replica link refusal for an agent connected to a
+// replica this one could not reach (link.CodeNoRoute), nil for any other
+// error. Guards: TestOpenUnreachableReplicaAnswersAtOnce,
+// TestA2ARemoteUnreachableReplicaIsNotAgentOffline.
+func noRoute(err error) *link.Abort {
+	var a *link.Abort
+	if errors.As(err, &a) && a.Code == link.CodeNoRoute {
+		return a
+	}
+	return nil
 }
 
 // Opened is an open session to an agent: Release ends its accounting once
@@ -110,7 +128,8 @@ type Opened struct {
 // caller may and resolves the agent and target address, the TCPDispatcher
 // opens it on the agent, here or through the replica that holds it,
 // retrying a dial as DialPolicy says. It answers with a *Refusal or a
-// *DialError (ErrRefused, ErrOffline, ErrUnknownService, ErrDraining).
+// *DialError (ErrRefused, ErrOffline, ErrUnknownService, ErrDraining,
+// ErrReplicaUnreachable).
 func (c *Core) Open(ctx context.Context, caller identity.Principal, t Target) (Opened, error) {
 	if c.TCPDispatcher == nil || c.Reach == nil {
 		return Opened{}, &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_FEATURE_UNSUPPORTED, Msg: "TCP tunneling is not enabled (set tcp.enabled=true)", AgentID: t.Agent}

@@ -33,8 +33,13 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 	err error,
 ) {
 	if err != nil {
-		result := "error"
-		if status.Code(err) == codes.NotFound {
+		result, errType, code, detail := "error", "not_found", codes.NotFound, "target agent not connected"
+		if a := noRoute(err); a != nil {
+			// Connected to a replica this one could not reach: not
+			// offline; the replica link's own answer, try again.
+			result, errType, code, detail = "replica_unreachable", "replica_unreachable", codes.Unavailable, a.Msg
+		}
+		if status.Code(err) == codes.NotFound && result == "error" {
 			result = "target_disconnected" // the target is offline, as on the local path (ERROR_REASON_AGENT_OFFLINE)
 			// codes.NotFound covers both "no pod dialer configured" (single-pod
 			// deployments, e.g. the standalone GCE VM, where cross-pod relay is
@@ -60,9 +65,9 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 			metrics.RegisterPodToPodConnectionFailure()
 		}
 		metrics.RegisterA2ARequest("remote", result)
-		metrics.RegisterA2AError("not_found")
+		metrics.RegisterA2AError(errType)
 		metrics.RegisterA2ALatency("remote", float64(time.Since(routeStart).Milliseconds()))
-		d.sendAgentToAgentError(sourceStream, firstMsg, codes.NotFound, "target agent not connected", logger)
+		d.sendAgentToAgentError(sourceStream, firstMsg, code, detail, logger)
 		return
 	}
 	peerStream := peerResult.stream

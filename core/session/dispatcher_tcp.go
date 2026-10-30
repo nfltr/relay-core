@@ -559,11 +559,12 @@ func (d *TCPDispatcher) OnwardWithRetry(ctx context.Context, ep TCPEndpoint, max
 			return nil, nil, err // the agent is here, or the relay's directory failed: another attempt changes nothing now
 		}
 		lastErr = err
-		if errors.Is(err, ErrPeerUnreachable) {
+		if errors.Is(err, ErrPeerUnreachable) || noRoute(err) != nil {
 			// The replica the inventory names (re-read on each attempt:
 			// an agent that moved is found) did not answer a dial within
-			// the last dial timeout, a partition or a replica gone: more
-			// attempts would only wait.
+			// the last dial timeout, a partition or a replica gone, or the
+			// replica link refused the session with no route: more
+			// attempts would only wait; the caller answers at once.
 			return nil, nil, fmt.Errorf("agent %q unreachable after %d attempts: %w", agentID, attempt, err)
 		}
 

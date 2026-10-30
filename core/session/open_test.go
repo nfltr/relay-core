@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/link"
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/directory"
 	"github.com/nfltr/relay-core/core/identity"
@@ -117,4 +118,38 @@ func TestOpenAnswersAStalledRouteTyped(t *testing.T) {
 	if _, err := c.Open(short, identity.Principal{}, Target{Agent: "alice.laptop", Service: "22"}); errors.As(err, &r) {
 		t.Fatalf("a client that gave up first got the relay's refusal %v", err)
 	}
+}
+
+// A dial the replica link refuses with no route (the agent's replica could
+// not be reached) is answered at once, as that and not as the agent
+// offline: no second attempt waits out the dial policy's backoff.
+func TestOpenUnreachableReplicaAnswersAtOnce(t *testing.T) {
+	td := NewTCPDispatcher(slog.New(slog.DiscardHandler), nil, directory.NewNoOpInventory())
+	opens := 0
+	td.Links = linkOpenerFunc(func(context.Context, TCPEndpoint) (PeerSession, error) {
+		opens++
+		return nil, fmt.Errorf("%w: %w", &link.Abort{Refused: true, Code: link.CodeNoRoute,
+			Msg: "agent far is connected to another replica of the relay, which could not be reached; try again"}, errors.New("connection refused"))
+	})
+	c := &Core{TCPDispatcher: td, DialPolicy: func() (int, time.Duration) { return 5, time.Hour }}
+	c.Reach = func(_ context.Context, _ identity.Principal, tg Target) (string, string, error) {
+		return tg.Agent, "localhost:22", nil
+	}
+	_, err := c.Open(context.Background(), identity.Principal{Subject: "alice", AgentID: "alice"}, Target{Agent: "far", Service: "22", Hold: true})
+	if !errors.Is(err, ErrReplicaUnreachable) || errors.Is(err, ErrOffline) {
+		t.Errorf("Open = %v, want ErrReplicaUnreachable, not ErrOffline", err)
+	}
+	var a *link.Abort
+	if !errors.As(err, &a) || a.Code != link.CodeNoRoute {
+		t.Errorf("Open = %v, want the replica link's no-route refusal carried to the caller", err)
+	}
+	if opens != 1 {
+		t.Errorf("dialed the unreachable replica %d times, want 1", opens)
+	}
+}
+
+type linkOpenerFunc func(context.Context, TCPEndpoint) (PeerSession, error)
+
+func (f linkOpenerFunc) OpenAgent(ctx context.Context, ep TCPEndpoint) (PeerSession, error) {
+	return f(ctx, ep)
 }

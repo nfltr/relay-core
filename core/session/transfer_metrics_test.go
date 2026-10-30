@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/link"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
@@ -106,5 +107,36 @@ func TestA2ARemoteNotFoundCountsAgentOffline(t *testing.T) {
 	after := transferSeries(t, "a2a")
 	if after[offline]-before[offline] != 1 || after[other] != before[other] {
 		t.Fatalf("offline %v -> %v, other %v -> %v; want offline +1, other unchanged", before[offline], after[offline], before[other], after[other])
+	}
+}
+
+// An A2A call to a target connected to another replica this one could not
+// reach (the replica link's no-route refusal) is answered as such,
+// Unavailable with the refusal's message, never "target agent not
+// connected", and is not counted as the agent offline.
+func TestA2ARemoteUnreachableReplicaIsNotAgentOffline(t *testing.T) {
+	d, cancel := newTestDispatcher(t)
+	defer cancel()
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	streamer := &channelStreamer{sendCh: make(chan *pb.TunnelFrame, 1), ctx: ctx}
+	src := newTestGRPCStream("agent-a", streamer, ctx)
+	msg := &pb.TunnelFrame{TransactionId: "txn-far", Routing: &pb.RoutingInfo{AgentId: "agent-a", TargetAgentId: "agent-far"}}
+	const why = "agent agent-far is connected to another replica of the relay, which could not be reached; try again"
+	dialErr := fmt.Errorf("%w: %w", &link.Abort{Refused: true, Code: link.CodeNoRoute, Msg: why}, status.Error(codes.Unavailable, "replica link: dial timeout"))
+	const offline = "nfltr_relay_transfer_opens_total{ERROR_REASON_AGENT_OFFLINE}"
+	before := transferSeries(t, "a2a")
+	d.routeAgentToAgentRemote(ctx, src, nil, msg, "agent-far", "agent-a", time.Now(), d.Logger, nil, dialErr)
+	after := transferSeries(t, "a2a")
+	if after[offline] != before[offline] {
+		t.Errorf("offline %v -> %v; an unreachable replica is not the agent offline", before[offline], after[offline])
+	}
+	select {
+	case got := <-streamer.sendCh:
+		if codes.Code(got.GetStatusCode()) != codes.Unavailable || got.GetStatusDetail() != why {
+			t.Fatalf("answer %v %q, want Unavailable %q", codes.Code(got.GetStatusCode()), got.GetStatusDetail(), why)
+		}
+	case <-ctx.Done():
+		t.Fatal("no answer sent to the source agent")
 	}
 }
