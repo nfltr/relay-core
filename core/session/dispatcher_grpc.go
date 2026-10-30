@@ -211,6 +211,11 @@ func (d *Dispatcher) RelayTunnel(incomingStream relayTunnelStream) (retErr error
 				logger.Error("failed to dial peer for RelayTunnel target", "error", dialErr)
 				metrics.RegisterPodToPodConnectionFailure()
 			}
+			if a := noRoute(dialErr); a != nil {
+				// The agent's replica could not be reached: Unavailable,
+				// try again, as on the A2A path (routeAgentToAgentRemote).
+				return status.Error(codes.Unavailable, a.Msg)
+			}
 			return dialErr
 		}
 		nextStream = peerResult.stream

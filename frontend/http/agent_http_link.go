@@ -132,6 +132,9 @@ func newAgentHTTP(d *session.TCPDispatcher, logger *slog.Logger, relayCookie fun
 			case st.didTimeOut():
 				http.Error(w, "Request timed out", http.StatusGatewayTimeout)
 			case r.Context().Err() != nil: // the visitor went away
+			case replicaUnreachable(err):
+				logger.Warn("agent http session: replica unreachable", "agent_id", st.agentID, "error", err)
+				writeReplicaUnreachable(w)
 			default:
 				logger.Warn("agent http session failed", "agent_id", st.agentID, "error", err)
 				http.Error(w, "Agent not connected", http.StatusBadGateway)

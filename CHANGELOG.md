@@ -19,6 +19,12 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- HTTP to an agent connected to a replica this one cannot reach is answered
+  503 with `Retry-After` ("connected to another replica of the relay, which
+  could not be reached; try again shortly"), not 502 "bad gateway" (the
+  replica link forward) or 502 "Agent not connected" (an HTTP session).
+- A relay tunnel forwarded onward to such a replica ends `Unavailable` with
+  the replica link's message, not an unclassified error.
 - An agent-to-agent call to a target connected to an unreachable replica
   is answered `Unavailable` with the replica link's message ("connected to
   another replica of the relay, which could not be reached; try again"),

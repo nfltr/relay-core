@@ -4,15 +4,21 @@
 package httpingress
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 
+	"github.com/nfltr/link"
+	"github.com/nfltr/relay-core/core/relaystatus"
+	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/internal/platform/expiring"
 	"github.com/nfltr/relay-core/platform/httpbody"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc/codes"
 )
 
 // proxyCacheSize bounds the peer replicas the relay keeps a reverse proxy
@@ -84,8 +90,31 @@ func (p *proxyCache) Get(dispatcherURL *url.URL) *httputil.ReverseProxy {
 			http.Error(w, httpbody.Incomplete, http.StatusBadRequest)
 			return
 		}
+		if replicaUnreachable(err) {
+			writeReplicaUnreachable(w)
+			return
+		}
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 	}
 	p.cache.Add(key, proxy)
 	return proxy
+}
+
+// replicaUnreachableMessage answers a request whose agent is connected to
+// another replica of the relay that this one could not reach: not offline.
+const replicaUnreachableMessage = "the agent is connected to another replica of the relay, which could not be reached; try again shortly"
+
+// replicaUnreachable reports whether err is a request whose agent is
+// connected to another replica this one could not reach: the replica
+// link's no-route refusal (link.CodeNoRoute), or session.ErrReplicaUnreachable.
+// Guards: TestPeerProxyUnreachableReplicaIs503, TestAgentHTTPUnreachableReplicaIs503.
+func replicaUnreachable(err error) bool {
+	var a *link.Abort
+	return errors.As(err, &a) && a.Code == link.CodeNoRoute || errors.Is(err, session.ErrReplicaUnreachable)
+}
+
+// writeReplicaUnreachable answers 503 with Retry-After (replicaUnreachable).
+func writeReplicaUnreachable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "5")
+	relaystatus.WriteHTTP(w, http.StatusServiceUnavailable, codes.Unavailable, relayv1.ErrorReason_ERROR_REASON_UNSPECIFIED, replicaUnreachableMessage)
 }
