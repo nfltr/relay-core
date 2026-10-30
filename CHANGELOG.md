@@ -10,7 +10,24 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `session.ErrReplicaUnreachable`: an `Open` whose agent is connected to
+  another replica of the relay that this one could not reach (the replica
+  link's `link.CodeNoRoute` refusal) is a `*DialError` that `errors.Is`
+  this, no longer `ErrOffline`.
+
+### Fixed
+
+- An agent-to-agent call to a target connected to an unreachable replica
+  is answered `Unavailable` with the replica link's message ("connected to
+  another replica of the relay, which could not be reached; try again"),
+  not `NotFound` "target agent not connected", and is not counted as the
+  agent offline. A target connected nowhere is still `NotFound` and
+  counted as `ERROR_REASON_AGENT_OFFLINE` (it was counted `other`).
+- A `/connect` session to such an agent is refused at once with that
+  refusal instead of being retried through the dial policy's backoff, and
+  is counted `replica_unreachable`, not offline.
 
 ## [v0.4.1] - 2026-10-30
 
