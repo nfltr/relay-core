@@ -8,6 +8,10 @@ changes listed (from the first tag on).
 
 ## Unreleased
 
+- An upload over a ConnectHTTP stream no longer gets a 504 while the
+  agent still feeds the chunks in flight after the last one to a slow
+  backend: each chunk the agent acks after the last one was published
+  restarts `default.request.timeout`, as the acks before it did.
 - The per-frontend families the transfer families replace are deleted
   (no dual reporting): `rpc_server_dispatcher_tcp_tunnel_*` (sessions
   count on the tcp_* path they ride; a session forwarded to the replica

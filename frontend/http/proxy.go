@@ -292,7 +292,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.uploadAcks.Store(transactionID, acks)
 		defer p.uploadAcks.Delete(transactionID)
 		totalBytes := 0
-		index, reqSize := 0, 0
+		index, reqSize, acked := 0, 0, 0
 		for chunk := range chunkCh {
 			totalBytes += len(chunk.Payload)
 			if maxBodySize > 0 && int64(totalBytes) > maxBodySize && upgrade == nil {
@@ -355,6 +355,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if index >= chunking.UploadWindow {
 				select {
 				case <-acks:
+					acked++
 				case <-rctx.Done(): // the idle timer bounds a stalled agent
 					return
 				}
@@ -400,6 +401,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		metrics.RegisterRPCRequestPayloadSize(r.Method, float64(reqSize))
 		metrics.IncrQueuedRequests()
+		// The chunks still in flight reach a slow backend after the last
+		// one was published: each ack is the upload making progress
+		// (TestUploadDrainToSlowBackendIsProgress).
+		for ; upgrade == nil && index > 1 && acked < index; acked++ {
+			select {
+			case <-acks:
+				idle.Reset(timeout)
+			case <-rctx.Done():
+				return
+			}
+		}
 	}()
 
 	headersSent := false
