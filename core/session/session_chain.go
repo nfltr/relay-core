@@ -277,8 +277,9 @@ func (c *SessionConn) WriteTo(w io.Writer) (int64, error) {
 // OnGrant has f called with each window update the agent sends for the
 // session, as its reader takes what was written (link's Session.OnGrant):
 // a writer whose writes all returned sees them still draining. It reports
-// false for a session whose transport reports none (QUIC, the frame
-// streams).
+// false for a session whose transport reports none (the frame streams);
+// a QUIC session's are its MAX_STREAM_DATA frames (quiclink's
+// Session.OnGrant).
 func (c *SessionConn) OnGrant(f func(n int)) bool {
 	g, ok := c.Session.(interface{ OnGrant(func(int)) })
 	if ok {

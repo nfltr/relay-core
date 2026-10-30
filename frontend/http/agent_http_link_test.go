@@ -22,6 +22,7 @@ import (
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay/client/agent"
 	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/dataplane"
 	"github.com/spf13/viper"
 )
 
@@ -242,4 +243,48 @@ func startLinkHTTPBackend(t testing.TB) *linkHTTPBackend {
 	}))
 	t.Cleanup(b.Close)
 	return b
+}
+
+// TestAgentHTTPSessionsReportGrants: an agent's HTTP session reports the
+// window updates the agent sends as it takes an upload, on either agent
+// link transport (TCP: link's; QUIC: its MAX_STREAM_DATA frames), so the
+// leaf counts an upload draining to a slow backend as progress
+// (TestUploadDrainToSlowBackendIsProgressLink).
+func TestAgentHTTPSessionsReportGrants(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ag   harnessAgent
+	}{{"link-tcp", agentCurrent}, {"link-quic", agentQUIC}} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := startLinkHTTPBackend(t)
+			h, _ := startAgentHTTPLeaf(t, backend.URL, tc.ag)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // only against a hang
+			defer cancel()
+			c, err := h.d.DialAgent(ctx, harnessAgentID, dataplane.HTTPSessionTarget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close() //nolint:errcheck
+			var granted atomic.Int64
+			g, ok := c.(interface{ OnGrant(func(int)) bool })
+			if !ok || !g.OnGrant(func(n int) { granted.Add(int64(n)) }) {
+				t.Fatalf("%T reports no grants", c)
+			}
+			const n = 20 << 20 // more than the agent's 16 MiB window: it must grant to take it
+			req, _ := http.NewRequest(http.MethodPost, "http://agent/echo", io.LimitReader(&patternReader{}, n))
+			req.ContentLength = n
+			go func() { _ = req.Write(c) }()
+			resp, err := http.ReadResponse(bufio.NewReader(c), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := io.ReadAll(resp.Body)
+			if string(got) != strconv.Itoa(n) {
+				t.Fatalf("backend read %q, want %d", got, n)
+			}
+			if granted.Load() == 0 {
+				t.Fatal("no grant while the agent took an upload twice its window")
+			}
+		})
+	}
 }

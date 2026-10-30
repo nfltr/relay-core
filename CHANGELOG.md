@@ -28,6 +28,18 @@ changes listed (from the first tag on).
 - A `/connect` session to such an agent is refused at once with that
   refusal instead of being retried through the dial policy's backoff, and
   is counted `replica_unreachable`, not offline.
+- An upload over the agent link's QUIC transport no longer gets a 504
+  while the agent still feeds what its receive window holds to a slow
+  backend: the agent's window updates (its MAX_STREAM_DATA frames, through
+  quiclink's `Session.OnGrant`) restart `default.request.timeout` until
+  the response begins, as on the agent link over TCP since v0.4.1.
+
+### Changed
+
+- Requires github.com/nfltr/link/peerlink/quiclink v0.5.2 (`Session.OnGrant`),
+  github.com/nfltr/quic-go with `Stream.SetSendWindowCallback`, and
+  github.com/nfltr/link v0.11.2 (peerlinktest's lighter
+  volumes for the agent link's QUIC conformance run).
 
 ## [v0.4.1] - 2026-10-30
 
