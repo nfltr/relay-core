@@ -23,7 +23,7 @@ import (
 // slowReadBackend reads a request body step bytes at a time with a pause
 // after each step, and answers with how many it read; read and doneAt are
 // how many it has read and when it read the last one. It serves on ln, or
-// without one on connections with a 64 KiB receive buffer: what the agent
+// without one on connections with a 512 KiB receive buffer: what the agent
 // has written to it and it has not read yet stays small, so its drain is
 // what the agent holds and reports, not bytes in socket buffers, which no
 // proxy sees.
@@ -96,14 +96,21 @@ func TestUploadDrainToSlowBackendIsProgress(t *testing.T) {
 // update the agent sends as it reads is progress on the request's
 // timeout.
 func TestUploadDrainToSlowBackendIsProgressLink(t *testing.T) {
-	const timeout = 5 * time.Second
+	const timeout = 10 * time.Second
 	// The agent grants a quarter of its window, 4 MiB, at a time: the
-	// backend's pauses take 2 s of each 4 MiB, which leaves 3 s inside the
-	// timeout for a loaded machine to move them (make ci's parallel -race
-	// packages took 2.2 s); it drains the agent's window for 8 s, past it.
-	// The drain is four grants long whatever the pace, so the two margins
-	// trade against each other.
-	backend, read, doneAt := slowReadBackend(t, nil, 1<<20, 500*time.Millisecond)
+	// backend's pauses take 4 s of each 4 MiB, which leaves 6 s inside the
+	// timeout for a loaded machine to move them; it drains the agent's
+	// window for 16 s, past it. The drain is four grants long whatever the
+	// pace, so the two margins trade against each other. What a loaded
+	// machine stretches is the moving, not the pauses (timers keep time):
+	// at load 25-60 with GOMAXPROCS=2 and background priority, through a
+	// 64 KiB receive buffer (two wakeups per 64 KiB) 1 MiB took 0.9 s or
+	// more beside its pause, past the 3 s a 5 s timeout with 0.5 s pauses
+	// left (a 504 9 s after the client's last byte, the backend at 7 of 16
+	// MiB). The backend's 512 KiB receive buffer takes 8 times fewer
+	// wakeups; what it and the agent's send buffer hold drains in a few
+	// seconds at this pace, inside the timeout.
+	backend, read, doneAt := slowReadBackend(t, nil, 1<<20, time.Second)
 	_, url := startAgentHTTPLink(t, backend.URL)
 	viper.Set("default.request.timeout", timeout)
 
@@ -172,7 +179,7 @@ type smallReadBuffer struct{ net.Listener }
 func (l smallReadBuffer) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetReadBuffer(64 << 10)
+		_ = tc.SetReadBuffer(512 << 10)
 	}
 	return c, err
 }
