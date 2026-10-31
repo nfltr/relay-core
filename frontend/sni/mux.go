@@ -19,7 +19,6 @@ package sni
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net"
 	"strings"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/nfltr/relay-core/core/frontend"
 	"github.com/nfltr/relay-core/core/session"
+	"github.com/nfltr/relay-core/internal/platform/acceptloop"
 )
 
 // muxListener implements net.Listener.  It accepts raw TCP connections,
@@ -103,22 +103,18 @@ func (l *muxListener) Accept() (net.Conn, error) {
 // goroutine of its own, so a slow or silent client delays only itself, not
 // the accepts behind it (the port carries every gRPC reconnect and HTTPS).
 func (l *muxListener) acceptLoop() {
-	var backoff time.Duration
+	var backoff acceptloop.Backoff
 	for {
 		conn, err := l.inner.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				l.err = err
-				close(l.done)
-				return
+			if backoff.Retry(l.logger, "sni_mux", err) {
+				continue
 			}
-			// Transient (e.g. EMFILE): back off like net/http does.
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
-			l.logger.Warn("sni-mux: accept error; retrying", "error", err, "backoff", backoff)
-			time.Sleep(backoff)
-			continue
+			l.err = err
+			close(l.done)
+			return
 		}
-		backoff = 0
+		backoff.Reset()
 		go l.route(conn)
 	}
 }

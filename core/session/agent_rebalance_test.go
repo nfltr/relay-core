@@ -567,3 +567,19 @@ func testRebalanceAgentReachingOneReplicaStays(t *testing.T, bound time.Duration
 		t.Fatal("refused an agent without a record")
 	}
 }
+
+// TestRebalanceForgetsOldStaysAlone: a stay older than stayFor is
+// forgotten on every tick, also on a replica left alone (a scale-down).
+func TestRebalanceForgetsOldStaysAlone(t *testing.T) {
+	d, cancel := newTestDispatcher(t)
+	t.Cleanup(cancel)
+	d.stays.Store("gone", time.Now().Add(-stayFor-time.Second))
+	d.stays.Store("recent", time.Now())
+	d.rebalanceAgents(1, 1)
+	if _, ok := d.stays.Load("gone"); ok {
+		t.Fatal("a stay older than stayFor kept on a replica alone")
+	}
+	if !d.staysHere("recent") {
+		t.Fatal("a recent stay forgotten")
+	}
+}

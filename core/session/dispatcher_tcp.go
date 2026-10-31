@@ -17,6 +17,7 @@ import (
 
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/directory"
+	"github.com/nfltr/relay-core/internal/platform/acceptloop"
 	"github.com/nfltr/relay-core/internal/platform/auth"
 	"github.com/nfltr/relay-core/internal/platform/logging"
 	"github.com/nfltr/relay-core/platform/metrics"
@@ -220,18 +221,28 @@ func (d *TCPDispatcher) ServeEndpoint(ctx context.Context, ep TCPEndpoint) error
 	}
 	d.logger.Info("tcp tunnel endpoint listening",
 		"addr", ep.ListenAddr, "agent_id", ep.AgentID, "target", ep.TargetAddr)
+	return d.serveEndpoint(ctx, ln, ep)
+}
+
+// serveEndpoint serves ep's connections on ln until ctx ends.
+func (d *TCPDispatcher) serveEndpoint(ctx context.Context, ln net.Listener, ep TCPEndpoint) error {
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+	var backoff acceptloop.Backoff
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if backoff.Retry(d.logger, "tcp_endpoint", err) {
+				continue
+			}
 			return fmt.Errorf("tcp dispatcher: accept %s: %w", ep.ListenAddr, err)
 		}
+		backoff.Reset()
 		go d.HandleConn(ctx, conn, ep)
 	}
 }

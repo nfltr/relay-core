@@ -30,6 +30,7 @@ import (
 
 	"github.com/nfltr/relay-core/core/frontend"
 	"github.com/nfltr/relay-core/core/session"
+	"github.com/nfltr/relay-core/internal/platform/acceptloop"
 	"github.com/nfltr/relay-core/platform/metrics"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 )
@@ -113,14 +114,19 @@ func (s *Router) Serve(ctx context.Context, ln net.Listener) error {
 		_ = ln.Close()
 	}()
 
+	var backoff acceptloop.Backoff
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if backoff.Retry(s.logger, "sni", err) {
+				continue
+			}
 			return fmt.Errorf("sni router: accept: %w", err)
 		}
+		backoff.Reset()
 		go s.handleConn(ctx, conn)
 	}
 }

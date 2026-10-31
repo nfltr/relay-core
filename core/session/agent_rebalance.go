@@ -66,16 +66,17 @@ func (d *Dispatcher) AgentsHere() int {
 // to move. It returns how many it asked. A replica without peers, alone,
 // or leaving (its drain moves every agent) does nothing.
 func (d *Dispatcher) rebalanceAgents(total, replicas int) int {
-	if d.PodDialer == nil || replicas < 2 || d.Leaving() {
-		d.overShare.Store(false)
-		return 0
-	}
+	// Every tick, also alone (a scale-down), so stays are bounded by stayFor.
 	d.stays.Range(func(id, at any) bool {
 		if time.Since(at.(time.Time)) >= stayFor {
 			d.stays.CompareAndDelete(id, at)
 		}
 		return true
 	})
+	if d.PodDialer == nil || replicas < 2 || d.Leaving() {
+		d.overShare.Store(false)
+		return 0
+	}
 	share := (total + replicas - 1) / replicas
 	here, moving := 0, 0
 	d.Agents.Range(func(_ string, s *HTTPStream) bool {

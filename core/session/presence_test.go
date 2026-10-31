@@ -82,3 +82,29 @@ type fakePresenceBus struct{ pub, sub chan []byte }
 func (b fakePresenceBus) Publish(_ context.Context, p []byte) error { b.pub <- p; return nil }
 
 func (b fakePresenceBus) Subscribe(context.Context) <-chan []byte { return b.sub }
+
+// TestPresenceBusResyncResetsWatchers: the bus's resync signal (an empty
+// payload: its subscription was re-established and may have missed peer
+// changes) starts a new feed epoch, so a watcher's cursor answers reset
+// and it re-lists: a waiting watcher at once, a later one at its next
+// Watch.
+func TestPresenceBusResyncResetsWatchers(t *testing.T) {
+	sub := make(chan []byte)
+	var f presenceFeed
+	f.BindBus(t.Context(), fakePresenceBus{pub: make(chan []byte, 4), sub: sub})
+	before := f.Cursor()
+	waiting := make(chan *presencev1.WatchResponse, 1)
+	go func() { waiting <- f.Watch(t.Context(), before, time.Minute, nil) }()
+	sub <- []byte{}
+	select {
+	case r := <-waiting:
+		if !r.GetReset_() {
+			t.Fatalf("waiting watcher woke with %v, want reset", r)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a waiting watcher did not wake on the bus's resync")
+	}
+	if r := f.Watch(t.Context(), before, time.Minute, nil); !r.GetReset_() || r.GetCursor() == before {
+		t.Fatalf("watch with a cursor from before the resync = %v, want reset and a new cursor", r)
+	}
+}

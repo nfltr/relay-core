@@ -34,7 +34,7 @@ var (
 		prometheus.CounterOpts{
 			Namespace: dispatcherNamespace,
 			Name:      "peer_link_conns_total",
-			Help:      "Replica link connection events: up, down, dead_peer (the link's liveness), goaway (the peer drains), refused (authentication), transport_mismatch (the peer runs the other peer_link.transport), unreachable (a dial got no answer within the dial timeout: sessions toward that peer are refused without a dial for as long).",
+			Help:      "Replica link connection events: up, down, dead_peer (the link's liveness), goaway (the peer drains), refused (authentication), transport_mismatch (the peer runs the other peer_link.transport), unreachable (a dial got no answer within the dial timeout: sessions toward that peer are refused without a dial for as long), accept_error (the peer link port's Accept failed other than closed, e.g. EMFILE: retried after a backoff).",
 		},
 		[]string{"event"},
 	)

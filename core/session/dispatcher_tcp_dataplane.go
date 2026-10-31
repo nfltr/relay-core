@@ -25,6 +25,7 @@ import (
 	"github.com/nfltr/relay/proto/wire/dataplane"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/nfltr/relay-core/internal/platform/acceptloop"
 	"github.com/nfltr/relay-core/platform/metrics"
 )
 
@@ -92,23 +93,19 @@ func (l *dataPlaneListener) Accept() (net.Conn, error) {
 // acceptLoop sniffs every connection in a goroutine of its own: a slow
 // handshake delays only itself.
 func (l *dataPlaneListener) acceptLoop() {
-	var backoff time.Duration
+	var backoff acceptloop.Backoff
 	for {
 		c, err := l.Listener.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				l.err = err
-				close(l.done)
-				l.d.Link.drain() // the agent link's Serve ends with the port; its sessions run to the drain's deadline
-				return
+			if backoff.Retry(l.d.logger, "grpc_dataplane", err) {
+				continue
 			}
-			// Transient (e.g. EMFILE): back off as net/http and the SNI
-			// mux do.
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
-			time.Sleep(backoff)
-			continue
+			l.err = err
+			close(l.done)
+			l.d.Link.drain() // the agent link's Serve ends with the port; its sessions run to the drain's deadline
+			return
 		}
-		backoff = 0
+		backoff.Reset()
 		go l.route(c)
 	}
 }

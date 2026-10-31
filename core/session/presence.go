@@ -26,12 +26,15 @@ const presenceHistory = 256
 
 var presenceEvents = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "nfltr_relay_presence_events_total",
-	Help: "Presence changes (up, down, labels) published on the relay presence feed, by origin (local, peer; folded: a local change not yet sent to peers that folded into the agent's next).",
+	Help: "Presence changes (up, down, labels) published on the relay presence feed, by origin (local, peer; folded: a local change not yet sent to peers that folded into the agent's next); change resync: the bus's subscription was re-established, a new feed epoch makes every watcher re-list.",
 }, []string{"change", "origin"})
 
 // PresenceBus carries presence events between relay replicas sharing one
 // deployment (Redis pub/sub in relayserver). Publish must not block on a slow
-// peer for long; Subscribe delivers peer payloads until ctx ends.
+// peer for long; Subscribe delivers peer payloads until ctx ends. An empty
+// payload is a resync: the subscription was (re)established and may have
+// missed peer payloads, so the feed starts a new epoch and its watchers
+// re-list.
 type PresenceBus interface {
 	Publish(ctx context.Context, payload []byte) error
 	Subscribe(ctx context.Context) <-chan []byte
@@ -53,6 +56,23 @@ func (f *presenceFeed) initLocked() {
 		f.changed = make(chan struct{})
 		f.epoch = strconv.FormatInt(time.Now().UnixNano(), 36)
 	}
+}
+
+// resync starts a new epoch: the feed may have missed peer changes, so
+// every cursor of the old one answers reset (its watcher re-lists), a
+// waiting watcher at once.
+func (f *presenceFeed) resync() {
+	f.Mu.Lock()
+	f.initLocked()
+	old := f.epoch
+	for n := time.Now().UnixNano(); f.epoch == old; n++ {
+		f.epoch = strconv.FormatInt(n, 36)
+	}
+	f.recent = nil
+	close(f.changed)
+	f.changed = make(chan struct{})
+	f.Mu.Unlock()
+	presenceEvents.WithLabelValues("resync", "peer").Inc()
 }
 
 func (f *presenceFeed) cursorLocked() string {
@@ -169,6 +189,7 @@ func (f *presenceFeed) Watch(ctx context.Context, cursor string, maxWait time.Du
 		defer f.Mu.Unlock()
 		return &presencev1.WatchResponse{Cursor: f.cursorLocked(), Reset_: true}
 	}
+	epoch := f.epoch
 	f.Mu.Unlock()
 	var timeout <-chan time.Time
 	if maxWait > 0 {
@@ -178,6 +199,10 @@ func (f *presenceFeed) Watch(ctx context.Context, cursor string, maxWait time.Du
 	}
 	for {
 		f.Mu.Lock()
+		if f.epoch != epoch { // resync
+			defer f.Mu.Unlock()
+			return &presencev1.WatchResponse{Cursor: f.cursorLocked(), Reset_: true}
+		}
 		events, reset := f.sinceLocked(since, visible)
 		current, changed := f.cursorLocked(), f.changed
 		since = f.rev
@@ -214,6 +239,10 @@ func (f *presenceFeed) BindBus(ctx context.Context, bus PresenceBus) {
 	peer := bus.Subscribe(ctx)
 	go func() {
 		for payload := range peer {
+			if len(payload) == 0 {
+				f.resync()
+				continue
+			}
 			var ev presencev1.PresenceEvent
 			if protojson.Unmarshal(payload, &ev) != nil || ev.GetAgentId() == "" || ev.GetChange() == nil {
 				continue

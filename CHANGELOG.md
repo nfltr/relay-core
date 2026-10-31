@@ -43,6 +43,23 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- An Accept error other than a closed listener (EMFILE, ENFILE,
+  ECONNABORTED) no longer ends the SNI router's `Serve` or a TCP
+  endpoint's `ServeEndpoint`: every accept loop of the relay (those two,
+  the SNI mux, the gRPC port's data-plane listener) retries it after a
+  backoff of 5 ms doubling to 1 s, as net/http does, and counts it in
+  `nfltr_relay_accept_errors_total{listener}`.
+- The presence feed takes the bus's resync signal: an empty payload from
+  `PresenceBus.Subscribe` (the subscription was re-established and may
+  have missed peer changes) starts a new feed epoch, so every watcher's
+  cursor answers reset and it re-lists, a waiting one at once
+  (`nfltr_relay_presence_events_total{change="resync"}`). A replica that
+  missed peers' changes during a bus outage kept a stale view until each
+  agent's next change.
+- An agent's rebalancing stay is forgotten after `stayFor` on every tick,
+  also on a replica left alone after a scale-down (it kept its stays).
+- `rpc_server_dispatcher_peer_link_conns_total`'s help names the
+  `accept_error` event.
 - The in-memory broker forgets a topic once its consumer and producer have
   closed (`Unsubscribe` is `Close`): every agent id the relay had seen kept
   its topic, its closed consumer with a 64-message channel and its closed
