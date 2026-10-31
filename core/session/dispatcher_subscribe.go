@@ -137,13 +137,6 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	metrics.RegisterUpstreamConnection(ProtocolHTTP)
 	upstreamStart := time.Now()
 
-	agentIDTopicName := agentID
-	err = d.broker.CreateTopic(agentIDTopicName, 0, true)
-	if err != nil {
-		d.Logger.Error("error creating topic for AgentID", "agent_id", agentID, "error", err)
-		return status.Errorf(codes.Internal, "Error creating topic for AgentID %s", agentID)
-	}
-
 	recvThreshold := d.Config.HeartbeatRecvThreshold
 
 	session, err := claimAgentRecord(registrationCtx, d.IPInventory, agentID, directory.Session{Since: time.Now(), Credential: credential, Account: PrincipalOwner(stream.Context()), Services: agentservices.Format(services)}, nil, nil, recvThreshold)
@@ -203,8 +196,16 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 
 	// Subscribed (and receiving) before the session registers: a request
 	// routed here once the agent counts as connected finds its consumer.
-	// The in-memory broker drops, without an error, what no receiving
-	// consumer takes, and its visitor waited for the request timeout.
+	// (A request sent to the agent's topic with no consumer fails with
+	// broker.ErrNoConsumer: its visitor is answered at once.)
+	// The topic is made only here: the broker forgets it once the consumer
+	// and every producer on it closed, so a session that returned before
+	// subscribing would leave it behind.
+	agentIDTopicName := agentID
+	if err := d.broker.CreateTopic(agentIDTopicName, 0, true); err != nil {
+		d.Logger.Error("error creating topic for AgentID", "agent_id", agentID, "error", err)
+		return status.Errorf(codes.Internal, "Error creating topic for AgentID %s", agentID)
+	}
 	consumer, err := d.broker.Subscribe(broker.ConsumerOptions{
 		Topic:            agentIDTopicName,
 		SubscriptionName: agentID,

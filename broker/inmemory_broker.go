@@ -21,36 +21,47 @@ var (
 	ErrTopicExists        = errors.New("topic already exists")
 	ErrTopicNotExists     = errors.New("topic not exist")
 	ErrSubscriptionExists = errors.New("subscription already exists for topic")
-	// ErrNoConsumer: the topic's consumer closed and no other took its
-	// place, so the message was not delivered: its sender answers for it.
-	// (A topic that never had a consumer still takes messages silently.)
+	// ErrNoConsumer: the topic had no consumer to take the message (none
+	// subscribed, or it closed before taking it): it was not delivered and
+	// its sender answers for it.
 	ErrNoConsumer = errors.New("no consumer received the message")
 )
 
+// consumerBuffer is how many sent messages a consumer holds that its
+// reader has not taken yet.
+const consumerBuffer = 64
+
 type inMemoryMessageBroker struct {
-	namespace         string
+	// mu orders the lifecycle of topics, producers and consumers (create,
+	// subscribe, close, broker Close), never a send: sends take no broker
+	// lock.
+	mu                sync.Mutex
 	topicAutoCreation bool
 	topics            *util.SyncMap[string, *inMemoryTopic]
 	producers         *util.SyncMap[string, *inMemoryProducer]
 	closed            atomic.Bool
 }
 
+// A topic lives while its consumer or its producer holds it: when the last
+// of them closes, the broker forgets it (an agent's topic, named by its id,
+// leaves nothing behind its session), and a later CreateTopic makes it
+// again. A topic CreateTopic made that nobody joined stays until broker
+// Close.
 type inMemoryTopic struct {
-	name        string
-	subscribers *util.SyncMap[string, *inMemoryConsumer]
-	ended       atomic.Bool // a consumer closed and none subscribed since
+	broker   *inMemoryMessageBroker
+	name     string
+	consumer atomic.Pointer[inMemoryConsumer] // set and cleared under broker.mu
 }
 
 type inMemoryConsumer struct {
-	lock             sync.Mutex
-	messages         chan Message
-	closed           bool
-	closeOnce        sync.Once
-	consumerType     ConsumerType
-	receiveOnce      sync.Once
-	receiving        bool
-	subscriptionName string
-	topic            *inMemoryTopic
+	// mu: a send holds it shared while it puts a message on messages;
+	// Close holds it exclusive to close messages, so no send is ever on a
+	// closed channel.
+	mu        sync.RWMutex
+	messages  chan Message
+	done      chan struct{} // closed first by Close: wakes a blocked send
+	closeOnce sync.Once
+	topic     *inMemoryTopic
 }
 
 type inMemoryProducer struct {
@@ -58,8 +69,8 @@ type inMemoryProducer struct {
 	closed atomic.Bool
 }
 
-// NewInMemoryMessageBroker creates a new in-memory message broker
-// It has no namespace and ttl support
+// NewInMemoryMessageBroker returns the in-process broker; its contract is
+// in the package doc. It starts no goroutine.
 func NewInMemoryMessageBroker() FullBroker {
 	return &inMemoryMessageBroker{
 		topics:    &util.SyncMap[string, *inMemoryTopic]{},    // topic -> topic
@@ -68,203 +79,212 @@ func NewInMemoryMessageBroker() FullBroker {
 }
 
 func (m *inMemoryMessageBroker) CreateProducer(options ProducerOptions) (Producer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed.Load() {
 		return nil, ErrBrokerClosed
 	}
-	producer, ok := m.producers.Load(options.Topic)
-	if ok && !producer.closed.Load() {
+	if _, ok := m.producers.Load(options.Topic); ok { // a closed one has left (Close)
 		return nil, ErrProducerExists
 	}
-	if ok && producer.closed.Load() {
-		m.producers.Delete(options.Topic)
+	topic, err := m.topicLocked(options.Topic)
+	if err != nil {
+		return nil, err
 	}
-
-	if _, exists := m.topics.Load(options.Topic); !exists && m.topicAutoCreation {
-		if err := m.CreateTopic(options.Topic, 1, true); err != nil {
-			return nil, err
-		}
-	}
-	topic, ok := m.topics.Load(options.Topic)
-	if !ok {
-		return nil, ErrTopicNotExists
-	}
-
-	producer = &inMemoryProducer{
-		topic: topic,
-	}
+	producer := &inMemoryProducer{topic: topic}
 	m.producers.Store(options.Topic, producer)
-
 	return producer, nil
 }
 
 func (m *inMemoryMessageBroker) Subscribe(options ConsumerOptions) (Consumer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed.Load() {
 		return nil, ErrBrokerClosed
 	}
-	if _, exists := m.topics.Load(options.Topic); !exists && m.topicAutoCreation {
-		if err := m.CreateTopic(options.Topic, 1, true); err != nil {
-			return nil, err
-		}
+	topic, err := m.topicLocked(options.Topic)
+	if err != nil {
+		return nil, err
 	}
-
-	topic, ok := m.topics.Load(options.Topic)
-	if !ok {
-		return nil, ErrTopicNotExists
-	}
-
-	subscription, ok := topic.subscribers.Load(options.SubscriptionName)
-	if ok && !subscription.closed {
+	if topic.consumer.Load() != nil { // a closed one has left (Close)
 		return nil, ErrSubscriptionExists
 	}
-	if ok && subscription.closed {
-		topic.subscribers.Delete(options.SubscriptionName)
-	}
-	var sharedConsumers, exclusiveConsumers int
-	topic.subscribers.Range(func(_ string, c *inMemoryConsumer) bool {
-		switch c.consumerType {
-		case ConsumerTypeExclusive:
-			exclusiveConsumers++
-		case ConsumerTypeShared:
-			sharedConsumers++
-		}
-		return true
-	})
-	if options.Type == ConsumerTypeExclusive && sharedConsumers+exclusiveConsumers != 0 {
-		return nil, ErrSubscriptionExists
-	}
-	if options.Type == ConsumerTypeShared && exclusiveConsumers != 0 {
-		return nil, ErrSubscriptionExists
-	}
-
 	consumer := &inMemoryConsumer{
-		messages:         make(chan Message, 64),
-		consumerType:     options.Type,
-		subscriptionName: options.SubscriptionName,
-		topic:            topic,
+		messages: make(chan Message, consumerBuffer),
+		done:     make(chan struct{}),
+		topic:    topic,
 	}
-	topic.ended.Store(false)
-
-	topic.subscribers.Store(consumer.subscriptionName, consumer)
-
+	topic.consumer.Store(consumer)
 	return consumer, nil
 }
 
-func (m *inMemoryMessageBroker) SetTopicAutoCreation(namespace string, allow bool) error {
+// topicLocked returns the named topic, made when auto-creation is on.
+func (m *inMemoryMessageBroker) topicLocked(name string) (*inMemoryTopic, error) {
+	if topic, ok := m.topics.Load(name); ok {
+		return topic, nil
+	}
+	if !m.topicAutoCreation {
+		return nil, ErrTopicNotExists
+	}
+	return m.createTopicLocked(name), nil
+}
+
+// forgetLocked forgets topic once neither a consumer nor a producer holds
+// it.
+func (m *inMemoryMessageBroker) forgetLocked(topic *inMemoryTopic) {
+	if topic.consumer.Load() != nil {
+		return
+	}
+	if p, ok := m.producers.Load(topic.name); ok && p.topic == topic {
+		return
+	}
+	m.topics.CompareAndDelete(topic.name, topic)
+}
+
+// SetTopicAutoCreation lets Subscribe and CreateProducer make a topic that
+// does not exist. The namespace is not used.
+func (m *inMemoryMessageBroker) SetTopicAutoCreation(_ string, allow bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed.Load() {
 		return ErrBrokerClosed
 	}
-	m.namespace = namespace
 	m.topicAutoCreation = allow
 	return nil
 }
 
-func (m *inMemoryMessageBroker) CreateTopic(completeTopicName string, partitions int, suppressAlreadyExistsErr bool) error {
+func (m *inMemoryMessageBroker) CreateTopic(completeTopicName string, _ int, suppressAlreadyExistsErr bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed.Load() {
 		return ErrBrokerClosed
 	}
-	_, exists := m.topics.Load(completeTopicName)
-	if exists && !suppressAlreadyExistsErr {
-		return ErrTopicExists
-	}
-	if !exists {
-		topic := &inMemoryTopic{
-			name:        completeTopicName,
-			subscribers: &util.SyncMap[string, *inMemoryConsumer]{},
+	if _, exists := m.topics.Load(completeTopicName); exists {
+		if !suppressAlreadyExistsErr {
+			return ErrTopicExists
 		}
-		m.topics.Store(completeTopicName, topic)
+		return nil
 	}
-
+	m.createTopicLocked(completeTopicName)
 	return nil
 }
 
-func (m *inMemoryMessageBroker) Close() {
-	// Set closed first to prevent new operations from racing with teardown.
-	if m.closed.Swap(true) {
-		return
-	}
-	m.producers.Range(func(_ string, producer *inMemoryProducer) bool {
-		producer.Close()
-		return true
-	})
-	m.topics.Range(func(_ string, topic *inMemoryTopic) bool {
-		topic.subscribers.Range(func(_ string, consumer *inMemoryConsumer) bool {
-			consumer.Close()
-			return true
-		})
-		return true
-	})
-	m.producers = &util.SyncMap[string, *inMemoryProducer]{}
-	m.topics = &util.SyncMap[string, *inMemoryTopic]{}
+func (m *inMemoryMessageBroker) createTopicLocked(name string) *inMemoryTopic {
+	topic := &inMemoryTopic{broker: m, name: name}
+	m.topics.Store(name, topic)
+	return topic
 }
 
-func (p *inMemoryProducer) sendToSubscribers(ctx context.Context, msg *message) (string, error) {
+// Close closes every producer and consumer and forgets every topic; any
+// later call but a Close fails with ErrBrokerClosed.
+func (m *inMemoryMessageBroker) Close() {
+	m.mu.Lock()
+	if m.closed.Swap(true) {
+		m.mu.Unlock()
+		return
+	}
+	producers, topics := m.producers, m.topics
+	m.producers = &util.SyncMap[string, *inMemoryProducer]{}
+	m.topics = &util.SyncMap[string, *inMemoryTopic]{}
+	m.mu.Unlock()
+	// Closed outside mu: their Close takes it (and finds them gone).
+	producers.Range(func(_ string, p *inMemoryProducer) bool {
+		p.Close()
+		return true
+	})
+	topics.Range(func(_ string, t *inMemoryTopic) bool {
+		if c := t.consumer.Load(); c != nil {
+			c.Close()
+		}
+		return true
+	})
+}
+
+func (p *inMemoryProducer) send(ctx context.Context, msg *message) (string, error) {
 	if p.closed.Load() {
 		return "", ErrProducerClosed
 	}
-	delivered := false
-	p.topic.subscribers.Range(func(_ string, subscriber *inMemoryConsumer) bool {
-		subscriber.lock.Lock()
-		defer subscriber.lock.Unlock()
-		if subscriber.closed {
-			p.topic.subscribers.Delete(subscriber.subscriptionName)
-			return true
-		}
-		if !subscriber.receiving {
-			return true
-		}
-		select {
-		case <-ctx.Done():
-		case subscriber.messages <- msg:
-			delivered = true
-		}
-		return true
-	})
-	if !delivered && p.topic.ended.Load() {
+	c := p.topic.consumer.Load()
+	if c == nil {
 		return "", ErrNoConsumer
 	}
-	return "", nil
+	return "", c.put(ctx, msg)
 }
 
 func (p *inMemoryProducer) SendBytes(ctx context.Context, data []byte) (string, error) {
-	return p.sendToSubscribers(ctx, &message{payload: data})
+	return p.send(ctx, &message{payload: data})
 }
 
 func (p *inMemoryProducer) SendProto(ctx context.Context, msg proto.Message) (string, error) {
-	return p.sendToSubscribers(ctx, &message{raw: msg})
+	return p.send(ctx, &message{raw: msg})
 }
 
 func (p *inMemoryProducer) Close() {
-	p.closed.Store(true)
+	if p.closed.Swap(true) {
+		return
+	}
+	m := p.topic.broker
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.producers.CompareAndDelete(p.topic.name, p)
+	m.forgetLocked(p.topic)
+}
+
+// put hands msg to the consumer: nil once it is on the consumer's
+// channel; ErrNoConsumer when the consumer closed first; ctx's error
+// when ctx ended first while the channel was full.
+func (c *inMemoryConsumer) put(ctx context.Context, msg Message) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	select {
+	case <-c.done:
+		return ErrNoConsumer
+	default:
+	}
+	if err := ctx.Err(); err != nil { // an ended send delivers nothing
+		return err
+	}
+	select {
+	case c.messages <- msg:
+		return nil
+	case <-c.done:
+		return ErrNoConsumer
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *inMemoryConsumer) Ack(msg Message) error {
 	return msg.Ack()
 }
 
-// Chan starts the consumer receiving: a message sent before the first
-// Chan call is not delivered to it.
+// Chan returns the consumer's messages: every message a send put there
+// since Subscribe, in the order the sends put them. It is closed by Close,
+// after the messages already on it.
 func (c *inMemoryConsumer) Chan() <-chan Message {
-	c.receiveOnce.Do(func() {
-		c.lock.Lock()
-		defer c.lock.Unlock()
-		c.receiving = true
-	})
-
 	return c.messages
 }
 
+// Close leaves the topic: a send blocked on this consumer returns
+// ErrNoConsumer, later sends find no consumer, and the topic is free for
+// a new subscription. Messages already on Chan stay readable.
 func (c *inMemoryConsumer) Close() {
 	c.closeOnce.Do(func() {
-		c.lock.Lock()
-		defer c.lock.Unlock()
+		close(c.done) // wakes a send blocked on a full channel
+		c.mu.Lock()   // waits for the sends in put to return
 		close(c.messages)
-		c.closed = true
-		if c.topic != nil {
-			c.topic.ended.Store(true)
-		}
+		c.mu.Unlock()
+		m := c.topic.broker
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		c.topic.consumer.CompareAndSwap(c, nil)
+		m.forgetLocked(c.topic)
 	})
 }
 
+// Unsubscribe is Close: the in-memory broker keeps no subscription past
+// its consumer.
 func (c *inMemoryConsumer) Unsubscribe() error {
+	c.Close()
 	return nil
 }

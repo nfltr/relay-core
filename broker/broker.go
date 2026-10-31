@@ -1,10 +1,41 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-// Package broker is the relay's in-process message broker: topics, one
-// producer per topic, exclusive or shared subscriptions, and acknowledged
-// messages (NewInMemoryMessageBroker), plus a cache of producers by key
-// (Producers).
+// Package broker is the relay's in-process message broker
+// (NewInMemoryMessageBroker), plus a cache of producers by key (Producers).
+//
+// The in-memory broker's contract:
+//
+//   - A topic is made by CreateTopic (ErrTopicExists when it exists, unless
+//     suppressed), or by Subscribe and CreateProducer when auto-creation is
+//     on (else they fail with ErrTopicNotExists). It has at most one
+//     consumer and at most one producer. When the last of them closes, the
+//     broker forgets the topic, and a later join needs it made again: an
+//     agent's topic, named by its id, leaves nothing behind its session.
+//   - Subscribe joins a topic as its one consumer; while one is open,
+//     another fails with ErrSubscriptionExists, so of two at once exactly
+//     one wins. The consumer's Type and SubscriptionName do not change
+//     that. Once it closes, a new one may join (the same name included).
+//   - CreateProducer makes the topic's producer; while one is open another
+//     fails with ErrProducerExists.
+//   - A send (SendBytes, SendProto) returns nil once the message is on the
+//     consumer's channel, which holds 64 messages. When it is full the send
+//     waits until the consumer takes one, the consumer closes, or the
+//     send's ctx ends. A message not delivered is never silent: the send
+//     fails with ErrNoConsumer (no consumer, or it closed first), ctx's
+//     error, or ErrProducerClosed. Messages from one sender arrive in the
+//     order sent; sends from several goroutines are not ordered.
+//   - A consumer receives every message sent while it is subscribed, from
+//     Subscribe on (Chan may be taken later). Close (and Unsubscribe, the
+//     same) is idempotent, wakes a waiting send (ErrNoConsumer), and closes
+//     the channel after the messages already on it, which stay readable:
+//     the closing side answers for them.
+//   - Producer Close is idempotent; its later sends fail with
+//     ErrProducerClosed.
+//   - Broker Close closes every producer and consumer and forgets every
+//     topic; later calls fail with ErrBrokerClosed.
+//   - All of it is safe for concurrent use; the broker starts no goroutine
+//     and no send takes a broker-wide lock.
 package broker
 
 import (
@@ -22,7 +53,7 @@ type Message interface {
 }
 
 // Consumer is a subscription to a topic: its messages arrive on Chan until
-// Close or Unsubscribe.
+// Close or Unsubscribe (the package doc has the in-memory contract).
 type Consumer interface {
 	// Ack acknowledges a message. Delegates to msg.Ack() — provided as a
 	// convenience so callers can use the traditional consumer.Ack(msg) style.
@@ -36,12 +67,8 @@ type Consumer interface {
 type ConsumerType int
 
 // ConsumerTypeExclusive is a subscription that alone receives the topic's
-// messages.
+// messages: the only kind the in-memory broker has.
 const ConsumerTypeExclusive ConsumerType = 0
-
-// ConsumerTypeShared is a subscription that shares the topic's messages
-// with other shared subscriptions.
-const ConsumerTypeShared ConsumerType = 1
 
 // ConsumerOptions name the topic and subscription a Subscribe joins.
 type ConsumerOptions struct {

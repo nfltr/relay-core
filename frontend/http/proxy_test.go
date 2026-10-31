@@ -99,6 +99,7 @@ func TestProxyServeHTTP_Success(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
+	standInAgent(t, b, "agentID-1")
 	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", strings.NewReader("body"))
@@ -165,6 +166,7 @@ func TestProxyServeHTTP_EmptyPayload(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
+	standInAgent(t, b, "agentID-1")
 	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/custom.css", nil)
@@ -360,6 +362,7 @@ func TestProxyServeHTTP_Timeout(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
+	standInAgent(t, b, "agentID-1")
 	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", strings.NewReader("body"))
@@ -382,6 +385,7 @@ func TestProxy_publishRequest(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
+	standInAgent(t, b, "agentID-1")
 	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	agentReq := &pb.HTTPProxyRequest{
@@ -454,6 +458,7 @@ func TestProxy_ServeHTTP_BodyReadErrorStreaming(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
+	standInAgent(t, b, "oph-req-err")
 	proxy := NewProxy(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)), b, testRelayCookie)
 
 	// Body read error is now absorbed by ReadChunks (produces zero chunks);
@@ -511,6 +516,7 @@ func TestProxyServeHTTP_ChunkReordering(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
+	standInAgent(t, b, "agentID-reorder")
 	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", nil)
@@ -618,6 +624,7 @@ func TestProxyServeHTTP_ChunkReorderingLastArrivesMid(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
+	standInAgent(t, b, "agentID-mid")
 	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", nil)
@@ -753,4 +760,19 @@ func TestMetadataAppendJSONIsMarshal(t *testing.T) {
 	if n := testing.AllocsPerRun(200, func() { _ = copyMetadataHeaderToResponse(h, "agent-1", 1, 2, nil) }); n > 2 {
 		t.Fatalf("%v allocations per response header, budget 2 (the string and the header's slice)", n)
 	}
+}
+
+// standInAgent subscribes to agentID's topic as the agent's session does,
+// so the proxy's requests to it are taken (a send to a topic with no
+// consumer fails).
+func standInAgent(t *testing.T, b broker.MessageBroker, agentID string) {
+	t.Helper()
+	if err := b.CreateTopic(agentID, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	c, err := b.Subscribe(broker.ConsumerOptions{Topic: agentID, SubscriptionName: agentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
 }

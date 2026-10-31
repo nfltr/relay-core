@@ -33,6 +33,7 @@ func TestProxyStreamedHeadReachesClientBeforeBody(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
+	standInAgent(t, b, "agent-head")
 	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
 	policy := &HeaderPolicy{addResponseHeaders: map[string]string{"X-Policy": "on"}}
 

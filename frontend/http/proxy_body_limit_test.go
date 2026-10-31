@@ -48,6 +48,7 @@ func TestProxyRequestBodyLimitEdge(t *testing.T) {
 			}
 			b := broker.NewInMemoryMessageBroker()
 			_ = b.SetTopicAutoCreation("ns", true)
+			standInAgent(t, b, "agentID-1")
 			proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 			txn := "txn-limit-" + strings.ReplaceAll(tc.name, " ", "-")

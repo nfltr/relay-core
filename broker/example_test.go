@@ -31,8 +31,7 @@ func ExampleNewInMemoryMessageBroker() {
 		SubscriptionName: "example-sub",
 	})
 
-	// A consumer receives what is sent after its first Chan call: take the
-	// channel before anything is sent.
+	// A consumer receives what is sent from Subscribe on.
 	msgs := consumer.Chan()
 
 	// Send a message (in a goroutine because in-memory send is synchronous)
@@ -68,7 +67,7 @@ func ExampleDecodeBrokerMessage() {
 		SubscriptionName: "decode-sub",
 	})
 
-	msgs := consumer.Chan() // before the send: earlier messages are not kept
+	msgs := consumer.Chan()
 	go func() {
 		_, _ = producer.SendBytes(context.Background(), payload)
 	}()

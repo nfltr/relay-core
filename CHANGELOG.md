@@ -43,6 +43,20 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- The in-memory broker forgets a topic once its consumer and producer have
+  closed (`Unsubscribe` is `Close`): every agent id the relay had seen kept
+  its topic, its closed consumer with a 64-message channel and its closed
+  producer, about 1.9 KB each, for the life of the process. The relay
+  makes an agent's topic only when its session subscribes.
+- The in-memory broker reports every message it does not deliver: a send
+  to a topic with no consumer fails with `broker.ErrNoConsumer` and a send
+  whose context ends first with the context's error (both returned nil
+  and dropped the message before); a consumer's `Close` wakes a send
+  blocked on its full channel (it waited for the send's context, forever
+  with a background one); of concurrent `Subscribe`s to one topic exactly
+  one wins; a consumer receives what is sent from `Subscribe` on, not
+  from its first `Chan`. The package doc states the broker's contract.
+
 - `metrics.CountHTTP`'s writer is an `http.Flusher`: the gRPC HTTP
   path's proxy asserts one to send a streamed response's header before its
   body, and an SSE response's header waited for its first body byte.
@@ -87,6 +101,10 @@ changes listed (from the first tag on).
   volumes for the agent link's QUIC conformance run).
 
 ### Removed
+
+- `broker.ConsumerTypeShared`: no caller used it, and the in-memory broker
+  now has one consumer per topic. Subscribe with `ConsumerTypeExclusive`
+  (the zero value).
 
 - `metrics.RegisterAgentConnect` and `metrics.RegisterAgentDisconnect`:
   connected_agents is counted at scrape from the dispatcher

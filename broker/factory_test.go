@@ -82,6 +82,9 @@ func TestProducersUnboundedKeepsEveryAgentRemoveRecreates(t *testing.T) {
 		}
 	}
 	producers.Remove("agent-0")
+	// Its producer closed, nothing holds agent-0's topic: the broker forgot
+	// it, and the agent's next session makes it again.
+	_ = b.CreateTopic("agent-0", 1, false)
 	p, _, err := producers.Get("agent-0", b, ProducerOptions{Topic: "agent-0"})
 	if err != nil || p == first["agent-0"] {
 		t.Fatalf("after Remove: %v, same producer %v; want a new one", err, p == first["agent-0"])

@@ -152,24 +152,6 @@ func TestInMemoryConsumer_Close(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestInMemoryConsumer_Unsubscribe(t *testing.T) {
-	broker := NewInMemoryMessageBroker()
-	err := broker.CreateTopic("test-topic", 1, true)
-	require.NoError(t, err)
-	_, err = broker.Subscribe(ConsumerOptions{Topic: "test-topic", SubscriptionName: "test-subscription", Type: ConsumerTypeShared})
-	require.NoError(t, err)
-	consumer, err := broker.Subscribe(ConsumerOptions{Topic: "test-topic", SubscriptionName: "test-subscription-x", Type: ConsumerTypeShared})
-	require.NoError(t, err)
-
-	// Test unsubscribing the consumer
-	err = consumer.Unsubscribe()
-	require.NoError(t, err)
-
-	// Test unsubscribing the consumer multiple times
-	err = consumer.Unsubscribe()
-	require.NoError(t, err)
-}
-
 func BenchmarkInMemoryProducer_Send(b *testing.B) {
 	broker := NewInMemoryMessageBroker()
 	err := broker.CreateTopic("test-topic", 1, false)
@@ -266,36 +248,11 @@ func TestInMemoryProducer_Send_ClosedConsumerCleanup(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoConsumer)
 }
 
-func TestInMemoryProducer_Send_NotReceiving(t *testing.T) {
-	broker := NewInMemoryMessageBroker()
-	require.NoError(t, broker.CreateTopic("t", 1, false))
-	producer, err := broker.CreateProducer(ProducerOptions{Topic: "t"})
-	require.NoError(t, err)
-	// Subscribe but never call Chan() — subscriber not receiving
-	_, err = broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "s"})
-	require.NoError(t, err)
-
-	_, err = producer.SendBytes(context.Background(), []byte("msg"))
-	require.NoError(t, err)
-}
-
-func TestInMemoryProducer_Send_CancelledContext(t *testing.T) {
-	broker := NewInMemoryMessageBroker()
-	require.NoError(t, broker.CreateTopic("t", 1, false))
-	producer, err := broker.CreateProducer(ProducerOptions{Topic: "t"})
-	require.NoError(t, err)
-	_, err = broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "s"})
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
-	_, err = producer.SendBytes(ctx, []byte("msg"))
-	require.NoError(t, err) // Send still returns nil — msg just won't be delivered
-}
-
 func TestInMemoryMessageBroker_CreateProducer_ClosedProducerReuse(t *testing.T) {
 	broker := NewInMemoryMessageBroker()
 	require.NoError(t, broker.CreateTopic("t", 1, false))
+	_, err := broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "s"}) // holds the topic
+	require.NoError(t, err)
 	producer, err := broker.CreateProducer(ProducerOptions{Topic: "t"})
 	require.NoError(t, err)
 	producer.Close()
@@ -309,6 +266,8 @@ func TestInMemoryMessageBroker_CreateProducer_ClosedProducerReuse(t *testing.T) 
 func TestInMemoryMessageBroker_Subscribe_ClosedSubscriptionReuse(t *testing.T) {
 	broker := NewInMemoryMessageBroker()
 	require.NoError(t, broker.CreateTopic("t", 1, false))
+	_, err := broker.CreateProducer(ProducerOptions{Topic: "t"}) // holds the topic
+	require.NoError(t, err)
 	consumer, err := broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "s"})
 	require.NoError(t, err)
 	consumer.Close()
@@ -317,28 +276,6 @@ func TestInMemoryMessageBroker_Subscribe_ClosedSubscriptionReuse(t *testing.T) {
 	consumer2, err := broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "s"})
 	require.NoError(t, err)
 	require.NotNil(t, consumer2)
-}
-
-func TestInMemoryMessageBroker_Subscribe_ExclusiveBlocksShared(t *testing.T) {
-	broker := NewInMemoryMessageBroker()
-	require.NoError(t, broker.CreateTopic("t", 1, false))
-	_, err := broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "ex", Type: ConsumerTypeExclusive})
-	require.NoError(t, err)
-
-	// Shared consumer should fail when exclusive exists
-	_, err = broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "sh", Type: ConsumerTypeShared})
-	require.Error(t, err)
-}
-
-func TestInMemoryMessageBroker_Subscribe_SharedBlocksExclusive(t *testing.T) {
-	broker := NewInMemoryMessageBroker()
-	require.NoError(t, broker.CreateTopic("t", 1, false))
-	_, err := broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "sh", Type: ConsumerTypeShared})
-	require.NoError(t, err)
-
-	// Exclusive consumer should fail when shared exists
-	_, err = broker.Subscribe(ConsumerOptions{Topic: "t", SubscriptionName: "ex", Type: ConsumerTypeExclusive})
-	require.Error(t, err)
 }
 
 func TestInMemoryMessageBroker_CloseWithActiveProducersAndConsumers(t *testing.T) {
