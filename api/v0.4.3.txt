@@ -1,0 +1,15 @@
+Incompatible changes:
+- ./platform/metrics.RegisterAgentConnect: removed
+- ./platform/metrics.RegisterAgentDisconnect: removed
+Compatible changes:
+- ./platform/metrics.A2AResponse: added
+- ./platform/metrics.AgentSource: added
+- ./platform/metrics.CountConn: added
+- ./platform/metrics.CountHTTP: added
+- ./platform/metrics.RecordChainEnded: added
+- ./platform/metrics.RecordChainFirstByte: added
+- ./platform/metrics.ServesHTTP: added
+- ./platform/metrics.ServesHTTPTCP: added
+- ./platform/metrics.ServesNone: added
+- ./platform/metrics.ServesTCP: added
+- ./platform/metrics.TrackAgents: added

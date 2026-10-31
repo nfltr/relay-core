@@ -59,6 +59,15 @@ func RecordChainEnded(path string, in, out int64) {
 	}
 }
 
+// RecordChainFirstByte observes a forwarded session's first byte from the
+// agent, d after its onward leg opened (link's HopEvent.FirstOut), on the
+// path whose opens it counted: connect.
+func RecordChainFirstByte(path string, d time.Duration) {
+	if path == "connect" {
+		ObserveTransferFirstByte(PathConnect, d)
+	}
+}
+
 // RecordChainAbort counts one forwarded session's abort. allow:wrapper
 func RecordChainAbort(path, code string, hops uint8) {
 	chainAborts.WithLabelValues(path, code, hopsLabel(hops)).Inc()

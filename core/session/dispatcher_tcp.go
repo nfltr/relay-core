@@ -651,6 +651,7 @@ func (d *TCPDispatcher) onwardLocal(ctx context.Context, ep TCPEndpoint, as *tcp
 		if err != nil {
 			return nil, nil, err
 		}
+		noteAgentLinkLeg(ctx, s)
 		return answering(s, ep.Answer), release, nil
 	}
 

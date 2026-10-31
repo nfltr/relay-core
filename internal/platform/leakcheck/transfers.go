@@ -16,12 +16,6 @@ import (
 // count transfers without sessions (platform/metrics' own).
 var SkipTransfers bool
 
-// firstByteGaps are the paths whose sessions may move bytes with no first
-// byte observed, and why.
-var firstByteGaps = map[string]string{
-	"connect": "a data connection's session spliced to an agent link session by link.Join: link reports its bytes (HopEnded) but no first byte; follow-up in github.com/nfltr/link",
-}
-
 // uncountedTransfers names the transfer paths (nfltr_relay_transfer_*) on
 // which the package's tests opened sessions but counted none of their
 // bytes, or counted bytes from the agent and never a first byte: a path
@@ -59,7 +53,7 @@ func uncountedTransfers() []string {
 		switch {
 		case n > 0 && bytes[p] == 0:
 			out = append(out, fmt.Sprintf("%s: %.0f sessions opened, no bytes counted", p, n))
-		case from[p] > 0 && first[p] == 0 && firstByteGaps[p] == "":
+		case from[p] > 0 && first[p] == 0:
 			out = append(out, fmt.Sprintf("%s: %.0f bytes from the agent, no first byte observed", p, from[p]))
 		}
 	}

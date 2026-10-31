@@ -12,6 +12,30 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Every transfer path that opens sessions counts their bytes
+  (`nfltr_relay_transfer_bytes_total`) and the first byte from the agent
+  (`nfltr_relay_transfer_first_byte_seconds`): http_link, http_grpc, sni,
+  connect, a2a and replica counted opens and no bytes, and no session on
+  the agent link observed a first byte. `metrics.CountConn` and
+  `metrics.CountHTTP` count a session where the relay copies it; a session
+  `peerlink.Forward` splices (a connect client's data connection session,
+  and its onward leg on the agent link: tcp_link, tcp_quic) takes its
+  first byte from link's `HopEvent.FirstOut` (`metrics.RecordChainEnded`,
+  `metrics.RecordChainFirstByte`); `metrics.A2AResponse` counts an A2A
+  call's relayed response. A package's tests fail when
+  they opened sessions on a path that counted no bytes, or bytes from the
+  agent and no first byte (internal leakcheck).
+- `nfltr_relay_host_network_bytes_total{direction}`: the bytes the host's
+  physical network interfaces received and transmitted (/proc/net/dev at
+  each scrape; Linux only). On a relay that is its machine's only service,
+  transmit is its egress; `process_network_*` counts loopback too.
+- `nfltr_relay_connected_agents_by_serves{serves="http|tcp|http_tcp|none"}`:
+  connected agents by the kinds of services each declared at connect
+  (none: it declared none, as a TCP-only agent does).
+- `metrics.TrackAgents`: a relay's connected agents as a scrape counts them.
+- The pre-push hook refuses a commit or tag not by
+  `nfltr <oss@nfltr.xyz>` or with a Co-Authored-By line
+  (`scripts/check-identity.sh`; `make check` tests it).
 - `session.ErrReplicaUnreachable`: an `Open` whose agent is connected to
   another replica of the relay that this one could not reach (the replica
   link's `link.CodeNoRoute` refusal) is a `*DialError` that `errors.Is`
@@ -42,10 +66,20 @@ changes listed (from the first tag on).
 
 ### Changed
 
+- `rpc_server_dispatcher_connected_agents` counts every connected agent
+  once, whatever streams it holds: agents with TCP streams only were
+  missing from it (it counted HTTP streams only).
+- Requires github.com/nfltr/link at main (`HopEvent.FirstOut`).
 - Requires github.com/nfltr/link/peerlink/quiclink v0.5.2 (`Session.OnGrant`),
   github.com/nfltr/quic-go with `Stream.SetSendWindowCallback`, and
   github.com/nfltr/link v0.11.2 (peerlinktest's lighter
   volumes for the agent link's QUIC conformance run).
+
+### Removed
+
+- `metrics.RegisterAgentConnect` and `metrics.RegisterAgentDisconnect`:
+  connected_agents is counted at scrape from the dispatcher
+  (`metrics.TrackAgents`).
 
 ## [v0.4.1] - 2026-10-30
 

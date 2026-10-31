@@ -32,8 +32,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/link/peerlink"
@@ -63,10 +65,29 @@ func Forward(logger *slog.Logger, path string, in peerlink.Session, inband bool,
 	}
 	o := &chainObserver{path: path, logger: logger}
 	peerlink.Forward(func(ctx context.Context, _ string, _ []byte, _ peerlink.Session) (peerlink.Session, error) {
-		out, release, err := route(ctx)
-		o.release = release
+		out, release, err := route(context.WithValue(ctx, agentLinkLegKey{}, &o.leg))
+		o.release, o.began = release, time.Now()
 		return out, err
 	}, link.ForwardConfig{Observer: o})("", nil, in)
+}
+
+// agentLinkLeg is a forwarded session's onward leg when it is a session
+// on the agent link (onwardLocal notes it in the route's context): the
+// path that counts its first byte (HopEvent.FirstOut), which no copy
+// sees when Forward splices two link sessions.
+type agentLinkLeg struct {
+	path metrics.Path
+	set  bool
+}
+
+type agentLinkLegKey struct{}
+
+// noteAgentLinkLeg notes s, a session on the agent link, as the onward
+// leg of the forwarded session whose route ctx is, if any.
+func noteAgentLinkLeg(ctx context.Context, s net.Conn) {
+	if l, _ := ctx.Value(agentLinkLegKey{}).(*agentLinkLeg); l != nil {
+		l.path, l.set = agentLinkPath(s), true
+	}
 }
 
 // AnswersNatively reports whether s answers opens link's own way.
@@ -82,6 +103,8 @@ type chainObserver struct {
 	path    string
 	logger  *slog.Logger
 	release func()
+	began   time.Time    // the onward leg opened
+	leg     agentLinkLeg // set when that leg is on the agent link
 }
 
 func (o *chainObserver) Hop(e link.HopEvent) {
@@ -97,6 +120,13 @@ func (o *chainObserver) Hop(e link.HopEvent) {
 		metrics.RecordChainAnswer(o.path, refused, code, hops, e.Latency)
 	case link.HopEnded:
 		metrics.RecordChainEnded(o.path, e.In, e.Out)
+		if !e.FirstOut.IsZero() {
+			d := e.FirstOut.Sub(o.began)
+			metrics.RecordChainFirstByte(o.path, d)
+			if o.leg.set {
+				metrics.ObserveTransferFirstByte(o.leg.path, d)
+			}
+		}
 		if o.release != nil {
 			o.release()
 		}
