@@ -464,9 +464,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				idle.Stop()
 				totalBytes, _ := w.Write(data.Response.Payload)
 				finished = true
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
+				_ = http.NewResponseController(w).Flush()
 				logger.Debug("response written to http",
 					"status", data.Response.StatusCode,
 					"bytes", totalBytes)
@@ -526,9 +524,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// If chunk 0 is also the last, we're done.
 			if chunking.IsLastChunk(data.Response.Headers) {
 				finished = true
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
+				_ = http.NewResponseController(w).Flush()
 				logger.Debug("chunked response complete (single chunk)",
 					"status", data.Response.StatusCode,
 					"bytes", totalBytes)
@@ -545,10 +541,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				defer h.Release()
 				streamCtx = h
 			}
-			flusher, canFlush := w.(http.Flusher)
-			if canFlush {
-				flusher.Flush()
-			}
+			// Through http.ResponseController: a writer the relay wraps w in
+			// may only unwrap (TestProxyStreamedHeadReachesClientBeforeBody).
+			flusher := http.NewResponseController(w)
+			_ = flusher.Flush()
 			chunks := 1
 			nextIdx := 1
 
@@ -570,9 +566,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				p.ackChunk(rctx, agentID, transactionID, nextIdx, logger)
-				if canFlush {
-					flusher.Flush()
-				}
+				_ = flusher.Flush()
 				if chunking.IsLastChunk(buffered.Response.Headers) {
 					finished = true
 					logger.Debug("chunked response complete",
@@ -617,9 +611,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					p.ackChunk(rctx, agentID, transactionID, nextIdx, logger)
-					if canFlush {
-						flusher.Flush()
-					}
+					_ = flusher.Flush()
 					isLast := chunking.IsLastChunk(chunk.Response.Headers)
 					nextIdx++
 
@@ -640,9 +632,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							return
 						}
 						p.ackChunk(rctx, agentID, transactionID, nextIdx, logger)
-						if canFlush {
-							flusher.Flush()
-						}
+						_ = flusher.Flush()
 						if chunking.IsLastChunk(buffered.Response.Headers) {
 							isLast = true
 						}

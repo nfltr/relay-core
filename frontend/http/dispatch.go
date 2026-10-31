@@ -202,9 +202,7 @@ func (bw *browseResponseWriter) WriteHeader(code int) {
 // Flush implements http.Flusher — required for streaming responses
 // through httputil.ReverseProxy.
 func (bw *browseResponseWriter) Flush() {
-	if f, ok := bw.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+	_ = http.NewResponseController(bw.ResponseWriter).Flush() // also through a writer that only unwraps
 }
 
 // Unwrap lets http.ResponseController reach the server's writer (the

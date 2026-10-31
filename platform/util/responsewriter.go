@@ -96,9 +96,7 @@ func (rw *ResponseWriter) Flush() {
 	if !rw.wroteHeader { // removed headers must not go out with an early flush
 		rw.WriteHeader(http.StatusOK)
 	}
-	if f, ok := rw.w.(http.Flusher); ok {
-		f.Flush()
-	}
+	_ = http.NewResponseController(rw.w).Flush() // also through a writer that only unwraps
 }
 
 // Hijack hands the connection over (a protocol upgrade: WebSocket): the

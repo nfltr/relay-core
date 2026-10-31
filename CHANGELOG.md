@@ -47,6 +47,13 @@ changes listed (from the first tag on).
   path's proxy asserts one to send a streamed response's header before its
   body, and an SSE response's header waited for its first body byte.
 
+- The header policy's writer (`http.response_headers`, `http.url_rewrite`)
+  is an `http.Flusher` too, and the gRPC HTTP path's proxy,
+  `util.ResponseWriter` and the browse writer flush through
+  `http.ResponseController`, which reaches through a writer that only
+  unwraps: with a header policy set, a streamed response's header on the
+  gRPC HTTP path waited for its first body byte.
+
 - HTTP to an agent connected to a replica this one cannot reach is answered
   503 with `Retry-After` ("connected to another replica of the relay, which
   could not be reached; try again shortly"), not 502 "bad gateway" (the

@@ -144,6 +144,16 @@ func (rw *headerRewriteResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, er
 	return http.NewResponseController(rw.ResponseWriter).Hijack()
 }
 
+// Flush sends the header at once (a streamed response's head before its
+// body: the proxy asserts http.Flusher; TestProxyStreamedHeadReachesClientBeforeBody).
+func (rw *headerRewriteResponseWriter) Flush() {
+	if !rw.headersSent {
+		rw.headersSent = true
+		rw.policy.ApplyResponse(rw.Header())
+	}
+	_ = http.NewResponseController(rw.ResponseWriter).Flush()
+}
+
 // Unwrap lets http.ResponseController reach the server's writer.
 func (rw *headerRewriteResponseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
 
