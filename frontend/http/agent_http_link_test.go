@@ -57,6 +57,16 @@ func startAgentHTTPLeaf(t testing.TB, backend string, ag harnessAgent) (*tunnelH
 		}
 		_ = agent.RunTunnel(ctx, client, dial, ctx, agent.Tunnel{HTTP: handler}, logger)
 	}, func(context.Context, *session.TCPDispatcher, net.Conn) {})
+	// The agent dials its link as it registers. A session opened before
+	// the link binds waits agentLinkDialWait for it, then rides the frame
+	// streams (no grants, no link): on a loaded machine the binding came
+	// later than that, and TestAgentHTTPSessionsReportGrants/link-tcp read
+	// "reports no grants". Wait for the link the tests are about.
+	for deadline := time.Now().Add(time.Minute); !h.d.LinkUp(harnessAgentID); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) { // only against a hang
+			t.Fatal("the agent link did not come up")
+		}
+	}
 	return h, newAgentHTTP(h.d, slog.New(slog.DiscardHandler), testRelayCookie)
 }
 

@@ -33,13 +33,18 @@ func slowReadBackend(t *testing.T, ln net.Listener, step int, pause time.Duratio
 		buf := make([]byte, step)
 		var n int64
 		for {
+			// The pause counts from the read's start: a loaded machine's
+			// slow read is part of the pause, not added to it, so the gap
+			// between two reads is max(pause, read) and the margin to the
+			// timeout does not shrink by every read's lateness.
+			start := time.Now()
 			m, err := io.ReadFull(r.Body, buf)
 			n += int64(m)
 			read.Store(n)
 			if err != nil {
 				break
 			}
-			time.Sleep(pause)
+			time.Sleep(pause - time.Since(start))
 		}
 		doneAt.Store(time.Now().UnixNano())
 		_, _ = io.WriteString(w, strconv.FormatInt(n, 10))
