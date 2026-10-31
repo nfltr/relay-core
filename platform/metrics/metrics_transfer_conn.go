@@ -126,5 +126,15 @@ func (w *countedResponse) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Unwrap is for http.ResponseController (Flush, Hijack).
+// Flush is for the writer's users that assert http.Flusher (the gRPC
+// path's proxy, which flushes a streamed response's header before its
+// body; TestCountHTTPWriterFlushes).
+func (w *countedResponse) Flush() {
+	if !w.header {
+		w.WriteHeader(http.StatusOK)
+	}
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Unwrap is for http.ResponseController (Hijack).
 func (w *countedResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }

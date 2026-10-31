@@ -43,6 +43,10 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- `metrics.CountHTTP`'s writer is an `http.Flusher`: the gRPC HTTP
+  path's proxy asserts one to send a streamed response's header before its
+  body, and an SSE response's header waited for its first body byte.
+
 - HTTP to an agent connected to a replica this one cannot reach is answered
   503 with `Retry-After` ("connected to another replica of the relay, which
   could not be reached; try again shortly"), not 502 "bad gateway" (the

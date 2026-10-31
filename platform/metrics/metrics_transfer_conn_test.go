@@ -96,3 +96,17 @@ func TestCountHTTPCountsBodiesAndHeaderAsFirstByte(t *testing.T) {
 		t.Errorf("status %d", rec.Code)
 	}
 }
+
+// The gRPC path's proxy asserts http.Flusher to send an SSE response's
+// header before its body: CountHTTP's writer must be one, flushing w.
+func TestCountHTTPWriterFlushes(t *testing.T) {
+	rec := httptest.NewRecorder()
+	f, ok := CountHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil), PathHTTPGRPC, time.Now()).(http.Flusher)
+	if !ok {
+		t.Fatal("CountHTTP's writer is not an http.Flusher")
+	}
+	f.Flush()
+	if !rec.Flushed || rec.Code != http.StatusOK {
+		t.Fatalf("Flush did not reach w: flushed %v, code %d", rec.Flushed, rec.Code)
+	}
+}
