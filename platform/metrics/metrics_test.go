@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-func TestRegisterAgentConnect(t *testing.T) {
-	RegisterAgentConnect()
-}
-
-func TestRegisterAgentDisconnect(t *testing.T) {
-	RegisterAgentConnect()
-	RegisterAgentDisconnect()
-}
-
 func TestIncrQueuedRequests(t *testing.T) {
 	IncrQueuedRequests()
 }

@@ -76,7 +76,6 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	defer func() {
 		if registered != nil {
 			d.DeregisterAgent(agentID, registered, stream.Context().Err())
-			metrics.RegisterAgentDisconnect()
 		}
 		close(ended)
 	}()
@@ -250,8 +249,6 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	if err := stream.SendHeader(md); err != nil {
 		d.Logger.Warn("failed to send resolved agent-id header", "error", err)
 	}
-
-	metrics.RegisterAgentConnect()
 
 	// The hook's part starts before the receive loop below, so none of the
 	// session's frames arrive before it is ready.

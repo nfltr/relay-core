@@ -19,14 +19,6 @@ const (
 )
 
 var (
-	connectedAgents = auto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: dispatcherNamespace,
-			Name:      "connected_agents",
-			Help:      "Number of rpc agents connected.",
-		},
-	)
-
 	requestsQueued = auto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: brokerNamespace,
@@ -122,16 +114,6 @@ var (
 		[]string{"method", "status"}, // Labels for the histogram.
 	)
 )
-
-// RegisterAgentConnect counts a connected agent (connected_agents up one).
-func RegisterAgentConnect() {
-	connectedAgents.Inc()
-}
-
-// RegisterAgentDisconnect counts a disconnected agent (connected_agents down one).
-func RegisterAgentDisconnect() {
-	connectedAgents.Dec()
-}
 
 // IncrQueuedRequests counts a request queued to the broker.
 func IncrQueuedRequests() {

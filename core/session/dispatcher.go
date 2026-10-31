@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"weak"
 
 	"log/slog"
 
@@ -154,6 +155,9 @@ type Dispatcher struct {
 	// TCPDispatcher is the TCP tunneling engine (Gap 3).
 	// Nil when tcp.enabled=false (default).
 	TCPDispatcher *TCPDispatcher
+	// tcpAgents is TCPDispatcher for a scrape (connected_agents), which
+	// may run while WireTCP sets it.
+	tcpAgents atomic.Pointer[TCPDispatcher]
 
 	// PodDialer opens RelayTunnel streams to peer replicas on the replica
 	// link (dialPeerStream); Replicas is the rest of the seam (replicas.go).
@@ -313,6 +317,14 @@ func NewDispatcher(globalContext context.Context, logger *slog.Logger, msgBroker
 		staleReaperWake:          make(chan struct{}, 1),
 	}
 	d.UpstreamRegCond = sync.NewCond(&d.UpstreamRegMu)
+	w := weak.Make(d)
+	metrics.TrackAgents(func(each func(string)) bool {
+		d := w.Value()
+		if d != nil {
+			d.countAgents(each)
+		}
+		return d != nil
+	})
 	return d
 }
 
