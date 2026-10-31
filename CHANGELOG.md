@@ -33,8 +33,8 @@ changes listed (from the first tag on).
   connected agents by the kinds of services each declared at connect
   (none: it declared none, as a TCP-only agent does).
 - `metrics.TrackAgents`: a relay's connected agents as a scrape counts them.
-- The pre-push hook refuses a commit or tag not by
-  `nfltr <oss@nfltr.xyz>` or with a Co-Authored-By line
+- The pre-push hook refuses a commit or tag not by the project's public
+  identity or with a Co-Authored-By line
   (`scripts/check-identity.sh`; `make check` tests it).
 - `session.ErrReplicaUnreachable`: an `Open` whose agent is connected to
   another replica of the relay that this one could not reach (the replica
