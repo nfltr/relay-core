@@ -150,6 +150,12 @@ func (p *Proxy) fanoutResponse(msg broker.Message, receivedAt time.Time) error {
 		switch {
 		case errors.Is(err, txnregistry.ErrTransactionNotFound):
 			reason = "transaction_not_found"
+			if stillSending(response.Response) {
+				// Its visitor is gone and the cancel sent then did not reach
+				// the agent: the agent still sends it and the dispatcher
+				// counts it in flight. Tell it again.
+				go p.cancelAgentRequest(response.Routing.GetAgentId(), transactionID, logger)
+			}
 		case errors.Is(err, txnregistry.ErrTransactionStalled):
 			// Its browser took nothing for the bound: the agent stops the
 			// response now, not when the stuck handler finally returns.
@@ -769,6 +775,17 @@ func (p *Proxy) ackChunk(ctx context.Context, agentID, transactionID string, ind
 	if err := p.publishRequest(ctx, agentID, chunking.AckRequest(agentID, transactionID, index)); err != nil {
 		logger.Debug("ack frame not delivered", "chunk", index, "error", err)
 	}
+}
+
+// stillSending reports whether the agent sends more of r's transaction
+// after r: r is not its end (a last chunk, an unchunked response) nor the
+// relay's agent-gone answer.
+func stillSending(r *pb.HTTPResponse) bool {
+	if session.IsAgentGone(r) {
+		return false
+	}
+	h := r.GetHeaders()
+	return session.IsUploadAck(r) || chunking.IsChunked(h) && !chunking.IsLastChunk(h)
 }
 
 // cancelAgentRequest tells the agent to stop sending transactionID's

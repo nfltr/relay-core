@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	presencev1 "github.com/nfltr/relay/proto/nfltr/presence/v1"
 )
@@ -25,7 +26,7 @@ const presenceHistory = 256
 
 var presenceEvents = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "nfltr_relay_presence_events_total",
-	Help: "Presence changes (up, down, labels) published on the relay presence feed, by origin (local, peer).",
+	Help: "Presence changes (up, down, labels) published on the relay presence feed, by origin (local, peer; folded: a local change not yet sent to peers that folded into the agent's next).",
 }, []string{"change", "origin"})
 
 // PresenceBus carries presence events between relay replicas sharing one
@@ -201,20 +202,15 @@ func (f *presenceFeed) BindBus(ctx context.Context, bus PresenceBus) {
 	if bus == nil {
 		return
 	}
+	// Off the frame-relay path: a slow bus must never stall relaying. One
+	// goroutine publishes, in each agent's order; changes not yet
+	// published fold into the agent's latest (presenceOutbox), so a slow
+	// bus holds one pending change per agent, not one goroutine per change.
+	out := &presenceOutbox{pending: map[string]*presencev1.PresenceEvent{}, wake: make(chan struct{}, 1)}
 	f.Mu.Lock()
-	f.Fanout = func(ev *presencev1.PresenceEvent) {
-		payload, err := protojson.Marshal(ev)
-		if err != nil {
-			return
-		}
-		// Off the frame-relay path: a slow bus must never stall relaying.
-		go func() {
-			pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			_ = bus.Publish(pubCtx, payload)
-		}()
-	}
+	f.Fanout = out.add
 	f.Mu.Unlock()
+	go out.run(ctx, bus)
 	peer := bus.Subscribe(ctx)
 	go func() {
 		for payload := range peer {
@@ -254,4 +250,82 @@ func (d *Dispatcher) notifyUpstreamRegistered(agentID string) {
 	d.UpstreamRegMu.Lock()
 	d.UpstreamRegCond.Broadcast()
 	d.UpstreamRegMu.Unlock()
+}
+
+// presenceOutbox holds the local changes not yet published to peers: at
+// most one per agent, in the order the agents first changed.
+type presenceOutbox struct {
+	mu      sync.Mutex
+	order   []string
+	pending map[string]*presencev1.PresenceEvent
+	wake    chan struct{}
+}
+
+// add queues ev, folded into the agent's pending change: an up or down
+// replaces it; a label change updates a pending up's labels and is dropped
+// after a pending down. Each fold is counted (presence_events, "folded").
+func (o *presenceOutbox) add(ev *presencev1.PresenceEvent) {
+	ev = proto.Clone(ev).(*presencev1.PresenceEvent) // the feed keeps ev
+	id := ev.GetAgentId()
+	o.mu.Lock()
+	prev, ok := o.pending[id]
+	switch {
+	case !ok:
+		o.order = append(o.order, id)
+		o.pending[id] = ev
+	case ev.GetLabels() != nil && prev.GetUp() != nil:
+		prev.GetUp().Labels = ev.GetLabels().GetLabels()
+	case ev.GetLabels() != nil && prev.GetDown() != nil:
+	default:
+		o.pending[id] = ev
+	}
+	o.mu.Unlock()
+	if ok {
+		presenceEvents.WithLabelValues(presenceChangeName(ev), "folded").Inc()
+	}
+	select {
+	case o.wake <- struct{}{}:
+	default:
+	}
+}
+
+// run publishes the pending changes until ctx ends, then what is still
+// pending within 5 s (an agent's last down reaches peers at shutdown).
+func (o *presenceOutbox) run(ctx context.Context, bus PresenceBus) {
+	for {
+		select {
+		case <-ctx.Done():
+			drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			o.publish(drain, bus)
+			cancel()
+			return
+		case <-o.wake:
+			o.publish(ctx, bus)
+		}
+	}
+}
+
+// publish sends the pending changes, in order, until none is left or ctx
+// ends; each send is bounded at 5 s.
+func (o *presenceOutbox) publish(ctx context.Context, bus PresenceBus) {
+	for ctx.Err() == nil {
+		o.mu.Lock()
+		if len(o.order) == 0 {
+			o.order = nil // let the backing array go after a burst
+			o.mu.Unlock()
+			return
+		}
+		id := o.order[0]
+		o.order = o.order[1:]
+		ev := o.pending[id]
+		delete(o.pending, id)
+		o.mu.Unlock()
+		payload, err := protojson.Marshal(ev)
+		if err != nil {
+			continue
+		}
+		pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = bus.Publish(pubCtx, payload)
+		cancel()
+	}
 }

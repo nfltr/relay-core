@@ -66,6 +66,22 @@ changes listed (from the first tag on).
   applied. A 1xx counted as final: a later 404 went out as an implicit
   200 carrying the session metadata header, and the policy's removals
   skipped the final response.
+- Presence changes reach peer replicas in each agent's order, from one
+  publisher per bus that holds at most one pending change per agent (a
+  change not yet sent folds into the agent's next, counted as
+  `nfltr_relay_presence_events_total{origin="folded"}`). Each change was
+  published from a goroutine of its own: a slow bus held one goroutine
+  per change, and an agent's quick down then up could reach peers as up
+  then down.
+- An agent-to-agent call whose route ended before the source's last frame
+  (its target offline, refused or stalled) drops the source's later
+  frames of that call. Each opened another call that started mid-request
+  (a truncated call to a target that came back, or a second answer for
+  one transaction).
+- A response chunk for a transaction no visitor waits for any more tells
+  the agent again to stop it: when the cancel sent as the visitor left was
+  lost, the agent kept sending and the session counted the transaction in
+  flight until it ended.
 
 - `metrics.CountHTTP`'s writer is an `http.Flusher`: the gRPC HTTP
   path's proxy asserts one to send a streamed response's header before its

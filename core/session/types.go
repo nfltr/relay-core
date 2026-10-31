@@ -97,6 +97,10 @@ type Stream[S, R proto.Message] struct {
 	streamCtx                     context.Context
 	heartbeats                    chan proto.Message
 	heartbeatsRecvThresholdTicker *time.Ticker
+	// a2aEnded: transaction ids of this stream's agent-to-agent calls whose
+	// route ended before the stream sent the call's last frame
+	// (dispatcher_agent_routing.go); freed with the stream.
+	a2aEnded sync.Map
 	// Per-agent stats; connectedAt, credential and account also name the
 	// session in its inventory record (Session).
 	connectedAt            time.Time

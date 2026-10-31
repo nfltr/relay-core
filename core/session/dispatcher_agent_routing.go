@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -49,6 +50,10 @@ type a2aSession struct {
 	source *GRPCStream     // the stream that opened it; only it feeds or cancels it
 	done   <-chan struct{} // the session context's: the route ended
 	ended  bool            // nothing more is handed off (the source's receive loop only)
+	// sourceDone: the source sent the call's EOM or cancel. A route that
+	// ends before it leaves the transaction in its source's a2aEnded, so
+	// the call's later frames are dropped rather than open another call.
+	sourceDone atomic.Bool
 }
 
 // isAgentToAgentRequest returns true when the message from an agent is
@@ -84,6 +89,23 @@ func (d *Dispatcher) dispatchAgentToAgent(ctx context.Context, sourceStream *GRP
 		return
 	}
 
+	last := msg.GetEom() || isA2ACancelMessage(msg)
+	if !loaded {
+		if _, ended := sourceStream.a2aEnded.Load(txnID); ended {
+			// A frame of a call whose route ended before the source's last:
+			// dropped (it would start a call mid-request); the last one
+			// forgets the call.
+			if last {
+				sourceStream.a2aEnded.Delete(txnID)
+			}
+			return
+		}
+	}
+	if loaded && last {
+		session.sourceDone.Store(true)
+		sourceStream.a2aEnded.Delete(txnID) // in case the route just ended
+	}
+
 	// Handle cancellation messages for existing sessions.
 	if isA2ACancelMessage(msg) {
 		if loaded {
@@ -95,6 +117,7 @@ func (d *Dispatcher) dispatchAgentToAgent(ctx context.Context, sourceStream *GRP
 	if !loaded {
 		var sessionCtx context.Context
 		session, sessionCtx = d.newA2ASession(ctx, sourceStream)
+		session.sourceDone.Store(last)
 		d.a2aSessions.Store(txnID, session)
 		go d.routeAgentToAgent(sessionCtx, sourceStream, session, txnID)
 	}
@@ -159,6 +182,14 @@ func (d *Dispatcher) newA2ASession(ctx context.Context, sourceStream *GRPCStream
 
 func (d *Dispatcher) routeAgentToAgent(ctx context.Context, sourceStream *GRPCStream, session *a2aSession, txnID string) {
 	defer d.a2aSessions.Delete(txnID)
+	defer func() { // before the delete: the source's next frame finds one or the other
+		if !session.sourceDone.Load() {
+			sourceStream.a2aEnded.Store(txnID, struct{}{})
+			if session.sourceDone.Load() { // its last frame came meanwhile
+				sourceStream.a2aEnded.Delete(txnID)
+			}
+		}
+	}()
 	// The session context is a child of the source stream's context; release
 	// it with the transaction, or a long-lived stream retains one per call.
 	defer session.cancelFn()
