@@ -322,8 +322,9 @@ func SetDefaultFlags() {
 	// ── Between replicas ────────────────────────────────────────────────
 	// The replica link (link v2 over mTLS on its own port), the only path
 	// between replicas; 0 = off: a multi-replica relay then serves only its
-	// own agents.
-	_ = flag.Int("peer_link.port", 0, "replica link port (link v2, mTLS), the only path between replicas; 0: off (agents on other replicas unreachable)")
+	// own agents; -1 = a port the kernel chooses, which peers read from this
+	// replica's directory record.
+	_ = flag.Int("peer_link.port", 0, "replica link port (link v2, mTLS), the only path between replicas; 0: off (agents on other replicas unreachable); -1: a port the kernel chooses, which peers read from this replica's directory record")
 	_ = flag.String("peer_link.transport", "mtls", "replica link transport: mtls (the CA below), or plaintext where the pod network already encrypts or is trusted (needs S2S_TOKEN); one per release")
 	_ = flag.String("peer_link.ca_cert_file", "", "replica link CA bundle (PEM; the first certificate signs this replica's certificate)")
 	_ = flag.String("peer_link.ca_key_file", "", "replica link CA key (PEM)")

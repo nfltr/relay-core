@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -94,11 +95,21 @@ func (f *tcpPort) Attach(ctx context.Context, h frontend.Host) error {
 	owner := identity.Principal{Provider: keyfile.ProviderName, Owner: "demo", Subject: "demo", AgentID: "demo"}
 	h.Go(func() error {
 		go func() { <-ctx.Done(); _ = f.l.Close() }()
+		var backoff time.Duration
 		for {
 			c, err := f.l.Accept()
-			if err != nil {
+			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			if err != nil {
+				// Temporary (EMFILE, ECONNABORTED): back off and keep
+				// accepting, as net/http does.
+				backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
+				h.Logger().Warn("accept", "err", err, "backoff", backoff)
+				time.Sleep(backoff)
+				continue
+			}
+			backoff = 0
 			go func() {
 				defer c.Close()
 				s, err := h.Core().Open(ctx, owner, session.Target{Agent: f.agent, Service: f.service})
