@@ -572,7 +572,6 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 		if !d.DeregisterUpstreamAgent(agentID, currentStream, stream.Context().Err()) {
 			return // replaced: its replacement holds the pool slot, record and labels
 		}
-		d.lastSeenByAgentID.Delete(agentID)
 		if ephemeral {
 			// Before DeleteIPs: until then another pod refuses this id
 			// (AlreadyExists), so no reconnect there registers a row this

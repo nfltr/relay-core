@@ -81,6 +81,11 @@ func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context,
 		// supersedes another's, each renews its record as before.
 		s = directory.Session{}
 	}
+	if ctx != nil && ctx.Err() != nil {
+		// The session ended (a frame its receive loop drains): record
+		// nothing that would outlive it (forgetAgent).
+		return nil
+	}
 	d.touchAgentLastSeen(agentID)
 	recvThreshold := d.Config.HeartbeatRecvThreshold
 	refreshInterval := d.inboundInventoryRefreshInterval()

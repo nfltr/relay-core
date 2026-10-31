@@ -536,7 +536,7 @@ func (d *Dispatcher) DeregisterAgent(agentID string, s *HTTPStream, streamCtxErr
 }
 
 // forgetAgent removes the state an agent's sessions share (key base, owner,
-// inventory refresh) and runs onAgentDisconnect, once no session of agentID
+// inventory refresh, last seen) and runs onAgentDisconnect, once no session of agentID
 // is registered here: an agent's ConnectHTTP and AgentTunnel sessions share
 // it, so the end of one leaves it to the other, and a replaced session's
 // end leaves it to its replacement.
@@ -549,6 +549,7 @@ func (d *Dispatcher) forgetAgent(agentID string) {
 		return
 	}
 	d.InventoryRefreshByAgentID.Delete(agentID)
+	d.lastSeenByAgentID.Delete(agentID)
 	d.AgentOwners.Delete(agentID)
 	d.AgentKeyBase.Delete(agentID)
 	d.agentStateMu.Unlock()

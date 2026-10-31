@@ -56,6 +56,16 @@ changes listed (from the first tag on).
   with a background one); of concurrent `Subscribe`s to one topic exactly
   one wins; a consumer receives what is sent from `Subscribe` on, not
   from its first `Chan`. The package doc states the broker's contract.
+- An agent that connected only over ConnectHTTP no longer leaves its
+  last-seen time behind when it leaves (about 160 B per agent id, for the
+  life of the process): the dispatcher forgets it with the agent's other
+  state once no session of the id is left.
+- `util.ResponseWriter` and the header policy's writer pass a 1xx other
+  than 101 (103 Early Hints) through as informational: the final status
+  still applies, with the headers to remove removed and the policy
+  applied. A 1xx counted as final: a later 404 went out as an implicit
+  200 carrying the session metadata header, and the policy's removals
+  skipped the final response.
 
 - `metrics.CountHTTP`'s writer is an `http.Flusher`: the gRPC HTTP
   path's proxy asserts one to send a streamed response's header before its

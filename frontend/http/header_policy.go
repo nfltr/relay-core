@@ -118,9 +118,12 @@ type headerRewriteResponseWriter struct {
 	headersSent bool
 }
 
+// WriteHeader applies the policy to every header block it sends: a 1xx's
+// and the final response's.
 func (rw *headerRewriteResponseWriter) WriteHeader(statusCode int) {
 	if !rw.headersSent {
-		rw.headersSent = true
+		// A 1xx other than 101 is not the final header block.
+		rw.headersSent = statusCode >= 200 || statusCode == http.StatusSwitchingProtocols
 		rw.policy.ApplyResponse(rw.Header())
 	}
 	rw.ResponseWriter.WriteHeader(statusCode)

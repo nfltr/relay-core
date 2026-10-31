@@ -60,18 +60,27 @@ func (rw *ResponseWriter) removeHeaders() {
 	}
 }
 
-// WriteHeader removes the headers to remove and writes the header once;
-// later calls do nothing.
+// WriteHeader removes the headers to remove and writes the header. A 1xx
+// other than 101 goes out as it comes and is not the final status; the
+// final one is written once, later calls do nothing.
 func (rw *ResponseWriter) WriteHeader(statusCode int) {
 	if rw.wroteHeader {
 		return
 	}
-	rw.statusCode = statusCode
-
 	rw.removeHeaders()
-
+	if informational(statusCode) {
+		rw.w.WriteHeader(statusCode)
+		return
+	}
+	rw.statusCode = statusCode
 	rw.w.WriteHeader(statusCode)
 	rw.wroteHeader = true
+}
+
+// informational reports whether code is a 1xx a response may send before
+// its final status (101 Switching Protocols is final).
+func informational(code int) bool {
+	return code >= 100 && code < 200 && code != http.StatusSwitchingProtocols
 }
 
 // GetRemovedHeaders returns the removed headers' values (nil when none were

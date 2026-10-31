@@ -194,3 +194,24 @@ func TestHeaderRewriteMiddleware_ResponseHeadersOnWrite(t *testing.T) {
 		t.Errorf("want X-Written=1, got %q", got)
 	}
 }
+
+// A 1xx goes out with the policy applied and the final response's headers
+// are rewritten too. Before, the policy ran once, at the 1xx: a header it
+// removes, set on the final response, went out.
+func TestHeaderPolicyAppliesToTheFinalResponseAfter1xx(t *testing.T) {
+	p := &HeaderPolicy{removeResponseHeaders: []string{"Server"}}
+	srv := httptest.NewServer(HeaderRewriteMiddleware(p, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusEarlyHints)
+		w.Header().Set("Server", "backend/1.0")
+		w.WriteHeader(http.StatusNotFound)
+	})))
+	defer srv.Close()
+	res, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound || res.Header.Get("Server") != "" {
+		t.Fatalf("status %d, Server %q; want 404 and Server removed", res.StatusCode, res.Header.Get("Server"))
+	}
+}

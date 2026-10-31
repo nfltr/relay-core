@@ -535,7 +535,12 @@ func testRebalanceAgentReachingOneReplicaStays(t *testing.T, bound time.Duration
 		}
 	}
 	ticks() // above its share (2 of 4), a asks every agent once, in turn
-	waitMove(t, "every move given up", func() bool { return stayed() == n && trying.Load() == 0 })
+	for deadline := time.Now().Add(5 * time.Second); stayed() != n || trying.Load() != 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) { // which half is stuck: a move not given up, or a reconnect not ended
+			t.Fatalf("every move given up: not within 5 s: stayed %d of %d, reconnects in flight %d, moves %d, refused %d, agents here %d",
+				stayed(), n, trying.Load(), f.moves.Load(), f.refused.Load(), a.AgentsHere())
+		}
+	}
 	if f.moves.Load() != n {
 		t.Fatalf("%d moves asked, want %d (each agent once)", f.moves.Load(), n)
 	}
