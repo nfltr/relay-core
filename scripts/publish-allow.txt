@@ -1,2 +1,5 @@
 # check-publish.sh allowlist: "<file>: <finding> -- <reason>".
 core/identity/template_test.go: email a@x.io -- a template test's sample subject, not a mailbox
+scripts/check-identity.sh: email oss@nfltr.xyz -- the project's public commit identity, which the pre-push hook requires
+scripts/check-identity_test.sh: email oss@nfltr.xyz -- the public commit identity the test commits as
+scripts/pre-push: email oss@nfltr.xyz -- the public commit identity, named in the hook's refusal
