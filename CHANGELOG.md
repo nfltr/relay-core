@@ -12,6 +12,18 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Usage per payer: `metrics.EnableUsage`, `metrics.OpenMeter(path,
+  account, agentID)`, `metrics.AddBytes`, `(*metrics.Meter).End` and
+  `metrics.TakeUsage(func(metrics.Usage))`, the bytes each frontend path
+  carried since the last take by the account that pays for them.
+  `Dispatcher.OpenMeter` and `TCPDispatcher.OpenMeter` open a session's
+  meter for its agent's owner (`OwnerForAgent`); connect, sni, http_link,
+  http_grpc and a2a sessions are metered once usage is enabled, a
+  forwarded connect session through `session.MeterChain`. A metered
+  session's bytes cost one atomic add on its own meter and are summed into
+  `nfltr_relay_transfer_bytes_total` at scrape, so the usage taken equals
+  the path counters exactly (bytes without a meter are usage of no payer).
+  Off until `EnableUsage`: nothing changes for a relay that does not call it.
 - Every transfer path that opens sessions counts their bytes
   (`nfltr_relay_transfer_bytes_total`) and the first byte from the agent
   (`nfltr_relay_transfer_first_byte_seconds`): http_link, http_grpc, sni,
@@ -43,6 +55,9 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- An SNI session's lifetime (`nfltr_relay_transfer_duration_seconds`,
+  path sni) was timed from its accept, the ClientHello's peek included; it
+  is timed from its routing.
 - An Accept error other than a closed listener (EMFILE, ENFILE,
   ECONNABORTED) no longer ends the SNI router's `Serve` or a TCP
   endpoint's `ServeEndpoint`: every accept loop of the relay (those two,
@@ -134,6 +149,11 @@ changes listed (from the first tag on).
 
 ### Changed
 
+- `metrics.CountConn`, `metrics.CountHTTP` and `metrics.RecordChainEnded`
+  take the session's `*metrics.Meter` (nil: none, as before); migration:
+  pass `nil`, or `OpenMeter`'s meter. `metrics.A2AResponse(first, began)`
+  no longer counts the response's bytes: count them with `AddBytes` on the
+  call's meter.
 - `rpc_server_dispatcher_connected_agents` counts every connected agent
   once, whatever streams it holds: agents with TCP streams only were
   missing from it (it counted HTTP streams only).
