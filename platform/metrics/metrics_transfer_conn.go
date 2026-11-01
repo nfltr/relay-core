@@ -20,13 +20,15 @@ import (
 // a transport path whose connections' own counters hold its bytes
 // (TrackTransferConn). Every session whose bytes the relay copies itself
 // goes through one (TestEveryOpenedPathCountsItsBytes, metricstest).
-func CountConn(c net.Conn, p Path, began time.Time, agentSide, bytes bool) net.Conn {
-	return &countedConn{Conn: c, p: p, began: began, agentSide: agentSide, bytes: bytes}
+// m is the session's meter (OpenMeter), nil for none.
+func CountConn(c net.Conn, p Path, m *Meter, began time.Time, agentSide, bytes bool) net.Conn {
+	return &countedConn{Conn: c, p: p, m: m, began: began, agentSide: agentSide, bytes: bytes}
 }
 
 type countedConn struct {
 	net.Conn
 	p                Path
+	m                *Meter
 	began            time.Time
 	agentSide, bytes bool
 	first            atomic.Bool
@@ -50,12 +52,12 @@ func (c *countedConn) count(n int, fromAgent bool) {
 	}
 	if !fromAgent {
 		if c.bytes {
-			AddTransferBytes(c.p, n, 0)
+			AddBytes(c.p, c.m, n, 0)
 		}
 		return
 	}
 	if c.bytes {
-		AddTransferBytes(c.p, 0, n)
+		AddBytes(c.p, c.m, 0, n)
 	}
 	if !c.first.Load() && c.first.CompareAndSwap(false, true) {
 		ObserveTransferFirstByte(c.p, time.Since(c.began))
@@ -83,28 +85,31 @@ func (c *countedConn) Reset() error {
 
 // CountHTTP counts an HTTP request on p: its body's bytes to the agent,
 // the response's from it, the response's header as its first byte (since
-// began). The writer it returns unwraps (http.ResponseController) to w.
-func CountHTTP(w http.ResponseWriter, r *http.Request, p Path, began time.Time) http.ResponseWriter {
+// began), the bytes on m, the request's meter (OpenMeter), when not nil.
+// The writer it returns unwraps (http.ResponseController) to w.
+func CountHTTP(w http.ResponseWriter, r *http.Request, p Path, m *Meter, began time.Time) http.ResponseWriter {
 	if r.Body != nil && r.Body != http.NoBody {
-		r.Body = &countedBody{ReadCloser: r.Body, p: p}
+		r.Body = &countedBody{ReadCloser: r.Body, p: p, m: m}
 	}
-	return &countedResponse{ResponseWriter: w, p: p, began: began}
+	return &countedResponse{ResponseWriter: w, p: p, m: m, began: began}
 }
 
 type countedBody struct {
 	io.ReadCloser
 	p Path
+	m *Meter
 }
 
 func (b *countedBody) Read(buf []byte) (int, error) {
 	n, err := b.ReadCloser.Read(buf)
-	AddTransferBytes(b.p, n, 0)
+	AddBytes(b.p, b.m, n, 0)
 	return n, err
 }
 
 type countedResponse struct {
 	http.ResponseWriter
 	p      Path
+	m      *Meter
 	began  time.Time
 	header bool
 }
@@ -122,7 +127,7 @@ func (w *countedResponse) Write(b []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	n, err := w.ResponseWriter.Write(b)
-	AddTransferBytes(w.p, 0, n)
+	AddBytes(w.p, w.m, 0, n)
 	return n, err
 }
 

@@ -34,7 +34,7 @@ func TestCountConnCountsBothDirectionsAndOneFirstByte(t *testing.T) {
 		before := scrape(t, p)
 		firstBefore := histCount(t, p)
 		a, b := net.Pipe()
-		c := CountConn(a, p, time.Now(), agentSide, true)
+		c := CountConn(a, p, nil, time.Now(), agentSide, true)
 		go func() {
 			_, _ = b.Write([]byte("12345"))
 			_, _ = io.ReadFull(b, make([]byte, 3))
@@ -75,7 +75,7 @@ func TestCountHTTPCountsBodiesAndHeaderAsFirstByte(t *testing.T) {
 	before, firstBefore := scrape(t, p), histCount(t, p)
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("hello"))
 	rec := httptest.NewRecorder()
-	w := CountHTTP(rec, r, p, time.Now())
+	w := CountHTTP(rec, r, p, OpenMeter(p, "", ""), time.Now())
 	_, _ = io.ReadAll(r.Body)
 	w.WriteHeader(http.StatusCreated)
 	_, _ = w.Write([]byte("response"))
@@ -101,7 +101,7 @@ func TestCountHTTPCountsBodiesAndHeaderAsFirstByte(t *testing.T) {
 // header before its body: CountHTTP's writer must be one, flushing w.
 func TestCountHTTPWriterFlushes(t *testing.T) {
 	rec := httptest.NewRecorder()
-	f, ok := CountHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil), PathHTTPGRPC, time.Now()).(http.Flusher)
+	f, ok := CountHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil), PathHTTPGRPC, OpenMeter(PathHTTPGRPC, "", ""), time.Now()).(http.Flusher)
 	if !ok {
 		t.Fatal("CountHTTP's writer is not an http.Flusher")
 	}

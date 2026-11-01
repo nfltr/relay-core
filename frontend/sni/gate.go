@@ -81,6 +81,9 @@ func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher
 	began := metrics.TransferBegin(metrics.PathSNI)
 	defer metrics.TransferEnd(metrics.PathSNI, began)
 	// The agent sees the complete ClientHello, then the rest of the handshake.
-	visitor := metrics.CountConn(&session.PrefixConn{Conn: conn, Prefix: peeked}, metrics.PathSNI, began, false, true)
+	// The share's agent's owner pays, whoever the visitor is.
+	meter := d.OpenMeter(metrics.PathSNI, target.AgentID)
+	defer meter.End()
+	visitor := metrics.CountConn(&session.PrefixConn{Conn: conn, Prefix: peeked}, metrics.PathSNI, meter, began, false, true)
 	d.RouteConnection(ctx, visitor, target.AgentID, target.Service, target.enforcedShare())
 }

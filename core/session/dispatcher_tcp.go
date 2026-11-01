@@ -162,6 +162,9 @@ type TCPDispatcher struct {
 	// streamerIPInventory registers each TCP agent's pod address so that
 	// cross-pod routing can locate it.
 	streamerIPInventory directory.IPInventory
+
+	// ownerOf is the dispatcher's OwnerForAgent (OpenMeter); set by WireTCP.
+	ownerOf func(agentID string) (string, error)
 }
 
 // NewTCPDispatcher creates an empty TCP dispatcher.
@@ -289,7 +292,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		}
 		// The link's connections count its bytes; its first byte is the
 		// visitor's (agentLinkPath).
-		_ = peerlink.Join(metrics.CountConn(conn, agentLinkPath(s), time.Now(), false, false), s)
+		_ = peerlink.Join(metrics.CountConn(conn, agentLinkPath(s), nil, time.Now(), false, false), s)
 		release()
 		return nil
 	}
@@ -457,7 +460,7 @@ func (d *TCPDispatcher) forwardToPod(ctx context.Context, conn net.Conn, ep TCPE
 	}
 	began := metrics.TransferBegin(metrics.PathReplica)
 	defer metrics.TransferEnd(metrics.PathReplica, start)
-	_ = peerlink.Join(metrics.CountConn(conn, metrics.PathReplica, began, false, true), s)
+	_ = peerlink.Join(metrics.CountConn(conn, metrics.PathReplica, nil, began, false, true), s)
 }
 
 // openLink opens a session on the replica link to ep's agent; ctx carries

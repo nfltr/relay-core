@@ -65,7 +65,7 @@ func Forward(logger *slog.Logger, path string, in peerlink.Session, inband bool,
 	}
 	o := &chainObserver{path: path, logger: logger}
 	peerlink.Forward(func(ctx context.Context, _ string, _ []byte, _ peerlink.Session) (peerlink.Session, error) {
-		out, release, err := route(context.WithValue(ctx, agentLinkLegKey{}, &o.leg))
+		out, release, err := route(context.WithValue(ctx, chainKey{}, o))
 		o.release, o.began = release, time.Now()
 		return out, err
 	}, link.ForwardConfig{Observer: o})("", nil, in)
@@ -80,13 +80,23 @@ type agentLinkLeg struct {
 	set  bool
 }
 
-type agentLinkLegKey struct{}
+// chainKey is a route ctx's value: the forwarded session's chainObserver.
+type chainKey struct{}
 
 // noteAgentLinkLeg notes s, a session on the agent link, as the onward
 // leg of the forwarded session whose route ctx is, if any.
 func noteAgentLinkLeg(ctx context.Context, s net.Conn) {
-	if l, _ := ctx.Value(agentLinkLegKey{}).(*agentLinkLeg); l != nil {
-		l.path, l.set = agentLinkPath(s), true
+	if o, _ := ctx.Value(chainKey{}).(*chainObserver); o != nil {
+		o.leg.path, o.leg.set = agentLinkPath(s), true
+	}
+}
+
+// MeterChain makes m (OpenMeter) count the bytes of the forwarded session
+// whose route ctx is, once it ends (link counts a joined session's bytes
+// then), and ends m then.
+func MeterChain(ctx context.Context, m *metrics.Meter) {
+	if o, _ := ctx.Value(chainKey{}).(*chainObserver); o != nil {
+		o.meter = m
 	}
 }
 
@@ -103,8 +113,9 @@ type chainObserver struct {
 	path    string
 	logger  *slog.Logger
 	release func()
-	began   time.Time    // the onward leg opened
-	leg     agentLinkLeg // set when that leg is on the agent link
+	began   time.Time      // the onward leg opened
+	leg     agentLinkLeg   // set when that leg is on the agent link
+	meter   *metrics.Meter // MeterChain's, nil for none
 }
 
 func (o *chainObserver) Hop(e link.HopEvent) {
@@ -119,7 +130,10 @@ func (o *chainObserver) Hop(e link.HopEvent) {
 		}
 		metrics.RecordChainAnswer(o.path, refused, code, hops, e.Latency)
 	case link.HopEnded:
-		metrics.RecordChainEnded(o.path, e.In, e.Out)
+		metrics.RecordChainEnded(o.path, o.meter, e.In, e.Out)
+		if o.meter != nil {
+			o.meter.End()
+		}
 		if !e.FirstOut.IsZero() {
 			d := e.FirstOut.Sub(o.began)
 			metrics.RecordChainFirstByte(o.path, d)

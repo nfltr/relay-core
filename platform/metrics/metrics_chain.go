@@ -52,10 +52,11 @@ func RecordChainAnswer(path string, refused bool, code string, hops uint8, laten
 
 // RecordChainEnded counts a forwarded session's bytes, in (origin to far
 // end: to the agent) and out, on the path whose opens it counted: connect
-// (a replica's forwards count on the replica that sent them).
-func RecordChainEnded(path string, in, out int64) {
+// (a replica's forwards count on the replica that sent them), on m, the
+// session's meter, when not nil.
+func RecordChainEnded(path string, m *Meter, in, out int64) {
 	if path == "connect" {
-		AddTransferBytes(PathConnect, int(in), int(out))
+		AddBytes(PathConnect, m, int(in), int(out))
 	}
 }
 

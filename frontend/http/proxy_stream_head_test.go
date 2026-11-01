@@ -41,7 +41,7 @@ func TestProxyStreamedHeadReachesClientBeforeBody(t *testing.T) {
 		r.Header.Set(session.AgentIDKey, "agent-head")
 		r.Header.Set(session.RequestAtProxyHeader, fmt.Sprintf("%d", time.Now().UnixMilli()))
 		r.Header.Set(session.TransactionIDHeader, "txn-head")
-		w = metrics.CountHTTP(w, r, metrics.PathHTTPGRPC, time.Now())
+		w = metrics.CountHTTP(w, r, metrics.PathHTTPGRPC, metrics.OpenMeter(metrics.PathHTTPGRPC, "", ""), time.Now())
 		w = util.NewResponseWriter(w, nil)
 		HeaderRewriteMiddleware(policy, proxy).ServeHTTP(w, r)
 	}))

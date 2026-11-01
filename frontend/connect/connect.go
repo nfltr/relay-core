@@ -177,7 +177,9 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	began := metrics.TransferBegin(metrics.PathConnect)
 	defer metrics.TransferEnd(metrics.PathConnect, began)
-	agentConn = metrics.CountConn(agentConn, metrics.PathConnect, began, true, true)
+	meter := f.Core.Dispatcher.OpenMeter(metrics.PathConnect, agentID)
+	defer meter.End()
+	agentConn = metrics.CountConn(agentConn, metrics.PathConnect, meter, began, true, true)
 	switch {
 	case stream:
 		serveStream(w, r, agentConn)

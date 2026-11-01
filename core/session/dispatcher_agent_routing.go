@@ -54,6 +54,18 @@ type a2aSession struct {
 	// ends before it leaves the transaction in its source's a2aEnded, so
 	// the call's later frames are dropped rather than open another call.
 	sourceDone atomic.Bool
+	// meter counts the call's payload for the target's owner, set once
+	// the call is routed (nil before: unmetered).
+	meter *metrics.Meter
+}
+
+// add counts the call's payload to the target and from it.
+func (s *a2aSession) add(toAgent, fromAgent int) {
+	var m *metrics.Meter
+	if s != nil {
+		m = s.meter
+	}
+	metrics.AddBytes(metrics.PathA2A, m, toAgent, fromAgent)
 }
 
 // isAgentToAgentRequest returns true when the message from an agent is
@@ -270,6 +282,11 @@ func (d *Dispatcher) routeAgentToAgent(ctx context.Context, sourceStream *GRPCSt
 		return
 	}
 
+	// The target's owner pays for the call (the source's: only the owner
+	// reaches its agents).
+	session.meter = d.OpenMeter(metrics.PathA2A, targetAgentID)
+	defer session.meter.End()
+
 	// Apply deadline from metadata. txnCtx is a child of the session
 	// context (passed as ctx), so calling session.cancelFn() from a cancel
 	// message propagates cancellation into txnCtx automatically.
@@ -477,7 +494,7 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 			return err
 		}
 		logger.Debug("sent first request to target agent")
-		metrics.AddTransferBytes(metrics.PathA2A, len(firstMsg.GetPayload()), 0)
+		session.add(len(firstMsg.GetPayload()), 0)
 		if firstMsg.GetEom() {
 			return nil
 		}
@@ -495,7 +512,7 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 					return err
 				}
 				logger.Debug("sent request to target agent")
-				metrics.AddTransferBytes(metrics.PathA2A, len(msg.GetPayload()), 0)
+				session.add(len(msg.GetPayload()), 0)
 				if msg.GetEom() {
 					return nil
 				}
@@ -547,7 +564,8 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 					return err
 				}
 				d.markAgentStreamAlive(sourceStream, resp)
-				metrics.A2AResponse(len(resp.GetPayload()), first, routeStart)
+				session.add(0, len(resp.GetPayload()))
+				metrics.A2AResponse(first, routeStart)
 				logger.Debug("relayed response to source agent")
 				if resp.GetEom() {
 					logger.Debug("agent-to-agent transaction completed (EOM)")

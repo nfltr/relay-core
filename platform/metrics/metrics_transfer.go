@@ -205,7 +205,8 @@ func TransferAbort(p Path, code uint32) {
 }
 
 // AddTransferBytes counts bytes the relay moved on p itself (paths whose
-// transport TrackTransferConn does not count).
+// transport TrackTransferConn does not count) for no session's meter
+// (AddBytes).
 func AddTransferBytes(p Path, toAgent, fromAgent int) {
 	b := &transfers.bytesN[p]
 	if toAgent > 0 {
@@ -302,11 +303,12 @@ func (c *transferCollector) Collect(ch chan<- prometheus.Metric) {
 		st[p] = sumStats(st[p], (*stats)())
 	}
 	c.mu.Unlock()
+	metered := meteredBytes()
 	for p := range numPaths {
 		name := pathNames[p]
 		s := st[p]
-		to := float64(c.bytesN[p][0].Load() + s.BytesOut)
-		from := float64(c.bytesN[p][1].Load() + s.BytesIn)
+		to := float64(c.bytesN[p][0].Load() + s.BytesOut + metered[p][0])
+		from := float64(c.bytesN[p][1].Load() + s.BytesIn + metered[p][1])
 		if p == PathTCPLink { // the agent link's TCP connections count as they read and write
 			to += float64(agentLinkBytes.tcp[0].Load())
 			from += float64(agentLinkBytes.tcp[1].Load())

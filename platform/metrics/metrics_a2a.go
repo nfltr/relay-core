@@ -89,10 +89,10 @@ func DecrA2AActiveSessions() {
 	transfers.activeN[PathA2A].Add(-1)
 }
 
-// A2AResponse counts a response's payload relayed from an A2A call's
-// target, the call's first (since began) its first byte.
-func A2AResponse(n int, first bool, began time.Time) {
-	AddTransferBytes(PathA2A, 0, n)
+// A2AResponse observes a response relayed from an A2A call's target, the
+// call's first (since began) as its first byte (its payload counts on the
+// call's Meter).
+func A2AResponse(first bool, began time.Time) {
 	if first {
 		ObserveTransferFirstByte(PathA2A, time.Since(began))
 	}
