@@ -55,9 +55,14 @@ func RecordChainAnswer(path string, refused bool, code string, hops uint8, laten
 // (a replica's forwards count on the replica that sent them), on m, the
 // session's meter, when not nil.
 func RecordChainEnded(path string, m *Meter, in, out int64) {
-	if path == "connect" {
-		AddBytes(PathConnect, m, int(in), int(out))
+	if path != "connect" {
+		return
 	}
+	if m == nil {
+		AddTransferBytes(PathConnect, int(in), int(out))
+		return
+	}
+	m.addTotal(in, out)
 }
 
 // RecordChainFirstByte observes a forwarded session's first byte from the

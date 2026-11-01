@@ -34,6 +34,9 @@ type Meter struct {
 	n                [2]atomic.Uint64 // to_agent, from_agent
 	ended            atomic.Bool
 	taken            [2]uint64 // usage.mu
+	// moved reads a joined session's bytes while it lasts (Live); nil
+	// once its total is counted (usage.mu).
+	moved func() (toAgent, fromAgent int64)
 }
 
 // frontendPaths are the paths with usage.
@@ -100,6 +103,45 @@ func AddBytes(p Path, m *Meter, toAgent, fromAgent int) {
 	}
 }
 
+// Live makes a take read m's session's bytes from moved, to its agent and
+// from it, while the session lasts: a session whose bytes link moves
+// (link.HopEvent.Moved) and counts only at its end (RecordChainEnded), so
+// a long one reports at every take, not only once it ends. Nil m: none.
+func (m *Meter) Live(moved func() (toAgent, fromAgent int64)) {
+	if m == nil {
+		return
+	}
+	usage.mu.Lock()
+	m.moved = moved
+	usage.mu.Unlock()
+}
+
+// addTotal counts a session's total bytes on m and ends its Live reading
+// at once (usage.mu): a take sees the one or the other, never both. The
+// total is at least what the reading last said, so a take never goes
+// back.
+func (m *Meter) addTotal(toAgent, fromAgent int64) {
+	usage.mu.Lock()
+	defer usage.mu.Unlock()
+	if m.moved != nil {
+		to, from := m.moved()
+		toAgent, fromAgent = max(toAgent, to), max(fromAgent, from)
+		m.moved = nil
+	}
+	m.n[0].Add(uint64(max(toAgent, 0)))
+	m.n[1].Add(uint64(max(fromAgent, 0)))
+}
+
+// counts is m's bytes so far, its Live reading's included (usage.mu held).
+func (m *Meter) counts() (to, from uint64) {
+	to, from = m.n[0].Load(), m.n[1].Load()
+	if m.moved != nil {
+		lt, lf := m.moved()
+		to, from = to+uint64(max(lt, 0)), from+uint64(max(lf, 0))
+	}
+	return to, from
+}
+
 // End ends m's session (nil: none): the take after it returns its last
 // bytes and lets it go. Bytes added after that take count nowhere.
 func (m *Meter) End() {
@@ -118,7 +160,7 @@ func TakeUsage(f func(Usage)) {
 	u.mu.Lock()
 	for m := range u.live {
 		u.take(m)
-		if m.ended.Load() && m.n[0].Load() == m.taken[0] && m.n[1].Load() == m.taken[1] {
+		if to, from := m.counts(); m.ended.Load() && to == m.taken[0] && from == m.taken[1] {
 			delete(u.live, m) // nothing added since its take
 			u.gone[m.p][0] += m.taken[0]
 			u.gone[m.p][1] += m.taken[1]
@@ -141,7 +183,8 @@ func TakeUsage(f func(Usage)) {
 
 // take adds m's bytes since its last take to rows (u.mu held).
 func (u *usageMeters) take(m *Meter) {
-	to, from := m.n[0].Load(), m.n[1].Load()
+	to, from := m.counts()
+	to, from = max(to, m.taken[0]), max(from, m.taken[1]) // never back
 	u.add(usageRow{m.account, m.agentID, m.p}, [2]uint64{to - m.taken[0], from - m.taken[1]})
 	m.taken = [2]uint64{to, from}
 }
@@ -162,8 +205,9 @@ func meteredBytes() (out [numPaths][2]uint64) {
 	defer u.mu.Unlock()
 	out = u.gone
 	for m := range u.live {
-		out[m.p][0] += m.n[0].Load()
-		out[m.p][1] += m.n[1].Load()
+		to, from := m.counts()
+		out[m.p][0] += to
+		out[m.p][1] += from
 	}
 	return out
 }

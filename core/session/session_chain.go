@@ -129,6 +129,9 @@ func (o *chainObserver) Hop(e link.HopEvent) {
 			o.logger.Debug("chain: session refused", "path", o.path, "trace", traceID(e.Chain), "code", code, "hops", hops, "reason", a.Msg, "latency", e.Latency)
 		}
 		metrics.RecordChainAnswer(o.path, refused, code, hops, e.Latency)
+		if e.Moved != nil {
+			o.meter.Live(e.Moved) // a take reads its bytes while it lasts
+		}
 	case link.HopEnded:
 		metrics.RecordChainEnded(o.path, o.meter, e.In, e.Out)
 		if o.meter != nil {

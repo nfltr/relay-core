@@ -12,6 +12,15 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `(*metrics.Meter).Live(moved)`: a take reads a session's bytes from
+  `moved` while it lasts. A forwarded connect session (a data-connection
+  session, `session.MeterChain`) is read from link's `HopEvent.Moved`, so
+  its bytes show at every `TakeUsage`, not only once it ends: a relay that
+  dies loses at most what it had not yet taken. Its end counts only what
+  the last take had not seen; the transfer counter reads the same.
+  Requires link with `HopEvent.Moved` (v0.12.0).
+- `usage.meter_interval` (env `USAGE_METER_INTERVAL`, default 0 = off):
+  the interval at which a relay that records usage takes it.
 - Usage per payer: `metrics.EnableUsage`, `metrics.OpenMeter(path,
   account, agentID)`, `metrics.AddBytes`, `(*metrics.Meter).End` and
   `metrics.TakeUsage(func(metrics.Usage))`, the bytes each frontend path

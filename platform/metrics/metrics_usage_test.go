@@ -151,3 +151,42 @@ func TestTransportPathsHaveNoUsage(t *testing.T) {
 		t.Fatalf("transport bytes as usage: %v", rows)
 	}
 }
+
+// TestUsageLiveMeterReportsAtEveryTake: a joined session's bytes (Live,
+// counted whole only at its end: RecordChainEnded) show at every take
+// while it lasts, and its end adds only what the last take had not seen:
+// over all takes, its total exactly once, and the transfer counter the
+// same.
+func TestUsageLiveMeterReportsAtEveryTake(t *testing.T) {
+	EnableUsage()
+	p := PathConnect
+	takeAll()
+	before := scrape(t, p)
+	m := OpenMeter(p, "owner-l", "agent-l")
+	var in, out int64
+	m.Live(func() (int64, int64) { return in, out })
+	key := usageKey{"owner-l", "agent-l", p}
+
+	in, out = 100, 5
+	if got := takeAll()[key]; got != [2]uint64{100, 5} {
+		t.Fatalf("first take %v, want the bytes moved so far", got)
+	}
+	in, out = 150, 5
+	if got := takeAll()[key]; got != [2]uint64{50, 0} {
+		t.Fatalf("second take %v, want only the new bytes", got)
+	}
+	in, out = 170, 9
+	RecordChainEnded("connect", m, 170, 9)
+	m.End()
+	in, out = 1000, 1000 // a reading after the end counts nothing
+	if got := takeAll()[key]; got != [2]uint64{20, 4} {
+		t.Fatalf("take after the end %v, want the rest", got)
+	}
+	if got := takeAll()[key]; got != [2]uint64{} || liveMeters() != 0 {
+		t.Fatalf("after: %v, %d meters live", got, liveMeters())
+	}
+	after := scrape(t, p)
+	if to, from := after["to_agent"]-before["to_agent"], after["from_agent"]-before["from_agent"]; to != 170 || from != 9 {
+		t.Errorf("transfer counter %v/%v, want 170/9", to, from)
+	}
+}
