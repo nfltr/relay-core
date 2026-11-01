@@ -64,6 +64,12 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- An open waiting for its agent's link (a dial request out) that the end
+  of the agent's primary stream woke was placed on that ending stream and
+  then lost with it: its client got "connection lost" instead of the
+  agent offline refusal (or the agent's other stream). A stream now takes
+  no session from the moment it leaves the agent's rotation, before its
+  link's waiters wake.
 - An SNI session's lifetime (`nfltr_relay_transfer_duration_seconds`,
   path sni) was timed from its accept, the ClientHello's peek included; it
   is timed from its routing.

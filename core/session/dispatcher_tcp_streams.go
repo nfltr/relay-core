@@ -444,6 +444,13 @@ func (d *TCPDispatcher) unregister(agentID string, as *tcpAgentStream) {
 	close(as.Done)
 	d.Mu.Lock()
 	d.leaveRotationLocked(agentID, as)
+	// It takes no session from here on, as it leaves the rotation: the
+	// opens primaryEnded wakes (waiting for its agent link) pick another
+	// stream or are refused offline (attach), never placed on this one to
+	// be lost by CloseAll (TestOpenWokenByItsStreamsEndIsRefused).
+	as.Mu.Lock()
+	as.ending = true
+	as.Mu.Unlock()
 	if as.primary != nil {
 		as.primary.aux--
 	} else if d.bound[as.token] == as { // not resumed by a newer primary (resumeToken)
