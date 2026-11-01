@@ -70,6 +70,10 @@ changes listed (from the first tag on).
   agent offline refusal (or the agent's other stream). A stream now takes
   no session from the moment it leaves the agent's rotation, before its
   link's waiters wake.
+- The `http.share_ttl` help said a share code stops working once that
+  long passes; it now says what the relay does since share codes expire
+  idle: the longest idle lifetime of a code, each visit moving its end to
+  the visit plus its lifetime, its URL unchanged.
 - An SNI session's lifetime (`nfltr_relay_transfer_duration_seconds`,
   path sni) was timed from its accept, the ClientHello's peek included; it
   is timed from its routing.

@@ -295,7 +295,7 @@ func SetDefaultFlags() {
 
 	// ── Share URLs ──────────────────────────────────────────────────────
 	_ = flag.String("http.share_domain", "", "wildcard domain for subdomain share URLs (e.g. rpc.example.com); requires a *.rpc.example.com DNS record pointing to this server")
-	_ = flag.Duration("http.share_ttl", 24*time.Hour, "lifetime of a share code; after this the subdomain/path stops working")
+	_ = flag.Duration("http.share_ttl", 24*time.Hour, "the longest idle lifetime of a share code: a code stops working once its lifetime passes with no visit; each visit moves its end to the visit plus its lifetime, and its URL stays the same")
 	_ = flag.String("http.share_store_file", "", "SQLite file holding issued share codes (a relay that keeps them: nfltr-relay), mailboxes and webhooks when there is no SQL key store, so they survive a restart; empty: in memory")
 	_ = flag.Duration("http.share_reservation_ttl", 2*time.Hour, "how long to reserve a used share code for the same agent before it may be reassigned; 0 disables reservation")
 	// Gap 7: direct agent subdomain routing — <agentID>.share_domain reaches the
