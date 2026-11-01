@@ -195,5 +195,5 @@ func (l *muxListener) Addr() net.Addr {
 // through the TCP dispatcher, after the share's gate (e2ee_share_gate.go).
 // The server never terminates TLS for these connections.
 func (l *muxListener) routeE2EE(conn net.Conn, sni string, peeked []byte) {
-	routeE2EE(l.ctx, l.resolver, l.tcpDispatcher, l.logger, conn, sni, peeked, time.Now())
+	routeE2EE(l.ctx, l.resolver, l.tcpDispatcher, l.logger, conn, sni, peeked)
 }

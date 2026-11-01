@@ -17,7 +17,6 @@ import (
 	"errors"
 	"log/slog"
 	"net"
-	"time"
 
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/platform/metrics"
@@ -56,7 +55,7 @@ func remoteIP(a net.Addr) net.IP {
 // routeE2EE resolves sni and routes conn (peeked replayed first) to its
 // agent through d, after the share gate. It closes conn. Both SNI fronts
 // (muxListener, Router) route through it.
-func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher, logger *slog.Logger, conn net.Conn, sni string, peeked []byte, start time.Time) {
+func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher, logger *slog.Logger, conn net.Conn, sni string, peeked []byte) {
 	// An unresolved name is refused, never handed to the relay's own TLS.
 	target, err := resolver.resolve(sni)
 	if errors.Is(err, errShareStore) {
@@ -80,7 +79,7 @@ func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher
 	logger.Debug("sni: routing e2ee connection", "sni", sni, "agent_id", target.AgentID, "service", target.Service, "remote", conn.RemoteAddr())
 
 	began := metrics.TransferBegin(metrics.PathSNI)
-	defer metrics.TransferEnd(metrics.PathSNI, start)
+	defer metrics.TransferEnd(metrics.PathSNI, began)
 	// The agent sees the complete ClientHello, then the rest of the handshake.
 	visitor := metrics.CountConn(&session.PrefixConn{Conn: conn, Prefix: peeked}, metrics.PathSNI, began, false, true)
 	d.RouteConnection(ctx, visitor, target.AgentID, target.Service, target.enforcedShare())

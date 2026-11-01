@@ -140,8 +140,6 @@ func (s *Router) handleConn(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
-	start := time.Now()
-
 	// Set a deadline for the ClientHello read — don't let slow clients
 	// hold connections indefinitely.
 	if err := conn.SetReadDeadline(time.Now().Add(session.SNIPeekTimeout)); err != nil {
@@ -163,6 +161,6 @@ func (s *Router) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	routeE2EE(ctx, s.resolver, s.tcpDispatcher, s.logger, conn, sni, peeked, start)
+	routeE2EE(ctx, s.resolver, s.tcpDispatcher, s.logger, conn, sni, peeked)
 	conn = nil // routeE2EE closes it
 }
