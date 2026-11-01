@@ -95,8 +95,13 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 	if renew {
 		// ponytail: get-then-set, not atomic; a session that loses the
 		// microsecond race is corrected by the newer one's next renewal.
-		if v, err := d.inventory.Get(ctx, key); err == nil && v != nil && v.PodIP != GetPodIP() && recordSession(v).newer(s) {
-			return ErrSuperseded
+		if v, err := d.inventory.Get(ctx, key); err == nil && v != nil && recordSession(v).newer(s) {
+			if v.PodIP != GetPodIP() {
+				return ErrSuperseded
+			}
+			// A newer session of the agent here holds it: write nothing
+			// (lowering the Seq would let this one's DeleteSession take it).
+			return nil
 		}
 	}
 	value := Value{
@@ -113,6 +118,32 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 		return err
 	}
 	_, err := d.inventory.SAdd(ctx, d.activeAgentSetKey(), agentID)
+	return err
+}
+
+// DeleteSession removes the agent's record when it names this pod's
+// session s (its Seq; s or the record without one: this pod): another
+// session's record, here or on another pod, is kept.
+func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Session) error {
+	if s.Seq == 0 {
+		return d.DeleteIPs(ctx, agentID)
+	}
+	ctx, cancel := context.WithTimeout(ctx, d.opTimeout)
+	defer cancel()
+	// ponytail: get-then-delete, not atomic; a claim landing between the
+	// two is deleted (relay-server spec/README.md finding 1b), until the
+	// store compares and deletes in one step.
+	key := d.getCacheKey(agentID)
+	v, err := d.inventory.Get(ctx, key)
+	// A record without a Seq here (a renewal by SetIP: the relay's own
+	// agent) is deleted by its pod, as DeleteIPs does.
+	if err != nil || v == nil || v.PodIP != GetPodIP() || (v.Seq != 0 && v.Seq != s.Seq) {
+		return nil // gone (ErrNotFound), or another session's
+	}
+	if _, err := d.inventory.SRem(ctx, d.activeAgentSetKey(), agentID); err != nil {
+		return err
+	}
+	_, err = d.inventory.Del(ctx, key)
 	return err
 }
 

@@ -575,12 +575,12 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 			return // replaced: its replacement holds the pool slot, record and labels
 		}
 		if ephemeral {
-			// Before DeleteIPs: until then another pod refuses this id
+			// Before the record's delete: until then another pod refuses this id
 			// (AlreadyExists), so no reconnect there registers a row this
 			// removal could take.
 			d.removeEphemeralRegistration(agentID)
 		}
-		if err := d.StreamerIPInventory.DeleteIPs(context.Background(), agentID); err != nil {
+		if err := releaseAgentRecord(context.Background(), d.StreamerIPInventory, agentID, session); err != nil {
 			d.Logger.Error("failed to delete agentID dispatcher addr from cache", "AgentID", agentID, "error", err)
 		} else {
 			d.Logger.Debug("deleted agentID dispatcher addr from cache", "AgentID", agentID)

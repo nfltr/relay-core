@@ -72,6 +72,25 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- A revocation that landed between `Authenticator.Authenticate`'s
+  provider read and the caller's `Hold` left that connection held, never
+  cut, and cached the revoked key's answer for its `CacheTTL` (a key
+  file's: 30 s), so that replica accepted the key again. `Live` now
+  counts revocations; `Authenticate` reads the count before the cache and
+  the provider and keeps it in the principal, the cache insert is skipped
+  and `Hold` (also `HoldCarried`) ends the connection at once with
+  `ErrRevoked` when the key was revoked after that read. Holds every
+  provider (accounts store, key file). Found by relay-server's
+  `spec/Revocation.tla` (finding 5).
+- An agent reconnecting to the same replica could lose its directory
+  record: its old stream's deferred delete (`ConnectTCP`, `AgentTunnel`)
+  ran after the new stream claimed the record and before it registered,
+  and deleted the new session's record, so other replicas answered
+  "agent offline" until its next renewal. The delete now removes the
+  record only when it names this pod and the ending session's Seq, and a
+  renewal no longer lowers the Seq over a newer session's record on its
+  own pod. Found by relay-server's `spec/Replicas.tla` (findings 1, 4).
+
 - An open waiting for its agent's link (a dial request out) that the end
   of the agent's primary stream woke was placed on that ending stream and
   then lost with it: its client got "connection lost" instead of the

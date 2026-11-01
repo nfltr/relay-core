@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nfltr/relay-core/internal/platform/expiring"
@@ -39,6 +40,7 @@ type Principal struct {
 	CacheTTL time.Duration // how long the core may reuse this answer (0: not at all)
 	AgentID  string        // the agent id the connection takes: Subject, or "<Subject>.<Name>"
 	key      string        // Key(), set by the core
+	gen      uint64        // Live's generation before the read: Hold cuts it if revoked since
 }
 
 // Admin reports whether the principal holds the admin scope.
@@ -124,6 +126,7 @@ var AnyName = []string{"*"}
 // credential may take and its expiry, caches answers for their CacheTTL,
 // and holds and revokes the connections credentials open (Hold, Revoke).
 type Authenticator struct {
+	mu        sync.Mutex // a cache insert against Revoke's drop (Authenticate)
 	providers []Provider
 	primary   string
 	cache     *expiring.Cache[cacheKey, Principal]
@@ -162,8 +165,11 @@ func (a *Authenticator) Authenticate(ctx context.Context, c Credential) (Princip
 		return Principal{}, ErrUnknownCredential
 	}
 	key := keyOf(c)
+	// Before the cache and the provider: a revocation after this (Revoke)
+	// keeps the answer out of the cache and cuts its Hold.
+	gen := a.live.generation()
 	if p, ok := a.cache.Get(key); ok {
-		return p, nil
+		return p, nil // its gen is its read's; Revoke dropped it if revoked since
 	}
 	now := a.now()
 	for _, prov := range a.providers {
@@ -177,12 +183,17 @@ func (a *Authenticator) Authenticate(ctx context.Context, c Credential) (Princip
 		if p, err = a.admit(prov, p, c.Name, now); err != nil {
 			return Principal{}, err
 		}
+		p.gen = gen
 		if ttl := p.CacheTTL; ttl > 0 {
 			until := now.Add(ttl)
 			if !p.NotAfter.IsZero() && p.NotAfter.Before(until) {
 				until = p.NotAfter
 			}
-			a.cache.AddUntil(key, p, until)
+			a.mu.Lock()
+			if !a.live.cutSince(p.Key(), gen) {
+				a.cache.AddUntil(key, p, until)
+			}
+			a.mu.Unlock()
 		}
 		return p, nil
 	}
@@ -290,9 +301,14 @@ func (a *Authenticator) Hold(ctx context.Context, p Principal) *Held {
 
 // Revoke ends the connections of the credential key names (Key) and drops
 // its cached answers (and only its), so it is asked of its provider again.
+// An authentication that read the provider before it is neither cached nor
+// held (relay-server spec/README.md finding 5).
 func (a *Authenticator) Revoke(key string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := a.live.Cut(key, ErrRevoked)
 	a.cache.RemoveIf(func(_ cacheKey, p Principal) bool { return p.Key() == key })
-	return a.live.Cut(key, ErrRevoked)
+	return n
 }
 
 // Held returns how many connections the credential key names holds.

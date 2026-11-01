@@ -519,7 +519,7 @@ func (d *Dispatcher) ConnectTCP(stream pb.Dispatcher_ConnectTCPServer) error {
 			if _, ok := d.Upstreams.Load(agentID); ok {
 				return // its AgentTunnel still holds the record
 			}
-			if delErr := d.StreamerIPInventory.DeleteIPs(context.Background(), agentID); delErr != nil {
+			if delErr := releaseAgentRecord(context.Background(), d.StreamerIPInventory, agentID, session); delErr != nil {
 				d.Logger.Error("ConnectTCP: failed to delete streamer IP", "agent_id", agentID, "error", delErr)
 			}
 		}()

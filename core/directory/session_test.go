@@ -133,3 +133,55 @@ func TestPutSessionClaimAndGetSession(t *testing.T) {
 		t.Fatalf("GetSession without a record = %v", err)
 	}
 }
+
+// TestRenewalNeverLowersSeqOnThisPod: an older session's renewal on the
+// pod whose newer session holds the record writes nothing (relay-server
+// spec/README.md finding 4: with the Seq-compared delete, the older one's
+// end would then delete the record).
+func TestRenewalNeverLowersSeqOnThisPod(t *testing.T) {
+	viper.Set("pod_ip.env_var", "POD_IP")
+	t.Cleanup(viper.Reset)
+	t.Setenv("POD_IP", "10.0.0.1")
+	key := GetStreamerCacheKey("agent-1")
+	mc := newMockCache()
+	newer := &Value{PodIP: "10.0.0.1", Seq: 5}
+	mc.store[key] = newer
+	inv, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
+	if err := inv.(SessionStore).PutSession(context.Background(), "agent-1", Session{Since: time.Now(), Seq: 3}, true, nil, nil, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if got := mc.store[key]; got != newer {
+		t.Fatalf("record = %+v, want the newer session's (Seq 5)", got)
+	}
+}
+
+// TestDeleteSessionKeepsAnotherSessionsRecord: a session's delete removes
+// the record only while it names this pod and that session.
+func TestDeleteSessionKeepsAnotherSessionsRecord(t *testing.T) {
+	viper.Set("pod_ip.env_var", "POD_IP")
+	t.Cleanup(viper.Reset)
+	t.Setenv("POD_IP", "10.0.0.1")
+	key := GetStreamerCacheKey("agent-1")
+	for _, tc := range []struct {
+		name   string
+		record *Value
+		gone   bool
+	}{
+		{"a newer session here", &Value{PodIP: "10.0.0.1", Seq: 5}, false},
+		{"another pod's", &Value{PodIP: "10.0.0.2", Seq: 3}, false},
+		{"this session's", &Value{PodIP: "10.0.0.1", Seq: 3}, true},
+		{"a renewal without a Seq here", &Value{PodIP: "10.0.0.1"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := newMockCache()
+			mc.store[key] = tc.record
+			inv, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
+			if err := inv.(*ipInventory).DeleteSession(context.Background(), "agent-1", Session{Seq: 3}); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := mc.store[key]; ok == tc.gone {
+				t.Fatalf("record kept = %v, want %v", ok, !tc.gone)
+			}
+		})
+	}
+}

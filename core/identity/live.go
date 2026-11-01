@@ -28,6 +28,12 @@ var (
 type Live struct {
 	mu   sync.Mutex
 	held map[*Held]string // connection -> subject; Cut, rare, walks it
+	// gen counts Cuts; cut[subject] is the gen of subject's last Cut, so a
+	// connection whose principal was read before it is cut at hold.
+	// ponytail: cut keeps one entry per subject ever cut (revocations are
+	// rare); bound it by age if a relay ever revokes millions of keys.
+	gen uint64
+	cut map[string]uint64
 }
 
 // Held is one held connection: its context, which carries the principal
@@ -53,20 +59,41 @@ func (h *Held) Value(key any) any {
 }
 
 // hold holds a connection p opened under subject; it also ends at
-// p.NotAfter (ErrExpired) unless that is zero.
+// p.NotAfter (ErrExpired) unless that is zero. A p read before subject's
+// last Cut (Authenticator.Authenticate's generation) is ended at once with
+// ErrRevoked: the revocation raced its authentication.
 func (l *Live) hold(ctx context.Context, subject string, p Principal) *Held {
 	ctx, cancel := context.WithCancelCause(ctx)
 	h := &Held{Context: ctx, p: p, cancel: cancel, live: l}
-	if !p.NotAfter.IsZero() {
-		h.expiry = time.AfterFunc(time.Until(p.NotAfter), func() { cancel(ErrExpired) })
-	}
 	l.mu.Lock()
+	if l.cut[subject] > p.gen {
+		l.mu.Unlock()
+		cancel(ErrRevoked)
+		return h
+	}
 	if l.held == nil {
 		l.held = make(map[*Held]string)
 	}
 	l.held[h] = subject
 	l.mu.Unlock()
+	if !p.NotAfter.IsZero() {
+		h.expiry = time.AfterFunc(time.Until(p.NotAfter), func() { cancel(ErrExpired) })
+	}
 	return h
+}
+
+// generation is the number of Cuts so far.
+func (l *Live) generation() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.gen
+}
+
+// cutSince reports whether subject was cut after generation gen.
+func (l *Live) cutSince(subject string, gen uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.cut[subject] > gen
 }
 
 // Release ends the hold: the connection ended.
@@ -81,10 +108,16 @@ func (h *Held) Release() {
 	h.cancel(nil)
 }
 
-// Cut ends every connection subject holds with cause and returns how many.
+// Cut ends every connection subject holds with cause and returns how many;
+// a hold of a principal read before the Cut ends at once (hold).
 func (l *Live) Cut(subject string, cause error) int {
 	var cut []*Held
 	l.mu.Lock()
+	l.gen++
+	if l.cut == nil {
+		l.cut = make(map[string]uint64)
+	}
+	l.cut[subject] = l.gen
 	for h, s := range l.held {
 		if s == subject {
 			cut = append(cut, h)
