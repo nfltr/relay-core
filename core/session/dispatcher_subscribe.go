@@ -75,6 +75,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	var registered *HTTPStream
 	defer func() {
 		if registered != nil {
+			metrics.AgentDown(agentID)
 			d.DeregisterAgent(agentID, registered, stream.Context().Err())
 		}
 		close(ended)
@@ -245,6 +246,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	}
 	d.RegisterAgent(agentID, keyBase, agentStream.account, agentStream.tlsFingerprint)
 	registered = agentStream // its teardown: the deferred close(ended) above
+	metrics.AgentUp(agentStream.account, agentID)
 	// The accept goes out only now: an agent that hears it is connected
 	// (a share for a declared service, at once) finds itself registered.
 	if err := stream.SendHeader(md); err != nil {

@@ -1,0 +1,4 @@
+Compatible changes:
+- ./platform/metrics.AgentDown: added
+- ./platform/metrics.AgentUp: added
+- ./platform/metrics.Usage.AgentSeconds: added

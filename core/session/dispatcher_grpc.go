@@ -566,7 +566,9 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 		}
 	}
 
+	metrics.AgentUp(agentStream.account, agentID)
 	defer func(agentID string, currentStream *GRPCStream, currentLabels map[string]string) {
+		metrics.AgentDown(agentID)
 		d.agentTunnelCancels.CompareAndDelete(agentID, tunnelCancel)
 		d.noteAgentDeparture(agentID, currentStream) // before the stream leaves upstreams
 		if !d.DeregisterUpstreamAgent(agentID, currentStream, stream.Context().Err()) {

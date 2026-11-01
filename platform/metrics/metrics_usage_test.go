@@ -190,3 +190,55 @@ func TestUsageLiveMeterReportsAtEveryTake(t *testing.T) {
 		t.Errorf("transfer counter %v/%v, want 170/9", to, from)
 	}
 }
+
+// takeAgentSeconds is TakeUsage's agent seconds by payer and agent.
+func takeAgentSeconds() map[[2]string]uint64 {
+	out := map[[2]string]uint64{}
+	TakeUsage(func(u Usage) {
+		if u.AgentSeconds > 0 {
+			out[[2]string{u.Account, u.AgentID}] += u.AgentSeconds
+		}
+	})
+	return out
+}
+
+// TestUsageAgentSeconds: a connected agent reports, at each take, the
+// whole seconds it was connected since it connected or since the last
+// take: once per agent however many sessions it holds, its last
+// session's end closing the count, a later connect starting a new one.
+// Over all takes the sum is its connected time, less under a second per
+// connection, never more.
+func TestUsageAgentSeconds(t *testing.T) {
+	EnableUsage()
+	now := time.Unix(1_000_000, 0)
+	usage.now = func() time.Time { return now }
+	defer func() { usage.now = time.Now }()
+	takeAgentSeconds()
+	key := [2]string{"owner-s", "agent-s"}
+	step := func(d time.Duration, want uint64, what string) {
+		t.Helper()
+		now = now.Add(d)
+		if got := takeAgentSeconds()[key]; got != want {
+			t.Fatalf("%s: %d seconds, want %d", what, got, want)
+		}
+	}
+
+	AgentUp("owner-s", "agent-s")
+	AgentUp("owner-s", "agent-s") // its second session (gRPC beside HTTP)
+	step(2500*time.Millisecond, 2, "first take")
+	step(time.Second, 1, "second take (3.5 s connected)")
+	AgentDown("agent-s")
+	step(time.Second, 1, "one session left (4.5 s)")
+	now = now.Add(time.Second)
+	AgentDown("agent-s") // 5.5 s connected
+	step(10*time.Second, 1, "the take after its end")
+	step(10*time.Second, 0, "gone")
+	AgentDown("agent-s") // a stray end changes nothing
+	AgentUp("owner-s", "agent-s")
+	step(1500*time.Millisecond, 1, "connected again")
+	AgentDown("agent-s")
+	step(0, 0, "ended at 1.5 s")
+	if n := len(usage.agents); n != 0 {
+		t.Errorf("%d agent clocks left", n)
+	}
+}

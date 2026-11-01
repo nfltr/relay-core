@@ -12,6 +12,14 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Agent seconds in the usage take: `metrics.AgentUp(account, agentID)`
+  and `metrics.AgentDown(agentID)` keep one clock per connected agent id,
+  however many sessions it holds; `TakeUsage` reports the whole seconds
+  each was connected since the last take as a `Usage` with
+  `AgentSeconds` (its Path and bytes zero). ConnectHTTP, AgentTunnel and
+  primary ConnectTCP sessions call them; in-process agents do not. A
+  caller of `TakeUsage` that sums bytes only needs no change (the new
+  rows carry no bytes).
 - `(*metrics.Meter).Live(moved)`: a take reads a session's bytes from
   `moved` while it lasts. A forwarded connect session (a data-connection
   session, `session.MeterChain`) is read from link's `HopEvent.Moved`, so

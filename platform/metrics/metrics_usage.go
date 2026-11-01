@@ -6,6 +6,7 @@ package metrics
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Usage: the bytes each frontend path carried, by the account that pays
@@ -20,11 +21,13 @@ import (
 
 // Usage is a payer's bytes on a path since the last TakeUsage. Account
 // and AgentID are "" for bytes no meter counted; Account alone is "" for a
-// session whose agent had no known owner.
+// session whose agent had no known owner. A row with AgentSeconds is an
+// agent's connected time instead (AgentUp): its Path and bytes are zero.
 type Usage struct {
 	Account, AgentID   string
 	Path               Path
 	ToAgent, FromAgent uint64
+	AgentSeconds       uint64
 }
 
 // Meter counts one session's bytes on its path for its payer.
@@ -45,7 +48,8 @@ var frontendPaths = [numPaths]bool{
 	PathA2A: true, PathWG: true, PathP2PRelay: true, PathMailbox: true, PathBlob: true, PathAccounts: true,
 }
 
-var usage = &usageMeters{live: map[*Meter]struct{}{}, rows: map[usageRow][2]uint64{}}
+var usage = &usageMeters{live: map[*Meter]struct{}{}, rows: map[usageRow][2]uint64{},
+	agents: map[string]*agentClock{}, agentSecs: map[usageRow]uint64{}, spareSecs: map[usageRow]uint64{}, now: time.Now}
 
 type usageMeters struct {
 	enabled atomic.Bool
@@ -58,6 +62,21 @@ type usageMeters struct {
 	// the last take returned.
 	unmetered [numPaths][2]uint64
 	rows      map[usageRow][2]uint64
+
+	agents map[string]*agentClock // connected agents, by id
+	// agentSecs: seconds of agents (account, agentID) not yet taken: those
+	// whose last session ended, and a take's scratch.
+	agentSecs map[usageRow]uint64
+	spareSecs map[usageRow]uint64 // takeMu: the other one, swapped at each take
+	now       func() time.Time    // tests
+}
+
+// agentClock is a connected agent's time (usage.mu).
+type agentClock struct {
+	account  string
+	sessions int
+	since    time.Time
+	taken    uint64 // whole seconds since since, as the last take saw them
 }
 
 type usageRow struct {
@@ -150,8 +169,54 @@ func (m *Meter) End() {
 	}
 }
 
+// AgentUp counts one more session of agentID, which account owns, from
+// now (after EnableUsage only): its first starts the agent's connected
+// time, which each take reports in whole seconds (Usage.AgentSeconds)
+// until AgentDown ends its last. An agent's sessions on one relay (HTTP,
+// gRPC, tcp streams) count its time once.
+func AgentUp(account, agentID string) {
+	if !usage.enabled.Load() {
+		return
+	}
+	u := usage
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	c := u.agents[agentID]
+	if c == nil {
+		c = &agentClock{account: account, since: u.now()}
+		u.agents[agentID] = c
+	}
+	c.sessions++
+}
+
+// AgentDown ends one session AgentUp counted; the last ends the agent's
+// time, whose rest the next take reports. One without an AgentUp (before
+// EnableUsage) changes nothing.
+func AgentDown(agentID string) {
+	u := usage
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	c := u.agents[agentID]
+	if c == nil {
+		return
+	}
+	if c.sessions--; c.sessions > 0 {
+		return
+	}
+	delete(u.agents, agentID)
+	if d := c.seconds(u.now()) - c.taken; d > 0 {
+		u.agentSecs[usageRow{account: c.account, agentID: agentID}] += d
+	}
+}
+
+// seconds is c's whole seconds connected at now (never fewer than taken).
+func (c *agentClock) seconds(now time.Time) uint64 {
+	return max(uint64(max(now.Sub(c.since), 0)/time.Second), c.taken)
+}
+
 // TakeUsage calls f with the usage since the last take: one Usage per
-// payer, agent and path with bytes.
+// payer, agent and path with bytes, and one per connected agent with
+// seconds.
 func TakeUsage(f func(Usage)) {
 	u := usage
 	u.takeMu.Lock()
@@ -175,10 +240,25 @@ func TakeUsage(f func(Usage)) {
 		u.add(usageRow{p: p}, [2]uint64{to - u.unmetered[p][0], from - u.unmetered[p][1]})
 		u.unmetered[p] = [2]uint64{to, from}
 	}
+	now := u.now()
+	for id, c := range u.agents {
+		s := c.seconds(now)
+		if d := s - c.taken; d > 0 {
+			u.agentSecs[usageRow{account: c.account, agentID: id}] += d
+		}
+		c.taken = s
+	}
+	agentSecs := u.agentSecs
+	u.agentSecs = u.spareSecs
 	u.mu.Unlock()
 	for r, n := range u.rows {
 		f(Usage{Account: r.account, AgentID: r.agentID, Path: r.p, ToAgent: n[0], FromAgent: n[1]})
 	}
+	for r, n := range agentSecs {
+		f(Usage{Account: r.account, AgentID: r.agentID, AgentSeconds: n})
+	}
+	clear(agentSecs)
+	u.spareSecs = agentSecs
 }
 
 // take adds m's bytes since its last take to rows (u.mu held).

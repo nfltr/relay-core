@@ -363,6 +363,8 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 	}
 
 	defer d.unregister(agentID, as)
+	metrics.AgentUp(s.Account, agentID)
+	defer metrics.AgentDown(agentID)
 	// The receiver runs beside; the sender runs here, where it can end the
 	// stream (a drain) and renew the agent's record without a goroutine
 	// more per agent.
