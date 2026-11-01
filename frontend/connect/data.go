@@ -46,19 +46,27 @@ func (f *Frontend) serveData(w http.ResponseWriter, r *http.Request, caller iden
 		return
 	}
 	metrics.RecordDataConnection(2, "connect")
-	// Held under the upgrade's credential: revoking it ends the data
-	// connection and its sessions (revocation.go).
+	// Held under the upgrade's credential: revoking it ends each open
+	// session typed (ERROR_REASON_UNAUTHENTICATED), then the data
+	// connection (revocation.go).
+	var open sessionSet
 	if f.Hold != nil {
 		if held, release, ok := f.Hold(r.Context(), caller); ok {
 			defer release()
-			stop := context.AfterFunc(held, func() { _ = m.Close() })
+			stop := context.AfterFunc(held, func() {
+				open.abort(credentialAbort(context.Cause(held)))
+				_ = m.Close()
+			})
 			defer stop()
 		}
 	}
 	if agentwire.ParseGeneration(r.Header.Values(agentwire.GenerationKey)) >= drainedGeneration {
 		defer f.Clients.add(m)()
 	}
-	_ = m.Serve(func(open *pb.TCPData, s *dataplane.Session) { f.serveSession(r, caller, open, s) })
+	_ = m.Serve(func(req *pb.TCPData, s *dataplane.Session) {
+		open.add(s) // the session outlives this call: its join runs on
+		f.serveSession(r, caller, req, s)
+	})
 }
 
 // serveConnectSession forwards one session of a data connection to its
