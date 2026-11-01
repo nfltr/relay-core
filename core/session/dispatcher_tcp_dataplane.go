@@ -268,6 +268,9 @@ func (a *tcpAgentStream) sendData(f *pb.TCPData) {
 		if !a.cr.Acquire(f.GetSessionId(), n) {
 			return
 		}
+		if traceOn {
+			traceWrite(a, f.GetSessionId(), n)
+		}
 		chunk := f
 		if n < len(f.GetData()) {
 			chunk = &pb.TCPData{SessionId: f.GetSessionId(), Data: data[:n]}
@@ -280,6 +283,9 @@ func (a *tcpAgentStream) sendData(f *pb.TCPData) {
 // openCredit starts a session's credit on the stream; its queue holds a
 // window and acknowledges what its client takes.
 func (a *tcpAgentStream) openCredit(id string, s *tcpSession) {
+	if traceOn {
+		traceOpenSess(a, id, s)
+	}
 	a.cr.Open(id)
 	s.recvQ.SetLimit(a.cr.Window())
 	s.limit = int64(a.cr.Window())

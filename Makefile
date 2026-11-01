@@ -77,6 +77,27 @@ readme-quickstart:
 check-api:
 	./scripts/check-api.sh
 
+# The TLA+ models of the agent's frame streams and their handoff
+# (spec/README.md): spec: invariants; spec-mutants: every bug put back is
+# caught and the documented races found (both in CI); spec-liveness,
+# spec-simulate and spec-traces: weekly. Java and tla2tools.jar come from
+# scripts/fetch-tla.sh (pinned, cached outside the repository).
+.PHONY: spec spec-mutants spec-liveness spec-simulate spec-traces
+spec:
+	./scripts/spec.sh check
+
+spec-mutants:
+	./scripts/spec.sh mutants
+
+spec-liveness:
+	./scripts/spec.sh liveness
+
+spec-simulate:
+	./scripts/spec.sh simulate
+
+spec-traces:
+	./scripts/spec.sh traces
+
 CI_WORKFLOW_FILE := .github/workflows/check.yml
 # ci: what the GitHub workflow runs on a push (CI_WORKFLOW_FILE), run here.
 # GitHub Actions is not a gate; this is, before a push (the pre-push hook)

@@ -12,6 +12,13 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `spec/AgentLink.tla` and `spec/Handoff.tla`: TLA+ models of the agent's
+  frame streams with per-session credit and of the choice between the agent
+  link and the frame streams (`make spec spec-mutants` in CI; liveness,
+  simulation and trace validation in the scheduled job). With
+  `-tags relaytrace` and `RELAYTRACE=<dir>` the dispatcher records each
+  credit stream's steps for `make spec-traces`; without the tag nothing is
+  compiled in. No API change.
 - Agent seconds in the usage take: `metrics.AgentUp(account, agentID)`
   and `metrics.AgentDown(agentID)` keep one clock per connected agent id,
   however many sessions it holds; `TakeUsage` reports the whole seconds

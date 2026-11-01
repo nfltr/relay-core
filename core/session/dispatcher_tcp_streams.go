@@ -100,6 +100,9 @@ type tcpAgentStream struct {
 	// cr is the stream's per-session credit: dc's, or a gRPC stream's
 	// whose agent asked for it (grpcCredit); nil without.
 	cr *link.Credit
+	// tr is the stream's trace (-tags relaytrace, trace_on.go); no room
+	// without.
+	tr traceStream
 
 	Mu       sync.Mutex
 	Sessions map[string]*tcpSession
@@ -160,6 +163,10 @@ func (a *tcpAgentStream) enqueue(f *pb.TCPData) {
 		}
 		return
 	}
+	if traceOn && traced(a) {
+		traceEnqueue(a, f)
+		return
+	}
 	select {
 	case a.SendCh <- f: // a data connection's bytes are its link connection's (serveDataConn)
 		metrics.AddTransferBytes(metrics.PathTCPGRPC, len(f.GetData()), 0)
@@ -181,6 +188,14 @@ func (a *tcpAgentStream) addSession(id string, s *tcpSession) bool {
 }
 
 func (a *tcpAgentStream) removeSession(id string) {
+	if traceOn && traced(a) {
+		traceFinish(a, id, func() { a.removeSessionNow(id) })
+		return
+	}
+	a.removeSessionNow(id)
+}
+
+func (a *tcpAgentStream) removeSessionNow(id string) {
 	a.Mu.Lock()
 	delete(a.Sessions, id)
 	a.drainedLocked()
@@ -332,6 +347,9 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 	as.http = httpSessions(stream.Context())
 	as.answers = firstIncoming(stream.Context(), dataplane.AnswerHeader) == "1"
 	as.cr = grpcCredit(stream.Context(), as.enqueue)
+	if traceOn {
+		traceUp(as)
+	}
 	as.silent = make(chan struct{})
 	// Ask the agent for tcpAgentStreams streams in all, on connections
 	// bound with the token; one that does not know the headers keeps its
@@ -386,6 +404,9 @@ func (d *TCPDispatcher) RegisterAuxStream(agentID, token string, stream pb.Dispa
 	as, err := d.bindAux(agentID, token, nil, cr)
 	if err != nil {
 		return err
+	}
+	if traceOn {
+		traceUp(as)
 	}
 	// The header goes out before the sender starts: a session that picks
 	// the stream meanwhile only queues its open frame.
@@ -443,6 +464,9 @@ func newBindToken() string {
 // unregister removes a stream that ended; an agent stays registered until
 // its last stream ends.
 func (d *TCPDispatcher) unregister(agentID string, as *tcpAgentStream) {
+	if traceOn {
+		traceDown(as)
+	}
 	close(as.Done)
 	d.Mu.Lock()
 	d.leaveRotationLocked(agentID, as)
@@ -696,30 +720,43 @@ func (d *TCPDispatcher) recvLoop(as *tcpAgentStream, stream tcpFrameStream, onCo
 			}
 			return err
 		}
-		// Control frames have session IDs starting with "_" and are not
-		// dispatched to sessions.  They carry protocol-level signals such
-		// as certificate rotation notifications.
-		sid := frame.GetSessionId()
-		if as.DC == nil {
-			metrics.AddTransferBytes(metrics.PathTCPGRPC, 0, len(frame.GetData()))
+		if traceOn && traced(as) {
+			err = traceRecv(as, frame, func() error { return d.recvFrame(as, frame, onControl) })
+		} else {
+			err = d.recvFrame(as, frame, onControl)
 		}
-		if as.DC == nil && as.cr != nil { // a gRPC stream with credit: grants and charges here
-			if err := grpcCreditFrame(as.cr, frame); err != nil {
-				return err
-			}
-		}
-		if len(sid) > 0 && sid[0] == '_' {
-			if onControl != nil && sid != dataplane.WindowSID {
-				onControl(frame)
-			}
-			continue
-		}
-		if as.Dispatch(frame, d.SessionStall) {
-			d.logger.Warn("tcp session reset: its client took none of its bytes",
-				"agent_id", as.agent, "session", frame.GetSessionId(), "stall", d.SessionStall)
-			metrics.TransferError(streamPath(as), metrics.TransferStalled)
+		if err != nil {
+			return err
 		}
 	}
+}
+
+// recvFrame applies one frame received from the agent.
+func (d *TCPDispatcher) recvFrame(as *tcpAgentStream, frame *pb.TCPData, onControl func(*pb.TCPData)) error {
+	// Control frames have session IDs starting with "_" and are not
+	// dispatched to sessions.  They carry protocol-level signals such
+	// as certificate rotation notifications.
+	sid := frame.GetSessionId()
+	if as.DC == nil {
+		metrics.AddTransferBytes(metrics.PathTCPGRPC, 0, len(frame.GetData()))
+	}
+	if as.DC == nil && as.cr != nil { // a gRPC stream with credit: grants and charges here
+		if err := grpcCreditFrame(as.cr, frame); err != nil {
+			return err
+		}
+	}
+	if len(sid) > 0 && sid[0] == '_' {
+		if onControl != nil && sid != dataplane.WindowSID {
+			onControl(frame)
+		}
+		return nil
+	}
+	if as.Dispatch(frame, d.SessionStall) {
+		d.logger.Warn("tcp session reset: its client took none of its bytes",
+			"agent_id", as.agent, "session", frame.GetSessionId(), "stall", d.SessionStall)
+		metrics.TransferError(streamPath(as), metrics.TransferStalled)
+	}
+	return nil
 }
 
 // agentStream returns the stream a new session of agentID uses, or nil: one
@@ -847,6 +884,9 @@ func (d *TCPDispatcher) waitAgentStream(ctx context.Context, agentID string, wai
 // client (serveLinkTCP).
 type tcpSession struct {
 	recvQ *bytequeue.Queue
+	// tr names the session in its stream's trace (-tags relaytrace); no
+	// room without.
+	tr traceSess
 	// queued is what recvQ holds by the count of its only pusher, the
 	// stream's receive loop (deliver): pushed, not yet popped. limit is
 	// recvQ's.
@@ -875,6 +915,9 @@ func newTCPSession() *tcpSession {
 }
 
 func (s *tcpSession) popped(n int) {
+	if traceOn {
+		traceRead(s, n)
+	}
 	s.queued.Add(-int64(n))
 	select {
 	case s.room <- struct{}{}:
