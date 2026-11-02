@@ -16,9 +16,12 @@
 #             HandoffLive.cfg and MoveLive.cfg (weekly).
 #   simulate  random walks on two sessions with larger sizes (weekly).
 #   traces    the core/session tests in TRACE_TESTS run with -tags
-#             relaytrace; each stream's trace checked against spec/Trace.tla
-#             (weekly).
-#   trace F   one recorded trace.
+#             relaytrace; each stream's trace checked against spec/Trace.tla,
+#             each move's (move-*.ndjson) against spec/TraceMove.tla, each
+#             agent's agent-link handoff (handoff-*.ndjson) against
+#             spec/TraceHandoff.tla; with COVERAGE=1 the steps no trace
+#             took (weekly).
+#   trace F   one recorded trace (its kind by its name).
 # TLC_WORKERS (default 4) caps TLC's threads; COVERAGE=1 adds -coverage 1.
 # Java and tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
@@ -122,6 +125,79 @@ linksession() {
 	fi
 }
 
+# htrace FILE: TLC on one recorded Handoff trace (spec/TraceHandoff.tla); 0 when accepted.
+htrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Sess <- TraceSess
+    MaxGen <- TraceMaxGen
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TraceNotDone
+    PlacedOnLive
+    NoOrphanLink
+    CarriesExact
+    SilenceOnDeadPath
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceHandoff.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
+# trace_move FILE: TLC on one recorded move (spec/TraceMove.tla); 0 when accepted.
+trace_move() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Req <- TraceReq
+    TSess <- TraceTSess
+    Lease = TRUE
+    Drain = TRUE
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANT TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceMove.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
+# check_trace FILE: the checker for FILE's kind.
+check_trace() {
+	case $(basename "$1") in
+	move-* | reject-move-*) trace_move "$1" ;;
+	handoff-* | reject-handoff-*) htrace "$1" ;;
+	*) trace "$1" ;;
+	esac
+}
+
+# checktraces DIR CHECKER: check each DIR/*.ndjson; fails on a rejected one or none.
+checktraces() {
+	n=0 bad=0
+	for t in "$1"/*.ndjson; do
+		[ -e "$t" ] || continue
+		n=$((n + 1))
+		if TLC_WORKERS=1 "$2" "$t"; then
+			echo "trace $(basename "$t"): $(wc -l <"$t" | tr -d ' ') lines: accepted"
+		else
+			bad=$((bad + 1))
+			echo "trace $(basename "$t"): $(wc -l <"$t" | tr -d ' ') lines: REJECTED"
+			grep -E 'Error|unknown event' "$t.out" | head -5
+			[ -z "${TRACE_KEEP:-}" ] || cp "$t" "$TRACE_KEEP/"
+		fi
+		[ -z "${COVERAGE:-}" ] || grep -E '^<[A-Za-z]+ line .*>: [0-9]+:[0-9]+$' "$t.out" >>"$1/coverage"
+	done
+	echo "$n traces, $bad rejected"
+	# COVERAGE=1: the trace module's actions no trace takes (test gaps).
+	[ ! -s "$1/coverage" ] || sed -E 's/^<([A-Za-z]+) line.*:([0-9]+)$/\1 \2/' "$1/coverage" |
+		awk '{n[$1] += $2} END {for (a in n) if (n[a] == 0) print "  never taken: " a}' | sort
+	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
+}
+
 case ${1:-} in
 check)
 	linksession
@@ -197,10 +273,12 @@ mutants)
 	expect Move.cfg Move.tla witness:tcp -e 's/^    NoTCPAfterMove$/    WitnessTCP/'
 	# Presence.tla: the bugs the design prevents (findings 8-11, 13) and
 	# the open race of a crashed replica's records (finding 12).
-	for b in unfenced-label-write partial-list renew-race drop-no-resync renew-resurrects publish-before-write resync-early; do
+	for b in unfenced-label-write partial-list renew-race drop-no-resync renew-resurrects publish-before-write resync-early resync-ignored; do
 		expect Presence.cfg Presence.tla "$b" -e "$m$b\"/"
 	done
 	expect Presence.cfg Presence.tla race:crash-expiry -e 's/Crash = FALSE/Crash = TRUE/'
+	expect Presence.cfg Presence.tla witness:stale -e 's/^    NoSilentStale$/    WitnessStale/'
+	expect Presence.cfg Presence.tla witness:remote-update -e 's/^    NoSilentStale$/    WitnessRemoteUpdate/'
 	exit $fail
 	;;
 simulate)
@@ -213,37 +291,53 @@ simulate)
 	[ $st = 0 ] || { tail -60 "$work/sim.out"; exit $st; }
 	;;
 traces)
-	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions)$'}
-	mkdir -p "$work/traces"
-	RELAYTRACE=$work/traces go test -tags relaytrace -count=1 -run "$tests" ./core/session/ >"$work/test.out" 2>&1 || {
+	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining)$'}
+	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown)$'}
+	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces"
+	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests" ./core/session/ >"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
 		exit 1
 	}
+	for t in "$work"/all/*.ndjson; do
+		case $(basename "$t") in
+		move-*) mv "$t" "$work/mtraces/" ;;
+		handoff-*) mv "$t" "$work/htraces/" ;;
+		*) mv "$t" "$work/traces/" ;;
+		esac
+	done
 	# The checker must reject a trace that is no behaviour.
 	for r in spec/testdata/reject-*.ndjson; do
-		cp "$r" "$work/reject.ndjson"
-		if trace "$work/reject.ndjson"; then
+		cp "$r" "$work/$(basename "$r")"
+		if check_trace "$work/$(basename "$r")"; then
 			echo "$r: accepted, want rejected"
 			exit 1
 		fi
+		echo "$r: rejected"
 	done
-	n=0 bad=0
-	for t in "$work"/traces/*.ndjson; do
-		n=$((n + 1))
-		if TLC_WORKERS=1 trace "$t"; then
-			echo "trace $(basename "$t"): $(wc -l <"$t" | tr -d ' ') lines: accepted"
-		else
-			bad=$((bad + 1))
-			echo "trace $(basename "$t"): $(wc -l <"$t" | tr -d ' ') lines: REJECTED"
-			grep -E 'Error' "$t.out" | head -5
-			[ -z "${TRACE_KEEP:-}" ] || cp "$t" "$TRACE_KEEP/"
-		fi
-	done
-	echo "$n traces, $bad rejected"
-	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
+	st=0
+	echo "== AgentLink (spec/Trace.tla)"
+	checktraces "$work/traces" trace || st=1
+	echo "== Move (spec/TraceMove.tla)"
+	checktraces "$work/mtraces" trace_move || st=1
+	if [ -n "${COVERAGE:-}" ]; then
+		# The replica-side steps of Move.tla no move trace took: test gaps.
+		cat "$work"/mtraces/move-*.ndjson 2>/dev/null |
+			sed -E 's/^\{"ev":"([A-Za-z]+)","r":"[^"]*","m":"([^"]*)","ok":(true|false)\}$/\1 \2 \3/' |
+			awk '{ if (NF == 3 && $2 != "CONNECTED" && $2 != "EOF") $2 = "TXN"; if (NF == 2) { $3 = $2; $2 = "" } print $1 " " $2 " " $3 }' |
+			sort -u >"$work/taken"
+		for a in 'Pick  true' 'Pick  false' 'Publish  true' 'Publish  false' 'Release  false' 'Forward  false' 'Ask  false' \
+			'GiveUp  false' 'StopRouting  false' 'Refresh  false' 'Done  false' 'StartDrain  false' 'DrainBound  false' \
+			'RecvA CONNECTED false' 'RecvA TXN false' 'RecvA EOF false' 'TCPSupersede  false' 'PlaceTCP  true' 'PlaceTCP  false'; do
+			grep -qxF "$a" "$work/taken" || echo "move step never taken: $a"
+		done
+		echo "(ArriveA is logged as Pick: RouteHere does not tell a peer's forward from a pick)"
+	fi
+	echo "== Handoff (spec/TraceHandoff.tla)"
+	checktraces "$work/htraces" htrace || st=1
+	exit $st
 	;;
 trace)
-	trace "$2" && echo accepted || { echo rejected; exit 1; }
+	check_trace "$2" && echo accepted || { grep -E 'Error|unknown event' "$2.out" | head -5; echo rejected; exit 1; }
 	;;
 *)
 	echo "usage: spec.sh check|nightly|liveness|mutants|simulate|traces|trace FILE" >&2

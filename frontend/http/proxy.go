@@ -20,6 +20,7 @@ import (
 	"github.com/nfltr/relay-core/core/relaystatus"
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/internal/platform/logging"
+	"github.com/nfltr/relay-core/internal/tracehook"
 	appconfig "github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay-core/platform/httpbody"
 	"github.com/nfltr/relay-core/platform/metrics"
@@ -51,6 +52,10 @@ type Proxy struct {
 	producers *broker.Producers[string] // agentID
 
 	uploadAcks sync.Map // transaction ID → chan struct{}: acks of its request body's chunks
+
+	// dispatcher records a request's first publish with -tags relaytrace
+	// (tracehook.Publish); nil in a proxy without one.
+	dispatcher *session.Dispatcher
 }
 
 // NewProxy creates a Proxy, starts the transaction-registry reaper, and wires
@@ -368,7 +373,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			err := p.publishRequest(rctx, agentID, msg)
+			var err error
+			if index == 0 {
+				err = p.publishFirst(rctx, agentID, msg)
+			} else {
+				err = p.publishRequest(rctx, agentID, msg)
+			}
 			leased()
 			if err != nil {
 				select {
@@ -392,7 +402,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// chunks, so publish the original request as-is.
 		if index == 0 {
 			reqSize = proto.Size(agentReq)
-			err := p.publishRequest(rctx, agentID, agentReq)
+			err := p.publishFirst(rctx, agentID, agentReq)
 			leased()
 			if err != nil {
 				select {
@@ -803,6 +813,11 @@ func (p *Proxy) cancelAgentRequest(agentID, transactionID string, logger *slog.L
 	if err := p.publishRequest(ctx, agentID, chunking.CancelRequest(agentID, transactionID)); err != nil {
 		logger.Debug("cancel frame not delivered", "error", err)
 	}
+}
+
+// publishFirst publishes a request's first message (spec/Move.tla Publish).
+func (p *Proxy) publishFirst(rctx context.Context, agentID string, agentReq *pb.HTTPProxyRequest) error {
+	return tracehook.Publish(p.dispatcher, agentID, agentReq.Request.TransactionId, func() error { return p.publishRequest(rctx, agentID, agentReq) })
 }
 
 func (p *Proxy) publishRequest(rctx context.Context, agentID string, agentReq *pb.HTTPProxyRequest) error {

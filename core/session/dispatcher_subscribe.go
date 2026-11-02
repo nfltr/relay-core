@@ -314,7 +314,12 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 					return err
 				}
 			}
-			if err := stream.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_DONE}); err != nil {
+			var err error
+			traceMoveStep(stream, moveEvent{Ev: "Done"}, func() bool {
+				err = stream.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_DONE})
+				return err == nil
+			})
+			if err != nil {
 				return err
 			}
 			logger.Info("agent moved to another replica: told it no request follows on its old stream")
@@ -364,7 +369,7 @@ func (d *Dispatcher) relayRequest(stream *HTTPStream, message broker.Message, lo
 	logger2.Debug("time since message has left proxy server", "duration", now.Sub(time.UnixMilli(request.Timestamps.RequestAtHttpServer)))
 	metrics.IncrDequeuedRequests()
 	request.Timestamps.RequestAtGrpcServer = now.UnixMilli()
-	err = stream.Send(request)
+	err = traceForward(stream, request.Request.TransactionId, func() error { return stream.Send(request) })
 	if err != nil {
 		logger2.Error("sending request to agent", "error", err)
 		return fmt.Errorf("send failed: %w", err)
@@ -407,7 +412,7 @@ func (d *Dispatcher) processHTTPInput(ctx context.Context, stream *HTTPStream, i
 	}
 	logger := logging.With(d.Logger, "AgentID", stream.ID)
 	if input.Response == nil && input.GetMove() == pb.Move_MOVE_CONNECTED {
-		stream.noteMoveConnected() // agent_move.go
+		traceMoveStep(stream, moveEvent{Ev: "RecvA", M: "CONNECTED"}, func() bool { stream.noteMoveConnected(); return true }) // agent_move.go
 	}
 	if input.Response == nil || len(input.Response.TransactionId) == 0 {
 		logger.Debug("received a heartbeat")
@@ -451,7 +456,7 @@ func (d *Dispatcher) processHTTPInput(ctx context.Context, stream *HTTPStream, i
 		return fmt.Errorf("sending message for transactionID: %s: %w", txn, err)
 	}
 	if ends { // only once delivered: else failInflight answers it
-		stream.inflight.Delete(txn)
+		traceAnswer(stream, txn, func() { stream.inflight.Delete(txn) })
 	}
 	logger.Debug("routeResponseToBroker - sending message to producer took", "duration", time.Since(now))
 	logger.Debug("responding to transaction took", "transaction_id", txn, "duration", time.Since(now))

@@ -79,6 +79,7 @@ func New(ctx context.Context, h frontend.Host) *Ingress {
 		apiTypes:     viper.GetStringSlice("http.api_type_prefixes"),
 		loopbackURL:  &url.URL{Scheme: "http", Host: "in-process"},
 	}
+	ing.proxy.dispatcher = c.Dispatcher
 	if c.TCPDispatcher != nil {
 		ing.link = newAgentHTTP(c.TCPDispatcher, logger.With("subsystem", "agent-http"), h.RelayCookie)
 	}

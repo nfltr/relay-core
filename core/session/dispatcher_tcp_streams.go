@@ -426,6 +426,9 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 	d.Streams[agentID] = as
 	d.All[agentID] = append(d.All[agentID], as)
 	d.bound[as.token] = as
+	if traceOn {
+		traceHRegister(d, as)
+	}
 	close(d.registered)
 	d.registered = make(chan struct{})
 	d.Mu.Unlock()
@@ -537,6 +540,9 @@ func (d *TCPDispatcher) unregister(agentID string, as *tcpAgentStream) {
 	close(as.Done)
 	d.Mu.Lock()
 	d.leaveRotationLocked(agentID, as)
+	if traceOn && as.primary == nil {
+		traceHPrimEnd(as)
+	}
 	// It takes no session from here on, as it leaves the rotation: the
 	// opens primaryEnded wakes (waiting for its agent link) pick another
 	// stream or are refused offline (attach), never placed on this one to
@@ -608,7 +614,11 @@ func (d *TCPDispatcher) carriesSessions(agentID string) bool {
 	d.Mu.RLock()
 	all := slices.Clone(d.All[agentID])
 	d.Mu.RUnlock()
-	return slices.ContainsFunc(all, func(s *tcpAgentStream) bool { return s.primary == nil && d.carries(agentID, s) })
+	c := slices.ContainsFunc(all, func(s *tcpAgentStream) bool { return s.primary == nil && d.carries(agentID, s) })
+	if traceOn {
+		traceHCarries(d, agentID, c)
+	}
+	return c
 }
 
 // carries reports whether the primary stream as, the agent link of the

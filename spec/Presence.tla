@@ -99,11 +99,13 @@ Drop(q) ==
 \* The resubscription: the subscribe confirmation is the resync (an empty
 \* payload, redisbus Resync), in order before any later message: a new
 \* epoch. Mutant resync-early: the resync signalled before the
-\* subscription is back.
+\* subscription is back; resync-ignored: the feed ignores the signal (the
+\* code before a0154c2: no new epoch, the watchers kept their views).
 Resubscribe(q) ==
     /\ live[q]
     /\ \/ /\ sub[q] = "broken" /\ Mutant # "resync-early"
-          /\ sub' = [sub EXCEPT ![q] = "up"] /\ due' = [due EXCEPT ![q] = TRUE]
+          /\ sub' = [sub EXCEPT ![q] = "up"]
+          /\ due' = IF Mutant = "resync-ignored" THEN due ELSE [due EXCEPT ![q] = TRUE]
        \/ /\ sub[q] = "broken" /\ Mutant = "resync-early"
           /\ sub' = [sub EXCEPT ![q] = "signalled"] /\ due' = [due EXCEPT ![q] = TRUE]
        \/ /\ sub[q] = "signalled"
@@ -266,4 +268,10 @@ Owed(r) ==
 \* list would answer now is owed a wake.
 NoSilentStale ==
     \A r \in W : wpc[r] = "idle" /\ view[r] # Listing(r) => Owed(r)
+
+\* Witnesses (make spec-mutants): each must be violated, so the states
+\* NoSilentStale guards are reached: a watcher's snapshot stale (owed a
+\* wake), and a label update made on the other replica in its snapshot.
+WitnessStale == ~\E r \in W : wpc[r] = "idle" /\ view[r] # Listing(r)
+WitnessRemoteUpdate == ~\E r \in W : ~st[r].on /\ view[r].on /\ view[r].lab = "l1"
 =============================================================================

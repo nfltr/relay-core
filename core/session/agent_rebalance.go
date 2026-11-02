@@ -177,7 +177,7 @@ func (m *agentMove) giveUp() {
 func (d *Dispatcher) resumeMove(agentID string, s *HTTPStream) (*agentMove, <-chan struct{}, <-chan time.Time, <-chan struct{}) {
 	s.moving.Store(true)
 	d.tcpMovingAway(agentID, true)
-	mv := &agentMove{stream: s}
+	mv := &agentMove{stream: s, resumed: true}
 	d.Logger.Info("rebalancing: the agent's new connection took its record after all; the move goes on", "AgentID", agentID)
 	return mv, d.stopRouting(mv), nil, nil
 }

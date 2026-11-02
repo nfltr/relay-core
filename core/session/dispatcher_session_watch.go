@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/nfltr/relay-core/core/directory"
@@ -99,6 +100,9 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 		if mv != nil {
 			mv.stop()
 		}
+		if hs, ok := tracker.(*HTTPStream); traceOn && ok {
+			traceMoveEnd(hs)
+		}
 	}()
 	for {
 		select {
@@ -108,6 +112,9 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			}
 			return ctx.Err()
 		case err := <-received:
+			if hs, ok := tracker.(*HTTPStream); traceOn && ok && (err == nil || errors.Is(err, io.EOF)) {
+				traceMoveEOF(hs) // the agent closed the stream
+			}
 			if err != nil {
 				d.logStreamLifecycle("receiving from agent stream", err, "AgentID", agentID)
 			}
@@ -154,6 +161,9 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			}
 		case <-stopping:
 			stopping = nil
+			if hs, ok := tracker.(*HTTPStream); ok {
+				traceMoveStep(hs, moveEvent{Ev: "StartDrain"}, func() bool { return true })
+			}
 			if mv != nil { // a rebalancing move: the drain bounds it from now on
 				giveUp = nil
 				if mv.routedOff { // its routes are off: the relay's shutdown bounds the rest (finding 21)
@@ -183,6 +193,9 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 					continue
 				}
 			}
+			if mv != nil { // the drain's bound: the agent is let go
+				traceMoveStep(mv.stream, moveEvent{Ev: "DrainBound"}, func() bool { return true })
+			}
 			d.logStreamLifecycle("handling stop signal", errServerRestarting, "AgentID", agentID)
 			return errServerRestarting
 		case <-ask:
@@ -202,7 +215,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			}
 		case <-giveUp: // no new connection elsewhere: the agent stays, renewing its record
 			giveUp, moved, check = nil, nil, nil
-			mv.giveUp()
+			traceMoveStep(mv.stream, moveEvent{Ev: "GiveUp"}, func() bool { mv.giveUp(); return true })
 			d.tcpMovingAway(agentID, false)
 			d.stays.Store(agentID, time.Now()) // its sessions are not asked again (stayFor)
 			gaveUp, mv = mv.stream, nil

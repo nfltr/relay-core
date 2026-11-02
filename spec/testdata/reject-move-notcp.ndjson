@@ -1,0 +1,4 @@
+{"ev":"Ask","r":"","m":"","ok":false}
+{"ev":"RecvA","r":"","m":"CONNECTED","ok":false}
+{"ev":"TCPSupersede","r":"","m":"","ok":false}
+{"ev":"PlaceTCP","r":"s1","m":"","ok":true}

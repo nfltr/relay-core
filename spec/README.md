@@ -245,7 +245,7 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
 | `Dial`, `Bind` | the agent's `lazyLink.open`/`run` on `AgentLinkDial`; `agentLink.verify`+`bind` |
 | `AgentEnd(g)` | the agent's primary's context ends: `lazyLink.end` (park) |
 | `PrimEnd(g)` | `unregister` -> `primaryEnded` (closes the token's connections unless resumed), `CloseAll` |
-| `LinkDrop(t)` | a link connection closes (park TTL, agent stop, network) |
+| `LinkDrop(t)` | a link connection closes (park TTL, agent stop, network); the agent's up link redials it (its peerlink Node, `linkBackoff`: finding 24) |
 | `Silent(t, tr)` | a link connection dead past its liveness: link/TCP `agentLinkObserver.ConnDown` -> `agentLink.silent` (ends the primary bound to the token); QUIC's idle timeout (`quicPeer`): `unbind` only |
 | `PathDown` | the agent's TCP path dies (the frame streams' heartbeats, `WatchAgentSession`, take over once no link vouches) |
 | `Arrive(s)`, `Place(s)`, `Wake(s)` | `handleLocalConn` -> `agentLink.open` (link, or wait `agentLinkDialWait` for a requested dial; `node.Open` failing falls back), else `attach` |
@@ -285,6 +285,9 @@ code before). Witnesses, each violated: `WitnessLinkOpen`,
 opened through), `WitnessSilent` (`SilenceOnDeadPath`). `COVERAGE=1`
 takes every action.
 
+Trace validation (`make spec-traces`, `TraceHandoff.tla`): see "Trace
+validation" below.
+
 One agent: `resumeToken` refusing another agent's token is not in the
 model (tokens are secrets; defence in depth); its guard is
 `TestResumeTokenRefusesAnotherAgent`.
@@ -305,7 +308,8 @@ model (tokens are secrets; defence in depth); its guard is
 |---|---|
 | `core/session/agent_link.go` | `resumeToken`, `verify`, `bind`, `unbind`, `silent`, `quicPeer`, `agentLinkObserver`, `open` (the link-session count), `primaryEnded`, `dialNow` |
 | `core/session/dispatcher_tcp_streams.go` | `RegisterStream`, `unregister`, `leaveRotationLocked`, `carriesSessions`, `carries`, `yield`, `sendLoop`'s silent and supersede cases |
-| `core/session/dispatcher_tcp.go` | `handleLocalConn`, `attach` |
+| `core/session/dispatcher_tcp.go` | `handleLocalConn`, `onwardLocal`, `attach` |
+| `core/session/trace_handoff_on.go`, `trace_off.go` | the Handoff trace recorder (`TraceHandoff.tla`) |
 | `core/session/agent_rebalance.go` | `moveAgent`'s `carriesSessions` check |
 | relay `client/agent/agent_link.go`, `tcp.go` | `lazyLink` (`open`, `end`, `adopt`, `drainNow`), `linkPark`, the resume header |
 
@@ -329,6 +333,7 @@ github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
 | `Pick` | `dispatcherURL`: A while `RouteHere` gives a route lease, else the record |
 | `PickRemote`, `ArriveA` | a peer's `dispatcherURL` reading the record (A); the forward arriving at A: `Ingress.peer` takes `RouteHere` too, refused: 503 `Retry-After`, the request reached no agent (the visitor's retry is `new` again) |
 | `Publish` | `Proxy.publishRequest` of a transaction's first message (on the consumer's channel, or `ErrNoConsumer`), then the lease's release |
+| `Unlease` | the lease ends with no message published: the visitor went away first, or the request went over the agent link (`dispatch.go`); it reached no agent here (`gone`) |
 | `Forward` | `relayRequestsToAgent`: the channel's next message onto the stream |
 | `Ask` | `startMove`: `MOVE_RECONNECT`, the record no longer renewed |
 | `GiveUp` | a rebalance's `moveBound` (`giveUp`), also after `MOVE_CONNECTED` while the record check has not seen B's record; none in a drain |
@@ -398,6 +403,7 @@ the agent's `waitIdle` bounds).
 | `core/session/dispatcher_subscribe.go` | `relayRequestsToAgent`, `moveDone` |
 | `core/session/dispatcher_tcp_streams.go` | `sendLoop`'s superseded renewal (`movingAway`, `yield`), `streamFor` |
 | `frontend/http/dispatch.go`, `frontend.go`, `proxy.go` | `dispatcherURL`, `peer`, `routeLease`, the first publish |
+| `core/session/trace_move_on.go` | the recorder of A's steps (`TraceMove.tla`, "Trace validation") |
 | relay `client/agent/move.go`, `connect.go`, `run.go` | `moveConnect`, `waitIdle`, `closeWhenAnswered` |
 
 ## Presence.tla: the presence feed across replicas
@@ -446,9 +452,32 @@ without a resync. Mutants (`make spec-mutants`), each caught:
 `unfenced-label-write` (finding 8), `partial-list` (9), `renew-race`
 (10), `drop-no-resync` (11), `renew-resurrects` (13),
 `publish-before-write`, `resync-early` (the resync before the
-subscription is back); `race:crash-expiry` (`Crash = TRUE`, finding 12,
+subscription is back), `resync-ignored` (the feed ignoring the bus's
+resync signal: the bug a0154c2 fixed); `race:crash-expiry` (`Crash = TRUE`, finding 12,
 open). `COVERAGE=1` takes every action but those only a mutant or the
 race enables (`RenewWrite`, `UpdateWrite`, `CrashR`, `Expire`).
+Witnesses, each violated: `WitnessStale` (a watcher's snapshot stale,
+owed a wake), `WitnessRemoteUpdate` (a label update made on the other
+replica reaches the watcher's snapshot).
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| Redis pub/sub delivers at most once: a message published while a subscriber is disconnected, or past its output buffer, is lost with the subscription | Redis docs "Pub/Sub" (delivery semantics); `client-output-buffer-limit pubsub` in redis.conf |
+| A subscription's confirmation comes before any message published after it; go-redis resubscribes after a reconnect and reports it | Redis protocol (`SUBSCRIBE` reply order); go-redis `PubSub` reconnect; relay-server `redisbus` |
+| The directory fences a session's writes by Seq; the newest session holds the record; a record without renewal expires by its TTL | relay-server `spec/Replicas.tla`; `directory.SessionStore` |
+| A replica may crash without its teardown; its records stay until their TTL (finding 12, open) | `CrashR`, `Expire` |
+| A watcher re-lists on any wake (no event is applied); `ListAgents` takes the cursor before the snapshot | relay `client/presenceclient` `Wait`; relay-server `my_agents.go` |
+
+### Code map (drift check)
+
+| file | what the spec models |
+|---|---|
+| `core/session/presence.go` | `presenceFeed` (`bump`, `resync`, `Cursor`, `Watch`, `BindBus`), `presenceOutbox`, `notifyUpstreamRegistered` |
+| `core/session/dispatcher.go` | `UpdateAgentLabels`, `publishDeparture` |
+| `core/session/dispatcher_inventory_refresh.go` | `claimAgentRecord`, `renewAgentRecord`, `releaseAgentRecord`, `refreshAgentInventoryOnInboundActivity` |
+| relay-server `redisbus`, `presence.go`, `my_agents.go`; relay `client/presenceclient` | the bus, the gateway, `ListAgents`, the watcher |
 
 ## Trace validation
 
@@ -498,6 +527,76 @@ after its session's `Finish`. Likewise a relay `SendAck` can follow its own
 the model sends no ack after a whole close; the agent takes the whole
 close first (FIFO) and resets its target, so nothing ends cleanly.
 
+### Handoff traces
+
+With the same tag, a TCPDispatcher whose agent link is on records each
+agent's relay-side steps of `Handoff.tla` to
+`<dir>/handoff-<agent>-<n>.ndjson` (`trace_handoff_on.go`): `Register`
+(the primary's number and its token's), `PrimEnd` (it left the
+rotation), `Bind` and `LinkDrop` (the token's link went from no
+connection to one and back), `Silent` (with its transport), `Arrive`,
+`Wait`, `Open` (link: the token; grpc: the primary), `Refused`, `End`,
+and `Carries` (what `carriesSessions` answered). Each is written under
+`traceMu` inside the lock that orders its change (`d.Mu`, the link's
+`Mu`; `traceMu` is the innermost lock). `TraceHandoff.tla` checks a
+trace against the model with Handoff's four invariants on every state:
+the agent's steps (`Dial`, `AgentEnd`, `Adopt`, `AdoptRefused`), a
+refused or second connection's bind and the TCP path's failure are not
+logged and TLC chooses them; a `LinkDrop` of a connection the agent
+already closed (its park), a `Silent` logged after its connection's
+unbind, and an `End` of a session the model already lost, cut or refused
+are taken as they are; a step that names no action fails the trace.
+`make spec-traces` runs the agent-link tests in `HANDOFF_TESTS` and checks
+every Handoff trace (12 traces, 7-177 lines, each a few seconds), after
+checking that each `spec/testdata/reject-handoff-*.ndjson` is rejected:
+`attach-ended` (a session on an ended primary's frame streams:
+`PlacedOnLive`), `keep-conns` (a link connection bound for a primary that
+ended: `NoOrphanLink`), `carries-stale` (`carriesSessions` false with a
+link session open: `CarriesExact`), `quic-silent` (a QUIC silence ending
+the primary: `SilenceOnDeadPath`). `COVERAGE=1` lists the trace module's
+actions no trace takes: the resume path (`UAdopt`, `UAdoptRefused`: no
+test here reconnects a real agent while its link stays up; the agent's
+side is covered in github.com/nfltr/relay `agent_link_park_test.go`), a
+second or refused connection's bind (`UBind`), a wait skipped
+(`USkipWait`), a silence logged after its unbind (`TSilentAfterDrop`), a
+`LinkDrop` of a connection the agent closed (`TLinkDropGone`) and
+`TCarries` (no rebalance test runs with the link on).
+
+### Moves (`TraceMove.tla`)
+
+With the same tag and `RELAYTRACE`, the HTTP session of an agent that
+moves (`trace_move_on.go`) writes A's steps of `Move.tla` to
+`<dir>/move-<agent>-<n>.ndjson`, one file per session, each line under
+the same lock held across the state change: `Pick` (`RouteHere`; `ok`:
+the lease taken, refused while the session is still in `movedAway`),
+`Release` (the lease's end: after its `Publish`, else `Unlease`),
+`Publish` (`tracehook.Publish`: a transaction's first message onto the
+consumer's channel, `ok`; or `ErrNoConsumer`), `Forward` (the first
+message of a published transaction sent on the stream), `Ask`, `GiveUp`,
+`StopRouting`, `Refresh` (`resumeMove`), `Done` (`MOVE_DONE` sent),
+`StartDrain`, `DrainBound`, `RecvA` (`CONNECTED`, the last answer of a
+forwarded transaction, the agent's `EOF` after `MOVE_DONE`). Requests are
+named by transaction id; a pick names none, and TLC chooses which new
+request it is (`TraceMoveLog.tla` adds one request per pick). The agent's
+steps, and with `ConnectB` the record, are not logged: TLC chooses them,
+only before a step that reads them (a receive, `StopRouting`, `Refresh`,
+a refused pick). A session that ends outside the model (the agent leaves
+before `MOVE_DONE`, a takeover, a heartbeat timeout, the relay's own stop)
+ends its trace there. `make spec-traces` runs the move tests of
+`agent_move_test.go`, `agent_move_drain_test.go` and
+`agent_rebalance*_test.go`, checks each move trace, and rejects
+`reject-move-noloss` (`MOVE_DONE` while a lease is held),
+`reject-move-runonce` (a request forwarded after `MOVE_DONE`),
+`reject-move-oneowner` (routing stopped before the new connection took
+the record) and `reject-move-notcp` (a TCP session placed on A's primary
+after it found the move). `COVERAGE=1` lists the move steps no trace took.
+Not recorded yet: a peer's forward (`ArriveA`) is logged as a `Pick`
+(`RouteHere` does not tell them apart), and the TCP steps (`TCPSupersede`,
+`PlaceTCP`; the checker takes them, `reject-move-notcp`). After a
+rebalancing move gave up, a drain's `stopNow` asks the agent again
+(`startMove` with `mv` nil): `Ask` from `gaveUp` while draining (finding
+25); no test takes it yet.
+
 ## Measurements (2026-11-02, M-series Mac, load 10-19, `taskpolicy -b`)
 
 | config | what | states (distinct) | depth | time |
@@ -505,13 +604,14 @@ close first (FIFO) and resets its target, so nothing ends cleanly.
 | `AgentLink.cfg` (CI) | invariants, 1 session, window 2, 2 bytes, 1 a frame, in-process relay end, `EndAck` (2026-11-02, after findings 1-2) | 2,905,774 (601,711) | | 28 s |
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
-| `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries | 35,056 (11,526) | 20 | 4 s |
+| `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 24) | 205,995 (47,884) | | 2-4 s |
+| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain (findings 25, 26) | 69,096 (16,515) | | 3 s |
 | `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription | 90,105 (16,971) | | 4 s CPU (12 s at load 15) |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
 | `HandoffLive.cfg` | `Placed` | | | 7 s |
 | `make spec-mutants` | 9 mutants, each caught (on the CI config) | | 5-11 | 14 s |
-| `make spec-traces` | 8 traces (2-172 lines), all accepted | | | 72 s |
+| `make spec-traces` | 16 AgentLink, 64 Move, 12 Handoff traces, all accepted; 14 reject fixtures rejected | | | 6 min 38 s (load 15-35) |
 
 `COVERAGE=1 scripts/spec.sh check` takes every action of both models
 except `Stall`: with credit (`Credit = TRUE`) no queue fills, so the stall
@@ -827,6 +927,38 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     mutants `no-sync` (the code before) and `no-hold`; guard link
     `TestJoinCleanEndOnlyOnceThePeerReadTheFIN`. In effect here once
     relay-core and relay's client require that link version (promote-chain).
+24. **The agent's link redials a dropped connection itself** (spec
+    weaker than the code; low; found by a trace,
+    `TestAgentLinkUpForThePrimarysLife`). The model had a dropped link
+    connection end the agent's lazy link (`DropBody`), so a `Bind` needed
+    a dial the relay asked for; the agent's peerlink Node redials a
+    connection of an up link on its own (`linkBackoff`), and the relay
+    binds it with no request out. **Fixed in the spec**: `LinkDrop` may
+    leave the lazy link dialling again (`DropAs`); every invariant,
+    mutant and witness holds as before.
+25. **Move.tla had no lease ending without a publish** (spec weaker
+    than the code; medium for the model's liveness; found by the move
+    traces). A route lease also ends when the visitor goes away before
+    the first message, or when the request takes the agent link
+    (`dispatch.go` releases it): the model kept `MOVE_DONE` back for it
+    forever while the code sends it. **Fixed in the spec**: `Unlease`
+    (the request ends `gone`, reaching no agent here); `AllAnswered`
+    counts `gone` as done.
+26. **Move.tla had no second ask after a rebalancing move gave up**
+    (spec missing a code path; low; found by reading the trace
+    recorder's gaps). A drain starting after `giveUp` arms `stopNow` with
+    no move, and `startMove` asks the agent again; the model allowed
+    `Ask` only from `routing`. **Fixed in the spec**: `Ask` from `gaveUp`
+    while draining; every invariant, mutant and witness holds. No test
+    takes the path yet.
+27. **A test ended a primary for a QUIC link's silence** (test; low;
+    found by a Handoff trace, `TestAgentLinkSilentEndsPrimary/quic`
+    rejected: `SilenceOnDeadPath`). Production calls `agentLink.silent`
+    only from link/TCP's observer, but `silent` took a transport and the
+    test called it for QUIC, asserting what finding 17 removed. **Fixed**:
+    `silent` is link/TCP's alone (no transport argument); the test's QUIC
+    case stops at the unbind. Mutant `quic-silent-ends`, rejected trace
+    `reject-handoff-quic-silent`.
 
 The spec's `GiveUp` required no `MOVE_CONNECTED`; the code gives up on
 the timer regardless (review MV-3). Dropping the guard keeps every

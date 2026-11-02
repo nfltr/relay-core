@@ -286,7 +286,12 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		return errTCPSessionRefused
 	}
 	open := &pb.TCPData{AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, E2Ee: ep.E2EE, ClientAddr: ep.ClientAddr}
-	if s, release, ok, err := d.Link.open(context.Background(), primaryOf(as), open); ok {
+	ctx := context.Background()
+	if traceOn {
+		ctx = traceHArrive(ctx, primaryOf(as))
+		defer traceHEnd(ctx)
+	}
+	if s, release, ok, err := d.Link.open(ctx, primaryOf(as), open); ok {
 		if err != nil {
 			return errTCPSessionRefused
 		}
@@ -299,7 +304,11 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 	sessionID := fmt.Sprintf("%d", d.nextSess.Add(1))
 	sess := newTCPSession()
 	sess.abort = func() { resetConn(conn) }
-	if as = d.attach(ep.AgentID, as, sessionID, sess); as == nil {
+	as = d.attach(ep.AgentID, as, sessionID, sess)
+	if traceOn {
+		traceHPlaced(ctx, as, "grpc")
+	}
+	if as == nil {
 		return errTCPSessionRefused
 	}
 	defer as.removeSession(sessionID)
@@ -673,9 +682,17 @@ func (d *TCPDispatcher) onwardLocal(ctx context.Context, ep TCPEndpoint, as *tcp
 		ep.Answer = false
 	}
 	open := &pb.TCPData{AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, E2Ee: ep.E2EE, Answer: ep.Answer, ClientAddr: ep.ClientAddr}
-	if s, release, ok, err := d.Link.open(ctx, primaryOf(as), open); ok {
+	tctx := ctx
+	if traceOn {
+		tctx = traceHArrive(ctx, primaryOf(as))
+	}
+	if s, release, ok, err := d.Link.open(tctx, primaryOf(as), open); ok {
 		if err != nil {
 			return nil, nil, err
+		}
+		if traceOn {
+			end := release
+			release = func() { end(); traceHEnd(tctx) }
 		}
 		noteAgentLinkLeg(ctx, s)
 		return answering(s, ep.Answer), release, nil
@@ -683,7 +700,11 @@ func (d *TCPDispatcher) onwardLocal(ctx context.Context, ep TCPEndpoint, as *tcp
 
 	sessionID := fmt.Sprintf("ws%d", d.nextSess.Add(1))
 	sess := newTCPSession()
-	if as = d.attach(ep.AgentID, as, sessionID, sess); as == nil {
+	as = d.attach(ep.AgentID, as, sessionID, sess)
+	if traceOn {
+		traceHPlaced(tctx, as, "grpc")
+	}
+	if as == nil {
 		s, err := d.openLink(ctx, ep) // its streams went: it may be on another replica
 		if err != nil {
 			return nil, nil, err
@@ -693,6 +714,9 @@ func (d *TCPDispatcher) onwardLocal(ctx context.Context, ep TCPEndpoint, as *tcp
 	// attach may have moved the session to another of the agent's streams.
 	if ep.Share != "" && !as.enforcesShare(ep.Share) {
 		as.removeSession(sessionID)
+		if traceOn {
+			traceHEnd(tctx)
+		}
 		return nil, nil, errShareUnenforced
 	}
 	open.SessionId, open.Open = sessionID, true
@@ -704,6 +728,9 @@ func (d *TCPDispatcher) onwardLocal(ctx context.Context, ep TCPEndpoint, as *tcp
 		cleanupFn: func() {
 			as.removeSession(sessionID)
 			sess.markClosed() // wakes a pending Read
+			if traceOn {
+				traceHEnd(tctx)
+			}
 		},
 	}
 	return answering(conn, ep.Answer), nil, nil

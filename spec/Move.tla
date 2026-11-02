@@ -33,7 +33,7 @@ VARIABLES
     conn,    \* A received MOVE_CONNECTED
     rec,     \* the directory's record: "A" or "B"
     ag,      \* the agent: old, dialing, failed, both, closing, closed
-    rq,      \* request -> new, picked, remote, fwd, onA, agentA, atB, answered, failed
+    rq,      \* request -> new, picked, remote, fwd, onA, agentA, atB, answered, failed, gone
     exec,    \* requests the agent ran
     infl,    \* requests the agent received on the old stream, not answered
     cq,      \* the topic consumer's channel on A (published, not yet sent)
@@ -108,6 +108,16 @@ Publish(r) ==
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, chA, upA, drn, lg>>
     /\ UNCHANGED tcpVars
 
+\* The lease ends without a message published: the visitor went away
+\* before its first chunk, or the request went over the agent link
+\* (dispatch.go). It reached no agent here and is no loss (the visitor's
+\* own end); without this step a lease that ends so kept MOVE_DONE back
+\* forever in the model, where the code sends it (trace validation).
+Unlease(r) ==
+    /\ rq[r] = "picked" /\ rq' = [rq EXCEPT ![r] = "gone"]
+    /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
+    /\ UNCHANGED tcpVars
+
 \* relayRequestsToAgent: the consumer's next message onto the stream.
 Forward ==
     /\ cq # <<>> /\ rel # "ended"
@@ -124,8 +134,12 @@ ServeB(r) ==
 (* ---------------- replica A (WatchAgentSession) ------------------------- *)
 
 \* startMove: MOVE_RECONNECT; A stops renewing the record.
+\* After a rebalancing move gave up, a drain asks again (its stopNow:
+\* startMove with the move given up; finding 26).
 Ask ==
-    /\ rel = "routing" /\ rel' = "asked"
+    /\ \/ rel = "routing"
+       \/ rel = "gaveUp" /\ drn
+    /\ rel' = "asked"
     /\ chA' = Append(chA, "RECONNECT")
     /\ UNCHANGED <<routes, conn, rec, ag, rq, exec, infl, cq, upA, drn, lg>>
     /\ UNCHANGED tcpVars
@@ -271,7 +285,7 @@ CloseOld ==
     /\ UNCHANGED tcpVars
 
 Next ==
-    \/ \E r \in Req : Pick(r) \/ PickRemote(r) \/ ArriveA(r) \/ Publish(r) \/ ServeB(r) \/ Answer(r)
+    \/ \E r \in Req : Pick(r) \/ PickRemote(r) \/ ArriveA(r) \/ Publish(r) \/ Unlease(r) \/ ServeB(r) \/ Answer(r)
     \/ Forward \/ Ask \/ GiveUp \/ StopRouting \/ Refresh \/ Done \/ RecvA
     \/ StartDrain \/ DrainBound \/ TCPSupersede \/ \E s \in TSess : PlaceTCP(s)
     \/ RecvAgent \/ ConnectB \/ DialFails \/ CloseOld
@@ -293,7 +307,7 @@ TypeOK ==
     /\ rel \in {"routing", "asked", "gaveUp", "stopped", "done", "ended"}
     /\ rec \in {"A", "B"}
     /\ ag \in {"old", "dialing", "failed", "both", "closing", "closed"}
-    /\ \A r \in Req : rq[r] \in {"new", "picked", "remote", "fwd", "onA", "agentA", "atB", "answered", "failed"}
+    /\ \A r \in Req : rq[r] \in {"new", "picked", "remote", "fwd", "onA", "agentA", "atB", "answered", "failed", "gone"}
     /\ \A s \in TSess : ts[s] \in {"new", "onA", "onB"}
 
 \* The agent stays connected throughout, so no request fails; unless a
@@ -313,7 +327,7 @@ NoTCPAfterMove == \A s \in TSess : ts[s] = "onA" => ~late[s]
 
 \* Every request is answered, and A's old session ends once the agent
 \* moved (liveness: MoveLive.cfg, without the drain's bound).
-AllAnswered == <>(\A r \in Req : rq[r] = "answered")
+AllAnswered == <>(\A r \in Req : rq[r] \in {"answered", "gone"})
 OldEnds == (ag = "both") ~> (rel = "ended")
 
 \* Witnesses (make spec-mutants): each must be violated, so the states the

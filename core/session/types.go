@@ -131,6 +131,7 @@ type Stream[S, R proto.Message] struct {
 	// sends it, after what its channel holds). agent_move.go.
 	leases   routeLeases
 	moveDone chan struct{}
+	mtr      traceMove // the move's trace (trace_move_on.go)
 	// moving: asked to move; its record belongs to the new session, so
 	// inbound activity no longer renews it.
 	moving atomic.Bool

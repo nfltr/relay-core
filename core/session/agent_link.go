@@ -296,6 +296,9 @@ func (l *agentLink) bind(token string, c io.Closer, transport string) (string, e
 		l.Conns[token] = m
 	}
 	m[c] = linkConn{Transport: transport}
+	if traceOn && len(m) == 1 {
+		traceHConn(token, true)
+	}
 	asked, count := u.asked, u.asked != "" && !u.counted
 	u.counted = true
 	l.Mu.Unlock()
@@ -348,9 +351,13 @@ func (l *agentLink) unbind(token string, c io.Closer) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	if m := l.Conns[token]; m != nil {
+		_, had := m[c]
 		delete(m, c)
 		if len(m) == 0 {
 			delete(l.Conns, token)
+			if traceOn && had {
+				traceHConn(token, false)
+			}
 		}
 	}
 }
@@ -387,13 +394,15 @@ func (d *TCPDispatcher) resumeToken(agentID, token string) string {
 	return token
 }
 
-// silent ends the primary stream of token, whose agent-link connection
-// went silent past its liveness timeout: the relay's path to that agent
-// connection is dead, so its frame streams, on the same path, are too
-// (no session opens on them any more; the agent reconnects). Until the
-// agent's new primary registers, an open gets the typed offline refusal,
-// not a session on a dead leg.
-func (l *agentLink) silent(token, transport string) {
+// silent ends the primary stream of token, whose link/TCP agent-link
+// connection went silent past its liveness timeout: the relay's path to
+// that agent connection is dead, so its frame streams, on the same path,
+// are too (no session opens on them any more; the agent reconnects).
+// Until the agent's new primary registers, an open gets the typed offline
+// refusal, not a session on a dead leg. A QUIC link's silence only
+// unbinds it (quicPeer; spec/README.md findings 17, 26).
+func (l *agentLink) silent(token string) {
+	const transport = dataplane.AgentLinkTCP
 	l.d.Mu.RLock()
 	p := l.d.bound[token]
 	l.d.Mu.RUnlock()
@@ -401,6 +410,9 @@ func (l *agentLink) silent(token, transport string) {
 		return
 	}
 	p.silentOnce.Do(func() {
+		if traceOn {
+			traceHSilent(token, transport)
+		}
 		metrics.RecordAgentLinkConnection(transport, "silent")
 		metrics.TransferError(linkPath(transport), metrics.TransferDeadPeer)
 		l.d.logger.Info("agent link silent past its liveness timeout: the agent's stream ends", "agent_id", p.agent, "transport", transport)
@@ -420,7 +432,7 @@ type agentLinkObserver struct {
 
 func (o agentLinkObserver) ConnDown(id link.Identity, err error) {
 	if linkSilent(err) {
-		o.l.silent(id.Subject, dataplane.AgentLinkTCP)
+		o.l.silent(id.Subject)
 	}
 }
 
@@ -497,6 +509,9 @@ func (l *agentLink) open(ctx context.Context, p *tcpAgentStream, open *pb.TCPDat
 		if ask {
 			u.dial, u.dialBy = make(chan struct{}), time.Now().Add(agentLinkDialWait)
 		}
+		if traceOn {
+			traceHWait(ctx)
+		}
 		wait, by := u.dial, u.dialBy
 		l.Mu.Unlock()
 		if ask {
@@ -538,6 +553,9 @@ func (l *agentLink) open(ctx context.Context, p *tcpAgentStream, open *pb.TCPDat
 	if err != nil {
 		l.d.logger.Debug("agent link: open failed; the frame streams take the session", "agent_id", p.agent, "error", err)
 		return nil, nil, false, nil
+	}
+	if traceOn {
+		traceHPlaced(ctx, p, "link")
 	}
 	kind := sessionKind(open)
 	metrics.RecordAgentLinkSession(transport, kind)

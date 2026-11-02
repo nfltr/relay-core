@@ -87,12 +87,18 @@ Adopt ==
     /\ lz' = [st |-> "up", t |-> hdr] /\ pk' = NoTok /\ hdr' = NoTok
     /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, tcpUp, sil, sst, via, on, by>>
 
-\* A link connection of token t closes; its sessions are cut.
-DropBody(t) ==
+\* A link connection of token t closes; its sessions are cut. redial: the
+\* agent's up link redials it (its peerlink Node, linkBackoff), so its
+\* lazy link is dialling again (finding HO-6: a trace).
+DropAs(t, redial) ==
     /\ conn' = [conn EXCEPT ![t] = FALSE]
     /\ sst' = [s \in Sess |-> IF sst[s] = "open" /\ via[s] = "link" /\ on[s] = t THEN "cut" ELSE sst[s]]
-    /\ lz' = IF lz.t = t THEN [st |-> "none", t |-> NoTok] ELSE lz
+    /\ lz' = IF lz.t # t THEN lz
+             ELSE IF redial /\ lz.st = "up" THEN [lz EXCEPT !.st = "dialing"]
+             ELSE [st |-> "none", t |-> NoTok]
     /\ pk' = IF pk = t THEN NoTok ELSE pk
+
+DropBody(t) == DropAs(t, FALSE)
 
 \* adopt refused (a dial of the new primary is out: lazyLink.adopt's
 \* dialing), or the park's TTL passed first: the parked link drains
@@ -155,7 +161,7 @@ PrimEnd(g) ==
 
 \* A link connection closes: the park's TTL, the agent's stop, the network.
 LinkDrop(t) ==
-    /\ conn[t] /\ DropBody(t)
+    /\ conn[t] /\ \E redial \in BOOLEAN : DropAs(t, redial)
     /\ UNCHANGED <<prim, aend, tok, resumed, bound, dial, hdr, tcpUp, sil, via, on, by>>
 
 \* A link connection dead past its liveness timeout (link.ErrDeadPeer on

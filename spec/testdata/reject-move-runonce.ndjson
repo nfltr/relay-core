@@ -1,0 +1,8 @@
+{"ev":"Pick","r":"","m":"","ok":true}
+{"ev":"Publish","r":"t1","m":"","ok":true}
+{"ev":"Release","r":"","m":"","ok":false}
+{"ev":"Ask","r":"","m":"","ok":false}
+{"ev":"RecvA","r":"","m":"CONNECTED","ok":false}
+{"ev":"StopRouting","r":"","m":"","ok":false}
+{"ev":"Done","r":"","m":"","ok":false}
+{"ev":"Forward","r":"t1","m":"","ok":false}

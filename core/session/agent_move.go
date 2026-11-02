@@ -61,6 +61,7 @@ type agentMove struct {
 	stream    *HTTPStream
 	check     *time.Ticker // until the record names the new session
 	routedOff bool         // stopRouting ran: no move bound applies any more
+	resumed   bool         // resumeMove: a renewal found the new session's record (Move.tla Refresh)
 }
 
 // routeLeases counts the requests the ingress picked a stream for whose
@@ -111,6 +112,9 @@ func (r *routeLeases) stop() <-chan struct{} {
 // published to the agent's topic, or failed: until then a move does not
 // tell the agent that no request follows (MOVE_DONE).
 func (d *Dispatcher) RouteHere(agentID string) (release func(), ok bool) {
+	if traceOn {
+		return d.traceRouteHere(agentID)
+	}
 	s, ok := d.Agents.Load(agentID)
 	if !ok || !s.leases.take() {
 		return nil, false
@@ -135,7 +139,7 @@ func (d *Dispatcher) startMove(tracker HeartbeatTracker, inv directory.IPInvento
 		return nil
 	}
 	s.moving.Store(true)
-	if err := s.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_RECONNECT}); err != nil {
+	if !traceMoveStep(s, moveEvent{Ev: "Ask"}, func() bool { return s.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_RECONNECT}) == nil }) {
 		return nil
 	}
 	d.Logger.Info("asked the agent to connect again before it leaves this replica", "AgentID", s.ID)
@@ -165,9 +169,18 @@ func (d *Dispatcher) recordMoved(ctx context.Context, inv directory.IPInventory,
 func (d *Dispatcher) stopRouting(m *agentMove) <-chan struct{} {
 	m.stop()
 	m.routedOff = true
-	d.Agents.CompareAndDelete(m.stream.ID, m.stream)
-	d.movedAway.Store(m.stream.ID, m.stream) // until its session ends (dispatcher_subscribe.go)
-	return m.stream.leases.stop()
+	ev := moveEvent{Ev: "StopRouting"}
+	if m.resumed {
+		ev.Ev = "Refresh"
+	}
+	var idle <-chan struct{}
+	traceMoveStep(m.stream, ev, func() bool {
+		d.Agents.CompareAndDelete(m.stream.ID, m.stream)
+		d.movedAway.Store(m.stream.ID, m.stream) // until its session ends (dispatcher_subscribe.go)
+		idle = m.stream.leases.stop()
+		return true
+	})
+	return idle
 }
 
 // done has the session's consumer tell the agent, after every request it

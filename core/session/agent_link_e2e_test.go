@@ -20,6 +20,7 @@ import (
 	"github.com/nfltr/link"
 	"github.com/nfltr/quic-go"
 	"github.com/nfltr/relay/client/agent"
+	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
 // TestAgentLinkTCPSessions: on each transport, concurrent sessions of a
@@ -209,7 +210,10 @@ func TestAgentLinkSilentEndsPrimary(t *testing.T) {
 			if h.Streams() == 0 {
 				t.Fatal("a link connection's ordinary end ended the agent's primary")
 			}
-			h.D.Link.silent(token, tc.transport)
+			if tc.transport != dataplane.AgentLinkTCP {
+				return // its silence only unbinds it (quicPeer): nothing calls silent
+			}
+			h.D.Link.silent(token)
 			waitUntil(t, func() bool {
 				h.D.Mu.RLock()
 				defer h.D.Mu.RUnlock()

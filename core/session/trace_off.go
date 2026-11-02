@@ -5,7 +5,11 @@
 
 package session
 
-import "github.com/nfltr/relay/proto/pb"
+import (
+	"context"
+
+	"github.com/nfltr/relay/proto/pb"
+)
 
 // traceOn is false without the relaytrace tag: every trace call sits behind
 // `if traceOn`, so the compiler drops it with its arguments, and the trace
@@ -28,3 +32,13 @@ func traceEnqueue(*tcpAgentStream, *pb.TCPData, <-chan struct{}) bool { return t
 func traceRecv(*tcpAgentStream, *pb.TCPData, func() error) error      { return nil }
 func traceFinish(*tcpAgentStream, string, func())                     {}
 func traced(*tcpAgentStream) bool                                     { return false }
+
+func traceHRegister(*TCPDispatcher, *tcpAgentStream)                      {}
+func traceHPrimEnd(*tcpAgentStream)                                       {}
+func traceHConn(string, bool)                                             {}
+func traceHSilent(string, string)                                         {}
+func traceHArrive(ctx context.Context, _ *tcpAgentStream) context.Context { return ctx }
+func traceHWait(context.Context)                                          {}
+func traceHPlaced(context.Context, *tcpAgentStream, string)               {}
+func traceHEnd(context.Context)                                           {}
+func traceHCarries(*TCPDispatcher, string, bool)                          {}

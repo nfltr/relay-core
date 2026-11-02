@@ -22,6 +22,7 @@ import (
 
 	"github.com/nfltr/relay-core/broker"
 	"github.com/nfltr/relay-core/core/directory"
+	"github.com/nfltr/relay-core/internal/tracehook"
 )
 
 // moveSink records what the relay sends an agent.
@@ -78,7 +79,19 @@ func publishTo(t *testing.T, d *Dispatcher, agentID, txn string) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if _, err := p.SendProto(t.Context(), &pb.HTTPProxyRequest{Request: &pb.HTTPRequest{TransactionId: txn}, Timestamps: &pb.Timestamps{}}); err != nil {
+	if err := tracehook.Publish(d, agentID, txn, func() error {
+		_, err := p.SendProto(t.Context(), &pb.HTTPProxyRequest{Request: &pb.HTTPRequest{TransactionId: txn}, Timestamps: &pb.Timestamps{}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// answer is the agent's answer to txn on s (it closes the old stream only
+// once it answered every request it received there).
+func answer(t *testing.T, d *Dispatcher, s *HTTPStream, txn string) {
+	t.Helper()
+	if err := d.processHTTPInput(t.Context(), s, &pb.HTTPProxyResponse{Response: &pb.HTTPResponse{TransactionId: txn}, Timestamps: &pb.Timestamps{}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -168,7 +181,8 @@ func TestAgentMovesBeforeTheReplicaLetsItGo(t *testing.T) {
 		t.Fatalf("session ended (%v) before the agent closed the stream", err)
 	case <-time.After(100 * time.Millisecond):
 	}
-	received <- nil // the agent closed the stream
+	answer(t, d, s, "txn-picked")
+	received <- nil // the agent answered and closed the stream
 	if err := <-done; err != nil {
 		t.Fatalf("session ended with %v", err)
 	}
@@ -303,7 +317,8 @@ func TestDrainBoundEndsOnceRoutingStopped(t *testing.T) {
 	publishTo(t, d, "agent-1", "txn-slow")
 	release()
 	waitMove(t, "MOVE_DONE", func() bool { return len(sink.steps()) == 2 && sink.steps()[1] == pb.Move_MOVE_DONE })
-	received <- nil // the agent closed the stream
+	answer(t, d, s, "txn-slow")
+	received <- nil // the agent answered and closed the stream
 	if err := <-done; err != nil {
 		t.Fatalf("session ended with %v", err)
 	}

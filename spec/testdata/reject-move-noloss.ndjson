@@ -1,0 +1,7 @@
+{"ev":"Pick","r":"","m":"","ok":true}
+{"ev":"StartDrain","r":"","m":"","ok":false}
+{"ev":"Ask","r":"","m":"","ok":false}
+{"ev":"RecvA","r":"","m":"CONNECTED","ok":false}
+{"ev":"StopRouting","r":"","m":"","ok":false}
+{"ev":"Done","r":"","m":"","ok":false}
+{"ev":"Publish","r":"t1","m":"","ok":true}
