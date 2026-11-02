@@ -16,6 +16,7 @@ CONSTANTS
     Fair,      \* the session whose apps are fair (liveness); the others' may stall
     Aborts,    \* the apps may close a session whole (a write or read error)
     EndAck,    \* a side ends cleanly only once the peer acknowledged its half close (finding 2's design; FALSE: the code as it is)
+    OutCap,    \* frames the relay's outbox (SendCh) holds
     Mutant     \* "none" or a bug put back (spec/README.md "Mutants")
 
 P == {"r", "a"}
@@ -40,9 +41,10 @@ VARIABLES
     why,    \* [P -> [Sess -> {"", "eof", "lost", "reset"}]]: how the reader's side ended
     clean,  \* [P -> [Sess -> BOOLEAN]]: ended with both halves closed (FIN both ways)
     acked,  \* [P -> [Sess -> BOOLEAN]]: the peer acknowledged this side's half close (EndAck)
+    closing, \* [Sess -> BOOLEAN]: the relay's inProcConn.Close was called (finding 3)
     err     \* receive steps that broke the protocol
 
-vars == <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, err>>
+vars == <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, closing, err>>
 
 NoCr == [on |-> FALSE, n |-> 0, held |-> 0, cons |-> 0]
 Zero == [p \in P |-> [s \in Sess |-> 0]]
@@ -64,6 +66,7 @@ Init ==
     /\ wfin = None /\ rfin = None /\ finAt = Zero /\ why = None
     /\ clean = [p \in P |-> [s \in Sess |-> FALSE]]
     /\ acked = [p \in P |-> [s \in Sess |-> FALSE]]
+    /\ closing = [s \in Sess |-> FALSE]
     /\ err = {}
 
 \* handleLocalConn: attach (addSession, openCredit), then the open frame.
@@ -72,7 +75,7 @@ Open(s) ==
     /\ st' = [st EXCEPT !["r"][s] = "open"]
     /\ cr' = [cr EXCEPT !["r"][s] = [NoCr EXCEPT !.on = Credit, !.n = Win["a"]]]
     /\ Put("r", Frame("open", s, 0, 0))
-    /\ UNCHANGED <<alive, down, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, err>>
+    /\ UNCHANGED <<alive, down, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, closing, err>>
 
 \* send -> sendData: Credit.Acquire takes n (waiting for it), the frame is
 \* queued by SendData. Without credit nothing is taken.
@@ -84,21 +87,25 @@ Write(p, s, n) ==
                /\ cr' = [cr EXCEPT ![p][s].n = @ - n]
           ELSE UNCHANGED cr
     /\ pend' = [pend EXCEPT ![p][s] = n]
-    /\ UNCHANGED <<ch, alive, down, st, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, err>>
+    /\ UNCHANGED <<ch, alive, down, st, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, closing, err>>
 
 \* An inProcConn's send looks again under the session's wmu: after a close
 \* (CloseWrite or Close on another goroutine) it gives the credit back and
-\* sends nothing (finding 1).
+\* sends nothing (finding 1). The relay's frame waits for room in its
+\* outbox (enqueue); an inProcConn's waits only until its Close was called
+\* (finding 3: Close marks the session closed before it takes wmu).
 SendData(p, s) ==
     /\ pend[p][s] > 0
-    /\ IF p = "r" /\ s \in InProc /\ wfin[p][s] # "" /\ Mutant # "inproc-closewrite"
+    /\ IF /\ p = "r" /\ s \in InProc /\ Mutant # "inproc-closewrite"
+          /\ wfin[p][s] # "" \/ (closing[s] /\ Mutant # "inproc-enqueue-blocks")
           THEN /\ cr' = IF cr[p][s].on THEN [cr EXCEPT ![p][s].n = @ + pend[p][s]] ELSE cr
                /\ UNCHANGED <<ch, wr>>
-          ELSE /\ Put(p, Frame("data", s, pend[p][s], wr[p][s]))
+          ELSE /\ p = "r" /\ alive => Len(ch["r"]) < OutCap
+               /\ Put(p, Frame("data", s, pend[p][s], wr[p][s]))
                /\ wr' = [wr EXCEPT ![p][s] = @ + pend[p][s]]
                /\ UNCHANGED cr
     /\ pend' = [pend EXCEPT ![p][s] = 0]
-    /\ UNCHANGED <<alive, down, st, gpend, q, rcv, wfin, rfin, finAt, why, clean, acked, err>>
+    /\ UNCHANGED <<alive, down, st, gpend, q, rcv, wfin, rfin, finAt, why, clean, acked, closing, err>>
 
 \* The app's EOF: relay closeWrite, agent pump's half close. Its data is
 \* sent by the same goroutine first, except on an inProcConn, whose Write
@@ -111,17 +118,26 @@ CloseWrite(p, s) ==
     /\ IF Mutant = "fin-overtakes" /\ alive
           THEN ch' = [ch EXCEPT ![p] = <<Frame("half", s, 0, wr[p][s])>> \o @]
           ELSE Put(p, Frame("half", s, 0, wr[p][s]))
-    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, err>>
+    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, closing, err>>
 
 \* A whole close: a write error, a read error, sessionConn.Close. Its
 \* queue takes nothing more (markClosed); Finish forgets the session. A
-\* send already holding credit still goes.
+\* send already holding credit still goes. An inProcConn's Close
+\* (StartClose, then this) sends its frame under wmu; inproc-enqueue-blocks:
+\* a Write waiting for outbox room holds wmu, and Close waits for it.
 Abort(p, s) ==
     /\ st[p][s] = "open" /\ wfin[p][s] # "whole"
+    /\ p = "r" /\ s \in InProc => closing[s] /\ (Mutant # "inproc-enqueue-blocks" \/ pend[p][s] = 0)
     /\ wfin' = [wfin EXCEPT ![p][s] = "whole"]
     /\ finAt' = [finAt EXCEPT ![p][s] = IF wfin[p][s] = "" THEN wr[p][s] ELSE @]  \* the first close's
     /\ Put(p, Frame("whole", s, 0, wr[p][s]))
-    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, err>>
+    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, closing, err>>
+
+\* inProcConn.Close is called (it marks the session closed first).
+StartClose(s) ==
+    /\ s \in InProc /\ st["r"][s] = "open" /\ ~closing[s]
+    /\ closing' = [closing EXCEPT ![s] = TRUE]
+    /\ UNCHANGED <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, err>>
 
 \* The app takes k bytes: Credit.Consumed, a window update once a quarter
 \* window was consumed (queued by SendWin).
@@ -138,13 +154,13 @@ Read(p, s, k) ==
                      ELSE /\ cr' = [cr EXCEPT ![p][s].cons = c]
                           /\ UNCHANGED gpend
           ELSE UNCHANGED <<cr, gpend>>
-    /\ UNCHANGED <<ch, alive, down, st, pend, rcv, wr, wfin, rfin, finAt, why, clean, acked, err>>
+    /\ UNCHANGED <<ch, alive, down, st, pend, rcv, wr, wfin, rfin, finAt, why, clean, acked, closing, err>>
 
 SendWin(p, s) ==
     /\ gpend[p][s] > 0
     /\ Put(p, Frame("win", s, gpend[p][s], 0))
     /\ gpend' = [gpend EXCEPT ![p][s] = 0]
-    /\ UNCHANGED <<alive, down, st, cr, pend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, err>>
+    /\ UNCHANGED <<alive, down, st, cr, pend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, closing, err>>
 
 \* The frame at the head of p's input waits for room in its session's queue:
 \* the receive loop of every session on the stream waits with it.
@@ -213,7 +229,7 @@ Recv(p) ==
               [] f.t = "win" -> RecvWin(p, f) /\ UNCHANGED <<st, q, rcv, rfin, why>>
               [] f.t = "ack" -> UNCHANGED <<st, cr, q, rcv, rfin, why, err>>
               [] OTHER -> RecvClose(p, f) /\ UNCHANGED <<st, cr, q, rcv>>
-    /\ UNCHANGED <<alive, down, pend, gpend, wr, wfin, finAt, clean>>
+    /\ UNCHANGED <<alive, down, pend, gpend, wr, wfin, finAt, clean, closing>>
 
 \* The session ends here (relay removeSession, agent closeSession): both
 \* halves closed (relay closeWrite/peerClosedWrite -> markClosed, agent
@@ -230,7 +246,7 @@ Finish(p, s) ==
     /\ cr' = [cr EXCEPT ![p][s] = NoCr]
     /\ q' = [q EXCEPT ![p][s] = 0]
     /\ clean' = [clean EXCEPT ![p][s] = wfin[p][s] = "half" /\ rfin[p][s] = "half"]
-    /\ UNCHANGED <<ch, alive, down, pend, gpend, rcv, wr, wfin, rfin, finAt, why, acked, err>>
+    /\ UNCHANGED <<ch, alive, down, pend, gpend, rcv, wr, wfin, rfin, finAt, why, acked, closing, err>>
 
 \* Without credit only: the head frame's session took nothing for the stall
 \* bound (deliver, PushWithin): resetSession drops it and closes it.
@@ -243,14 +259,14 @@ Stall(p) ==
          /\ wfin' = [wfin EXCEPT ![p][s] = "whole"]
          /\ finAt' = [finAt EXCEPT ![p][s] = wr[p][s]]
          /\ ch' = [ch EXCEPT ![Peer(p)] = Tail(@), ![p] = Append(@, Frame("whole", s, 0, wr[p][s]))]
-    /\ UNCHANGED <<alive, down, cr, pend, gpend, rcv, wr, rfin, clean, acked, err>>
+    /\ UNCHANGED <<alive, down, cr, pend, gpend, rcv, wr, rfin, clean, acked, closing, err>>
 
 \* The stream fails: what was on the way is lost.
 Break ==
     /\ CanBreak /\ alive
     /\ alive' = FALSE
     /\ ch' = [p \in P |-> <<>>]
-    /\ UNCHANGED <<down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, err>>
+    /\ UNCHANGED <<down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, closing, err>>
 
 \* relay unregister -> CloseAll (lose: an RST unless the agent had closed
 \* its side), Credit.Close; agent closeAll (a target the relay had not
@@ -266,12 +282,13 @@ Down(p) ==
     /\ cr' = [cr EXCEPT ![p] = [s \in Sess |-> NoCr]]
     /\ pend' = [pend EXCEPT ![p] = [s \in Sess |-> 0]]
     /\ gpend' = [gpend EXCEPT ![p] = [s \in Sess |-> 0]]
-    /\ UNCHANGED <<ch, alive, q, rcv, wr, wfin, rfin, finAt, clean, acked, err>>
+    /\ UNCHANGED <<ch, alive, q, rcv, wr, wfin, rfin, finAt, clean, acked, closing, err>>
 
 App(p, s) ==
     \/ \E n \in 1..Chunk : Write(p, s, n)
     \/ CloseWrite(p, s)
     \/ Aborts /\ Abort(p, s)
+    \/ Aborts /\ p = "r" /\ StartClose(s)
     \/ \E k \in 1..q[p][s] : Read(p, s, k)
 
 Next ==
@@ -295,8 +312,16 @@ FairApps ==
          \/ \E k \in 1..q[p][Fair] : Read(p, Fair, k)
 Fairness == WF_vars(Protocol) /\ WF_vars(FairApps)
 
+\* The protocol's steps but the agent's receive loop: the agent may stop
+\* reading the stream while it stays up (finding 3).
+RelaySide ==
+    \/ Recv("r") \/ Stall("r") \/ Down("r")
+    \/ \E p \in P, s \in Sess : SendData(p, s) \/ SendWin(p, s) \/ Finish(p, s)
+
+
 Spec == Init /\ [][Next]_vars
 LiveSpec == Spec /\ Fairness
+WriteSpec == Spec /\ WF_vars(RelaySide)
 
 -----------------------------------------------------------------------------
 (* Invariants (spec/README.md).                                             *)
@@ -342,4 +367,7 @@ NoSilentLoss ==
 (* Liveness. *)
 EndsAfterBreak == (~alive) ~> (\A p \in P, s \in Sess : st[p][s] # "open")
 Isolation == <>(\A p \in P : st[p][Fair] = "gone")
+\* An inProcConn's Write returns once its Close was called, though the
+\* agent reads nothing more (finding 3).
+WriteReturns == \A s \in InProc : closing[s] ~> pend["r"][s] = 0
 =============================================================================

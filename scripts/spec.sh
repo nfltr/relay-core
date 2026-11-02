@@ -4,7 +4,8 @@
 
 # spec.sh check|nightly|liveness|mutants|simulate|traces|trace F: the TLA+ models of
 # spec/ (spec/README.md).
-#   check     TLC on spec/AgentLink.cfg and spec/Handoff.cfg: invariants (CI).
+#   check     TLC on spec/AgentLink.cfg and spec/Handoff.cfg: invariants;
+#             spec/AgentLinkWrite.cfg: WriteReturns (CI).
 #   nightly   TLC on spec/AgentLinkLarge.cfg: AgentLink's invariants at
 #             larger sizes (nightly, weekly).
 #   mutants   each Mutant must be caught, and each documented race found
@@ -84,6 +85,7 @@ CONSTANTS
     Fair = ""
     Aborts = TRUE
     EndAck = FALSE
+    OutCap = 1000000
     Mutant = "none"
 INIT TraceInit
 NEXT TraceNext
@@ -103,6 +105,7 @@ CFG
 case ${1:-} in
 check)
 	run AgentLink.cfg MCAgentLink.tla
+	run AgentLinkWrite.cfg MCAgentLink.tla
 	run Handoff.cfg Handoff.tla
 	;;
 nightly)
@@ -125,6 +128,7 @@ mutants)
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'
 	# The code's races (spec/README.md "Findings").
 	expect AgentLink.cfg MCAgentLink.tla inproc-closewrite -e "$m"'inproc-closewrite"/'
+	expect AgentLinkWrite.cfg MCAgentLink.tla inproc-enqueue-blocks -e "$m"'inproc-enqueue-blocks"/'
 	# The code as it is: no end acknowledgement yet (finding 2).
 	expect AgentLink.cfg MCAgentLink.tla race:clean-tail-lost -e 's/EndAck = TRUE/EndAck = FALSE/'
 	exit $fail

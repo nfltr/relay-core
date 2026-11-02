@@ -54,6 +54,7 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `why[p][s]` | `tcpSession.endErr`, agent `lost` | the reader's end: `eof`, `lost` (`errTCPSessionLost`, an RST), `reset` (`errTCPSessionStalled`) |
 | `clean[p][s]` | both halves closed, queue drained | the app's connection ended cleanly (FIN both ways) |
 | `acked[p][s]` | not in the code yet (finding 2) | the peer acknowledged this side's half close (`EndAck`) |
+| `closing[s]` | `inProcConn.Close` called (finding 3) | the relay's in-process conn is being closed |
 | `alive`, `down[p]` | the stream; `unregister`+`CloseAll`, `closeAll` | the stream broke; side `p` noticed |
 
 ### What is abstracted
@@ -89,6 +90,7 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `Write(p, s, n)` | relay `pumpToAgent`/`inProcConn.Write` -> `send` -> `sendData`'s `Acquire`; agent `pump` -> `send` -> `sendData` |
 | `SendData(p, s)` | `sendData`'s `enqueue` (into `SendCh`/`sendCh`; dropped once the stream ended: `<-a.Done`, `sendDone`) |
 | `CloseWrite(p, s)` | relay `closeWrite` (client EOF), agent `pump`'s half close (target EOF) |
+| `StartClose(s)` | `inProcConn.Close` begins: it marks the session closed, then takes `wmu` for its close frame (finding 3) |
 | `Abort(p, s)` | relay `handleLocalConn`/`pumpToAgent` error -> close frame, `markClosed`; agent `sessionConn.Close`, `pump`'s read error -> close frame (the session ends at `Finish`) |
 | `Read(p, s, k)` | a pop of the session queue (`PopBatch`) -> `Credit.Consumed` -> window frame |
 | `Recv(p)` | relay `recvLoop` (`grpcCreditFrame`, then `Dispatch`); agent `serveTCPStream`'s receive loop |
@@ -128,6 +130,10 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 
 - `EndsAfterBreak`: after the stream broke, every session ends at both
   sides (`AgentLinkBreak.cfg`).
+- `WriteReturns`: an in-process conn's Write returns once its Close was
+  called, though the agent reads nothing more and its stream stays up:
+  the relay's outbox (`SendCh`) is full, `OutCap` frames
+  (`AgentLinkWrite.cfg`, in `make spec`: only the relay side is fair).
 - `Isolation`: a session whose apps write, close and read (fairly)
   completes at both sides although the other session's readers never read
   (`AgentLinkLive.cfg`; with credit no stall reset is needed, `NoHOL`).
@@ -152,6 +158,9 @@ whole close in a config whose property needs the apps to finish.
 - `inproc-closewrite`: an inProcConn's Write queues its chunk after a
   CloseWrite on another goroutine (`NoProtocolError`: `afterfin`; finding
   1, fixed).
+- `inproc-enqueue-blocks`: an inProcConn's Write waits for outbox room
+  holding `wmu`, and Close waits for `wmu` (`WriteReturns`; finding 3,
+  fixed).
 - `no-credit` runs with 3 bytes (one past the window).
 - the code as it is (Findings): `race:clean-tail-lost` (`EndAck = FALSE`,
   `NoSilentLoss`).
@@ -241,6 +250,7 @@ after its session's `Finish`.
 |---|---|---|---|---|
 | `AgentLink.cfg` (CI) | invariants, 1 session, window 2, 2 bytes, 1 a frame, in-process relay end, `EndAck` (2026-11-02, after findings 1-2) | 2,905,774 (601,711) | | 28 s |
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
+| `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries | 35,056 (11,526) | 20 | 4 s |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
@@ -255,8 +265,8 @@ reset is never needed (that is `NoHOL`); the `no-credit` mutant takes it.
 ## Findings
 
 What writing the models and checking them against the code found
-(2026-11-02). Finding 1 is fixed (its race is the mutant
-`inproc-closewrite`); finding 2's design is in the model (`EndAck`), its
+(2026-11-02). Findings 1 and 3 are fixed (mutants `inproc-closewrite`,
+`inproc-enqueue-blocks`); finding 2's design is in the model (`EndAck`), its
 code is open (below); the code as it is stays the mutant
 `race:clean-tail-lost`.
 
@@ -318,11 +328,27 @@ code is open (below); the code as it is stays the mutant
      error, not a clean EOF/FIN (today it ends cleanly).
    Relay-core's half (wait for the ack before `markClosed` on both
    halves, reset on `lose`) lands with the agent's release.
-3. **The relay never sends `dataplane.AgentLinkClose`** (review). The
+3. **An in-process Write waiting for the outbox never returned once its
+   conn closed** (code; relay-server's leakcheck, then TLC:
+   `inproc-enqueue-blocks`). Finding 1's fix enqueues each chunk under
+   the session's `wmu`; `enqueue` waits for room in `SendCh` or the
+   stream's end (`Done`) only. With an agent that reads nothing more
+   while its stream stays up (relay-server's test agents at a test's end;
+   a stuck agent), the Write waited holding `wmu`, and `Close` waited for
+   `wmu` before it could mark the session closed: the Write (a link
+   session's drain) never returned. Severity: medium (a goroutine and
+   its session held until the stream ends; forever in the tests).
+   **Fixed** (lane ENDACK): `Close` marks the session closed before it
+   takes `wmu`, and an in-process chunk's enqueue also gives up once the
+   session ended (`sess.closed`: Close, the stream's `CloseAll`, the
+   agent's whole close), giving its credit back and returning
+   `io.ErrClosedPipe`. Guard: `TestInProcWriteReturnsOnceClosed` (failed
+   before), liveness `WriteReturns` (`AgentLinkWrite.cfg`).
+4. **The relay never sends `dataplane.AgentLinkClose`** (review). The
    agent still acts on it (`lazyLink.control`), and the relay keeps a
    primary's link for the primary's whole life (`agent_link.go`); the
    agent-side branch is dead against this relay. Severity: info.
-4. **A resumed link needs the new primary before the relay notices the
+5. **A resumed link needs the new primary before the relay notices the
    old one ended** (model, `Handoff.tla`). `resumeToken` resumes only a
    primary that is still up; when the relay's `unregister` runs first,
    `primaryEnded` closes the link's connections and its sessions are cut
