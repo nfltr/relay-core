@@ -156,6 +156,9 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			stopping = nil
 			if mv != nil { // a rebalancing move: the drain bounds it from now on
 				giveUp = nil
+				if mv.routedOff { // its routes are off: the relay's shutdown bounds the rest (finding 21)
+					continue
+				}
 				timer := time.NewTimer(d.moveBound)
 				defer timer.Stop()
 				stopNow = timer.C
@@ -213,11 +216,14 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			check = mv.connected()
 		case <-check:
 			if d.recordMoved(ctx, inv, mv) {
-				check, giveUp = nil, nil
+				// The move bound ends here: the held requests' leases and
+				// the agent's close run under the relay's shutdown, not a
+				// bound that would fail them (spec/README.md finding 21).
+				check, giveUp, stopNow = nil, nil, nil
 				settle = d.stopRouting(mv)
 			}
 		case <-settle:
-			settle, stopNow = nil, nil // the agent closes the stream; the forced stop bounds it
+			settle = nil // the agent closes the stream; the relay's shutdown bounds it
 			mv.done()
 		}
 	}

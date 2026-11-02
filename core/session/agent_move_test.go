@@ -272,3 +272,39 @@ func TestAgentMovesUnderClockSkew(t *testing.T) {
 	received <- nil
 	<-done
 }
+
+// A drain's move bound covers the move until this replica stops routing
+// to the old stream: a request it routed here before that, whose first
+// message takes longer than the bound (a slow upload's first chunk), is
+// not failed by it; MOVE_DONE follows it and the agent closes the stream
+// (spec/README.md finding 21, Move.tla DrainBound).
+func TestDrainBoundEndsOnceRoutingStopped(t *testing.T) {
+	d, s, sink, mc, inv, drain := movingSession(t)
+	d.moveBound = 200 * time.Millisecond
+	release, ok := d.RouteHere("agent-1")
+	if !ok {
+		t.Fatal("no route lease on a session that routes")
+	}
+	received := make(chan error, 1)
+	done := make(chan error, 1)
+	go func() { done <- d.WatchAgentSession(t.Context(), "agent-1", s, inv, received) }()
+	drain()
+	waitMove(t, "MOVE_RECONNECT", func() bool { return len(sink.steps()) == 1 })
+	mc.Mu.Lock()
+	mc.Data[directory.GetDispatcherCacheKey("agent-1")] = &directory.Value{PodIP: "10.0.0.2", Since: time.Now().UnixNano()}
+	mc.Mu.Unlock()
+	d.processHTTPInput(t.Context(), s, &pb.HTTPProxyResponse{Move: pb.Move_MOVE_CONNECTED}, time.Now()) //nolint:errcheck
+	waitMove(t, "routing stopped", func() bool { return !d.IsAgentConnected("agent-1") })
+	select {
+	case err := <-done:
+		t.Fatalf("the drain's move bound ended the session (%v) while a request routed here was held", err)
+	case <-time.After(3 * d.moveBound):
+	}
+	publishTo(t, d, "agent-1", "txn-slow")
+	release()
+	waitMove(t, "MOVE_DONE", func() bool { return len(sink.steps()) == 2 && sink.steps()[1] == pb.Move_MOVE_DONE })
+	received <- nil // the agent closed the stream
+	if err := <-done; err != nil {
+		t.Fatalf("session ended with %v", err)
+	}
+}

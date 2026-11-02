@@ -58,8 +58,9 @@ func (d *Dispatcher) Leaving() bool {
 
 // agentMove is one HTTP session's move, driven by watchAgentSession.
 type agentMove struct {
-	stream *HTTPStream
-	check  *time.Ticker // until the record names the new session
+	stream    *HTTPStream
+	check     *time.Ticker // until the record names the new session
+	routedOff bool         // stopRouting ran: no move bound applies any more
 }
 
 // routeLeases counts the requests the ingress picked a stream for whose
@@ -163,6 +164,7 @@ func (d *Dispatcher) recordMoved(ctx context.Context, inv directory.IPInventory,
 // is held.
 func (d *Dispatcher) stopRouting(m *agentMove) <-chan struct{} {
 	m.stop()
+	m.routedOff = true
 	d.Agents.CompareAndDelete(m.stream.ID, m.stream)
 	d.movedAway.Store(m.stream.ID, m.stream) // until its session ends (dispatcher_subscribe.go)
 	return m.stream.leases.stop()

@@ -722,7 +722,7 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     **Fixed**: a silent QUIC connection only unbinds; once no link vouches
     for the agent, its frame streams' heartbeats judge the TCP path again
     (`sendLoop`, `WatchAgentSession`). `SilenceOnDeadPath`; guard
-    `TestAgentLinkQUICSilenceKeepsPrimary`.
+    `TestAgentLinkSilentEndsPrimary` (QUIC's idle timeout is not silence).
 18. **`carriesSessions` missed link sessions after a resume and sessions
     on an older primary** (code; medium; TLC, `count-per-primary`,
     `carries-newest`). A link session was counted on the primary it opened
@@ -764,7 +764,7 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     placing new TCP sessions on a stream the agent closes after
     `waitIdle`. **Fixed**: it leaves the rotation (its open sessions run
     on, as a takeover's). `NoTCPAfterMove`; guard
-    `TestMovedTCPPrimaryLeavesRotation`.
+    `TestConnectTCPMovingAgentKeepsOldStream`.
 
 The spec's `GiveUp` required no `MOVE_CONNECTED`; the code gives up on
 the timer regardless (review MV-3). Dropping the guard keeps every

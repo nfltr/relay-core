@@ -184,7 +184,10 @@ func cutLinks(h *tunnelHarness) {
 // relay routes no session there; any other end of a link connection does
 // not.
 func TestAgentLinkSilentEndsPrimary(t *testing.T) {
-	for err, want := range map[error]bool{link.ErrDeadPeer: true, &quic.IdleTimeoutError{}: true, io.EOF: false, nil: false} {
+	// QUIC's idle timeout is not one: UDP is another path than the frame
+	// streams' (spec/README.md finding 17); the unbound QUIC link no longer
+	// vouches for the agent, whose heartbeats judge TCP again.
+	for err, want := range map[error]bool{link.ErrDeadPeer: true, &quic.IdleTimeoutError{}: false, io.EOF: false, nil: false} {
 		if linkSilent(err) != want {
 			t.Errorf("linkSilent(%v) = %v, want %v", err, !want, want)
 		}

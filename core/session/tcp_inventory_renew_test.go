@@ -135,6 +135,11 @@ func TestConnectTCPMovingAgentKeepsOldStream(t *testing.T) {
 	if v, _ := mc.Get(context.Background(), key); v == nil || v.PodIP != "10.0.0.2" {
 		t.Fatalf("the old stream overwrote the agent's new record: %+v", v)
 	}
+	// It left the rotation: a new TCP session goes where the record points,
+	// not onto the stream its agent closes (spec/README.md finding 22).
+	if as := d.TCPDispatcher.agentStream("moved-agent"); as != nil {
+		t.Fatal("new TCP sessions still go to the moved agent's old stream")
+	}
 	close(st.End) // the agent leaves its old connection
 	<-done
 }

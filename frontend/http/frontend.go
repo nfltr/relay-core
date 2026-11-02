@@ -18,8 +18,11 @@ import (
 	"net/url"
 
 	"github.com/nfltr/relay-core/core/frontend"
+	"github.com/nfltr/relay-core/core/relaystatus"
 	"github.com/nfltr/relay-core/core/session"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc/codes"
 )
 
 // Frontend is HTTP ingress as a binary links it. Its settings (http.*,
@@ -93,11 +96,29 @@ func New(ctx context.Context, h frontend.Host) *Ingress {
 	return ing
 }
 
+// peer serves a request a peer replica forwarded over the replica link (it
+// read the agent's record naming this replica): it takes the route lease
+// as dispatch does, so a move's MOVE_DONE waits for its first message;
+// refused (this replica no longer routes to the agent: it moved or left),
+// it is answered 503 Retry-After before it reaches any agent, which would
+// run it after MOVE_DONE with its answer lost (spec/README.md finding 20,
+// Move.tla ArriveA).
+func (ing *Ingress) peer(w http.ResponseWriter, r *http.Request) {
+	release, ok := ing.core.Dispatcher.RouteHere(r.Header.Get(session.AgentIDKey))
+	if !ok {
+		w.Header().Set("Retry-After", "1")
+		relaystatus.WriteHTTP(w, http.StatusServiceUnavailable, codes.Unavailable, relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE, agentOfflineMessage)
+		return
+	}
+	defer release()
+	ing.proxy.ServeHTTP(w, r.WithContext(withRouteLease(r.Context(), release)))
+}
+
 // Mount is the ingress as the relay mounts it.
 func (ing *Ingress) Mount() frontend.AgentHTTP {
 	return frontend.AgentHTTP{
 		Serve: ing.front(HeaderRewriteMiddleware(ing.policy, http.HandlerFunc(ing.dispatch))),
-		Peer:  ing.proxy,
+		Peer:  http.HandlerFunc(ing.peer),
 		Fanout: func(ctx context.Context) error {
 			return ing.proxy.FanoutResponses(ctx, ing.core.PodID, ing.core.PodIDTopicSubscriber)
 		},

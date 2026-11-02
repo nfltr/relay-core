@@ -121,9 +121,6 @@ type tcpAgentStream struct {
 	// under way or done; once its new session takes the record, this stream
 	// stays until the agent closes it with its sessions, as in a drain.
 	movingAway atomic.Bool
-	// linkSessions counts a primary's sessions open on its agent link
-	// (agentLink.open): they are not in Sessions.
-	linkSessions atomic.Int32
 	// http is what the agent announced of HTTP sessions on a primary
 	// stream (dataplane.HTTPSessionsHeader): "" none, "1" beside raw TCP,
 	// "only" (agent.HTTPSessionsOnly) without (agent_http_link.go).
@@ -604,19 +601,20 @@ func (d *TCPDispatcher) yield(agentID string, as *tcpAgentStream) bool {
 	return d.carries(agentID, as)
 }
 
-// carriesSessions reports whether agentID's TCP stream here carries a
-// session.
+// carriesSessions reports whether any of agentID's primary streams here
+// (older ones not yet ended too) carries a session (spec/README.md
+// finding 18).
 func (d *TCPDispatcher) carriesSessions(agentID string) bool {
 	d.Mu.RLock()
-	as := d.Streams[agentID]
+	all := slices.Clone(d.All[agentID])
 	d.Mu.RUnlock()
-	return as != nil && d.carries(agentID, primaryOf(as))
+	return slices.ContainsFunc(all, func(s *tcpAgentStream) bool { return s.primary == nil && d.carries(agentID, s) })
 }
 
-// carries reports whether the primary stream as, its agent link or an
-// auxiliary stream bound to it has a session open.
+// carries reports whether the primary stream as, the agent link of the
+// token it holds or an auxiliary stream bound to it has a session open.
 func (d *TCPDispatcher) carries(agentID string, as *tcpAgentStream) bool {
-	if as.linkSessions.Load() > 0 {
+	if d.carriesLink(as) {
 		return true
 	}
 	d.Mu.RLock()
@@ -745,7 +743,10 @@ func (d *TCPDispatcher) sendLoop(agentID string, as *tcpAgentStream, stream tcpF
 		if frame == nil { // superseded: the agent connected to another replica since
 			renew, renewNow = nil, nil
 			if as.movingAway.Load() {
-				continue // moved: the agent closes it
+				// Moved: the agent closes it once its sessions ended; new
+				// ones go where the record points (spec/README.md finding 22).
+				d.yield(agentID, as)
+				continue
 			}
 			// A takeover (a rolling update's new pod): the sessions open on
 			// this connection finish here, new ones go to the new one

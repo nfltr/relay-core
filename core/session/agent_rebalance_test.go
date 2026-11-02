@@ -437,6 +437,7 @@ func TestRebalanceLeavesAgentsCarryingTCPSessions(t *testing.T) {
 	a.TCPDispatcher = NewTCPDispatcher(a.Logger, nil, nil)
 	as := &tcpAgentStream{Sessions: map[string]*tcpSession{"s1": {}}}
 	a.TCPDispatcher.Streams = map[string]*tcpAgentStream{"agent-0": as, "agent-1": as}
+	a.TCPDispatcher.All = map[string][]*tcpAgentStream{"agent-0": {as}, "agent-1": {as}}
 	endSessions := func() { as.Mu.Lock(); clear(as.Sessions); as.Mu.Unlock() }
 	defer endSessions() // a failed check lets the moves it asked for finish
 	if asked := a.rebalanceAgents(2, 2); asked != 0 {

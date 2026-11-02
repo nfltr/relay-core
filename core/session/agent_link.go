@@ -84,9 +84,10 @@ type agentLink struct {
 	quic *quiclink.Node // nil without a UDP listener
 	port int            // quic's UDP port
 
-	Mu    sync.Mutex
-	Conns map[string]map[io.Closer]linkConn // by token: each connection, its transport and generation
-	offer metadata.MD                       // the response header's offer, made at the first ask
+	Mu       sync.Mutex
+	Conns    map[string]map[io.Closer]linkConn // by token: each connection, its transport and generation
+	sessions map[string]int                    // by token: the sessions open on its link (carriesSessions)
+	offer    metadata.MD                       // the response header's offer, made at the first ask
 
 	drained sync.Once
 }
@@ -119,7 +120,7 @@ func (l *agentLink) drain() {
 }
 
 func newAgentLink(d *TCPDispatcher, addr net.Addr) *agentLink {
-	l := &agentLink{d: d, Conns: map[string]map[io.Closer]linkConn{},
+	l := &agentLink{d: d, Conns: map[string]map[io.Closer]linkConn{}, sessions: map[string]int{},
 		ln: &agentLinkListener{conns: make(chan net.Conn), addr: addr, done: make(chan struct{})}}
 	l.tcp = mustNode(peerlink.New(peerlink.Config{
 		Listener: l.ln,
@@ -231,13 +232,13 @@ func (l *agentLink) quicPeer(q *quic.Conn) (string, error) {
 		st := q.ConnectionStats()
 		return st.BytesSent, st.BytesReceived
 	})
+	// Its end, an idle timeout too, only unbinds it: UDP is another path
+	// than the frame streams' TCP, whose own liveness (heartbeats, once no
+	// link vouches for the agent) judges it (spec/README.md finding 17).
 	go func() {
 		<-q.Context().Done()
 		l.unbind(token, c)
 		counted()
-		if linkSilent(context.Cause(q.Context())) {
-			l.silent(token, dataplane.AgentLinkQUIC)
-		}
 	}()
 	return name, nil
 }
@@ -423,11 +424,11 @@ func (o agentLinkObserver) ConnDown(id link.Identity, err error) {
 	}
 }
 
-// linkSilent reports whether an agent-link connection ended because its
-// peer went silent past the liveness timeout: link's ErrDeadPeer on TCP,
-// QUIC's idle timeout.
+// linkSilent reports whether a link/TCP agent-link connection ended
+// because its peer went silent past the liveness timeout (link's
+// ErrDeadPeer): the agent's TCP path is dead.
 func linkSilent(err error) bool {
-	return errors.Is(err, link.ErrDeadPeer) || errors.As(err, new(*quic.IdleTimeoutError))
+	return errors.Is(err, link.ErrDeadPeer)
 }
 
 // ask notes the transport a primary asked for, for the offer in its
@@ -541,7 +542,7 @@ func (l *agentLink) open(ctx context.Context, p *tcpAgentStream, open *pb.TCPDat
 	kind := sessionKind(open)
 	metrics.RecordAgentLinkSession(transport, kind)
 	metrics.AddAgentLinkOpenSessions(transport, 1)
-	p.linkSessions.Add(1)
+	ended := l.countSession(p)
 	// An HTTP session is the HTTP leaf's to count (http_link); the agent
 	// link's own are its tcp and e2ee sessions.
 	path, counted := linkPath(transport), kind != "http"
@@ -551,11 +552,42 @@ func (l *agentLink) open(ctx context.Context, p *tcpAgentStream, open *pb.TCPDat
 	}
 	return s, sync.OnceFunc(func() {
 		metrics.AddAgentLinkOpenSessions(transport, -1)
-		p.linkSessions.Add(-1)
+		ended()
 		if counted {
 			metrics.TransferEnd(path, began)
 		}
 	}), true, nil
+}
+
+// countSession counts a session open on p's agent link by p's bind token,
+// not by p: a newer primary that resumes the link carries it on
+// (spec/README.md finding 18, Handoff.tla CarriesExact). The func ends it.
+func (l *agentLink) countSession(p *tcpAgentStream) func() {
+	token := p.token
+	l.Mu.Lock()
+	l.sessions[token]++
+	l.Mu.Unlock()
+	return func() {
+		l.Mu.Lock()
+		if l.sessions[token]--; l.sessions[token] <= 0 {
+			delete(l.sessions, token)
+		}
+		l.Mu.Unlock()
+	}
+}
+
+// carriesLink reports whether primary p holds its token (bound) and that
+// token's link has a session open.
+func (d *TCPDispatcher) carriesLink(p *tcpAgentStream) bool {
+	if d.Link == nil {
+		return false
+	}
+	d.Mu.RLock()
+	held := d.bound[p.token] == p
+	d.Mu.RUnlock()
+	d.Link.Mu.Lock()
+	defer d.Link.Mu.Unlock()
+	return held && d.Link.sessions[p.token] > 0
 }
 
 // agentLinkPath is the transfer path of a session on the agent link.

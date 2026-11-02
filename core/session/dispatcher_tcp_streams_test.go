@@ -5,6 +5,7 @@ package session
 
 import (
 	"github.com/nfltr/relay-core/core/session/sessiontest/fake"
+	"io"
 	"log/slog"
 	"strconv"
 	"testing"
@@ -192,5 +193,64 @@ func waitStreamsOf(t *testing.T, d *TCPDispatcher, agentID string, want int) {
 		if time.Now().After(deadline) {
 			t.Fatalf("agent %s has %d streams, want %d", agentID, n, want)
 		}
+	}
+}
+
+// TestCarriesSessionsOnOlderPrimary: a session open on an older primary of
+// the agent here (its stream not yet ended) counts, not only the newest
+// primary's (spec/README.md finding 18, Handoff.tla CarriesExact): a
+// rebalance must not move an agent carrying one.
+func TestCarriesSessionsOnOlderPrimary(t *testing.T) {
+	d := NewTCPDispatcher(slog.New(slog.DiscardHandler), nil, nil)
+	old, newer := NewTCPAgentStream(), NewTCPAgentStream()
+	old.Sessions["s1"] = &tcpSession{}
+	d.Streams["a"], d.All["a"] = newer, []*tcpAgentStream{old, newer}
+	if !d.carriesSessions("a") {
+		t.Fatal("a session on the agent's older primary is not counted")
+	}
+}
+
+// TestCarriesSessionsAfterResume: link sessions belong to the bind token:
+// once a newer primary resumed the link, they are its, also after the
+// primary they opened through ended (finding 18, mutant
+// count-per-primary); the older primary no longer counts them.
+func TestCarriesSessionsAfterResume(t *testing.T) {
+	d := NewTCPDispatcher(slog.New(slog.DiscardHandler), nil, nil)
+	d.Link = &agentLink{d: d, Conns: map[string]map[io.Closer]linkConn{}, sessions: map[string]int{}}
+	old, newer := NewTCPAgentStream(), NewTCPAgentStream()
+	old.agent, newer.agent, old.token, newer.token = "a", "a", "t", "t"
+	d.bound["t"], d.Streams["a"], d.All["a"] = old, old, []*tcpAgentStream{old}
+	end := d.Link.countSession(old) // a session on the link, opened through old
+	defer end()
+	d.bound["t"], d.Streams["a"], d.All["a"] = newer, newer, []*tcpAgentStream{old, newer} // resumed
+	if d.carries("a", old) {
+		t.Error("the resumed link's sessions still count on the primary they opened through")
+	}
+	d.All["a"] = []*tcpAgentStream{newer} // the old primary ended
+	if !d.carriesSessions("a") {
+		t.Fatal("a link session the resumed primary carries is not counted")
+	}
+	end()
+	if d.carriesSessions("a") {
+		t.Fatal("an ended link session still counts")
+	}
+}
+
+// TestResumeTokenRefusesAnotherAgent: a new primary resumes the agent link
+// of a token only when that token's primary is its own agent's; another
+// agent naming it (a leaked token) gets a new one (Handoff.tla models one
+// agent; spec/README.md "Handoff.tla").
+func TestResumeTokenRefusesAnotherAgent(t *testing.T) {
+	d := NewTCPDispatcher(slog.New(slog.DiscardHandler), nil, nil)
+	d.Link = &agentLink{d: d, Conns: map[string]map[io.Closer]linkConn{}, sessions: map[string]int{}}
+	p := NewTCPAgentStream()
+	p.agent, p.token = "a", "t"
+	d.bound["t"] = p
+	d.Link.Conns["t"] = map[io.Closer]linkConn{io.NopCloser(nil): {}}
+	if got := d.resumeToken("b", "t"); got == "t" {
+		t.Fatal("another agent resumed the agent's link")
+	}
+	if got := d.resumeToken("a", "t"); got != "t" {
+		t.Fatalf("the agent's own new primary got token %q, want the resumed one", got)
 	}
 }

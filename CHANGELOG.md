@@ -86,6 +86,22 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- Requests a peer replica forwards take the route lease too
+  (`Ingress.peer`): refused once this replica no longer routes to the
+  agent, they are answered 503 `Retry-After` and never reach an agent
+  that moved (it would run them after MOVE_DONE with the answer lost;
+  `spec/README.md` finding 20).
+- A drain's move bound ends once the replica stops routing to the old
+  stream: a slow lease drain is no longer cut (finding 21).
+- A moved agent's TCP primary leaves the rotation when its renewal finds
+  the agent's new record: new TCP sessions go where the record points
+  (finding 22).
+- `carriesSessions` counts every primary of the agent here and the agent
+  link's sessions by bind token, so a resumed link's sessions keep the
+  agent from a rebalancing move (finding 18).
+- A QUIC agent link's idle timeout only unbinds it; it no longer ends the
+  agent's TCP primary and its frame-stream sessions (finding 17).
+
 - On a TCP frame stream with the end acknowledgement, a session lost to
   the stream's end or aborted by the agent (its whole close before its
   half close) now reaches the client only as a reset: before, the
