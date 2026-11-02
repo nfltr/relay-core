@@ -131,6 +131,10 @@ type tcpAgentStream struct {
 	// answers: the agent answers opens that ask (dataplane.AnswerHeader),
 	// set at registration of a primary stream.
 	answers bool
+	// endAck: the agent announced dataplane.EndAckHeader and the relay
+	// echoed it: half closes are acked (spec/README.md finding 2). Set at
+	// registration.
+	endAck bool
 }
 
 // NewTCPAgentStream returns an agent's TCP stream with no sessions.
@@ -254,8 +258,13 @@ func (a *tcpAgentStream) Dispatch(frame *pb.TCPData, stall time.Duration) bool {
 		return false
 	}
 	if frame.GetClose() {
-		if frame.GetHalf() && !a.peerClosedWrite(sess) {
-			return false // the client's bytes still go to the agent
+		if frame.GetHalf() {
+			if a.endAck && !sess.isClosed() { // its queue took every byte before (FIFO)
+				go a.enqueue(dataplane.EndAckFrame(id)) // a receive loop never waits for its outbox
+			}
+			if !a.peerClosedWrite(sess) {
+				return false // the client's bytes still go to the agent, or its half close waits for its ack
+			}
 		}
 		sess.markClosed() // its queued tail is still delivered
 		return false
@@ -270,25 +279,59 @@ func (a *tcpAgentStream) Dispatch(frame *pb.TCPData, stall time.Duration) bool {
 // peerClosedWrite records the agent's half close (TCPData.half): the
 // client reads EOF once the queued tail is delivered. It reports whether
 // the client's side had ended too: both halves end the session (each side
-// ends it on its own; no close follows).
+// ends it on its own; no close follows). With the end acknowledgement a
+// client whose own half close was not acked yet gets neither: its EOF and
+// the session's end wait for the ack (recvAck), or the stream's end
+// resets it (lose; spec/README.md finding 2).
 func (a *tcpAgentStream) peerClosedWrite(sess *tcpSession) bool {
+	sess.endMu.Lock()
 	sess.peerHalf.Store(true)
-	sess.recvQ.Close()
-	return sess.selfHalf.Load()
+	self := sess.selfHalf.Load()
+	done := !sess.endAck || !self || sess.acked
+	sess.endMu.Unlock()
+	if done {
+		sess.recvQ.Close()
+	}
+	return self && done
+}
+
+// recvAck takes the agent's ack of a session's half close
+// (dataplane.EndAckFrame): once the agent half-closed too the session ends
+// cleanly.
+func (a *tcpAgentStream) recvAck(f *pb.TCPData) {
+	a.Mu.Lock()
+	sess := a.Sessions[string(f.GetData())]
+	a.Mu.Unlock()
+	if sess == nil {
+		return
+	}
+	sess.endMu.Lock()
+	sess.acked = sess.selfHalf.Load()
+	end := sess.acked && sess.peerHalf.Load()
+	sess.endMu.Unlock()
+	if end {
+		sess.markClosed()
+	}
 }
 
 // closeWrite passes the client's half close on (TCPData.half): the
 // agent's target reads EOF after the bytes sent before, and the agent's
 // bytes keep coming. Once the agent half-closed too, the session ends.
+// With the end acknowledgement the session ends only once the agent acked
+// it (recvAck).
 func (a *tcpAgentStream) closeWrite(id string, sess *tcpSession) {
 	sess.wmu.Lock()
+	sess.endMu.Lock()
 	if sess.selfHalf.Swap(true) {
+		sess.endMu.Unlock()
 		sess.wmu.Unlock()
 		return
 	}
+	peer := sess.peerHalf.Load()
+	sess.endMu.Unlock()
 	a.send(&pb.TCPData{SessionId: id, Close: true, Half: true})
 	sess.wmu.Unlock()
-	if sess.peerHalf.Load() {
+	if peer && !sess.endAck {
 		sess.markClosed()
 	}
 }
@@ -356,6 +399,7 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 	as.moves = advertisesMove(stream.Context())
 	as.http = httpSessions(stream.Context())
 	as.answers = firstIncoming(stream.Context(), dataplane.AnswerHeader) == "1"
+	as.endAck = asksEndAck(stream.Context())
 	as.cr = grpcCredit(stream.Context(), as.enqueue)
 	if traceOn {
 		traceUp(as)
@@ -371,6 +415,9 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 	}
 	if as.cr != nil {
 		md.Set(dataplane.CreditHeader, strconv.Itoa(tcpGRPCWindow))
+	}
+	if as.endAck {
+		md.Set(dataplane.EndAckHeader, "1")
 	}
 	if d.Link != nil {
 		md = metadata.Join(md, d.Link.ask(stream.Context(), as))
@@ -411,7 +458,8 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 func (d *TCPDispatcher) RegisterAuxStream(agentID, token string, stream pb.Dispatcher_ConnectTCPServer) error {
 	var as *tcpAgentStream
 	cr := grpcCredit(stream.Context(), func(f *pb.TCPData) { as.enqueue(f) }) // grants follow pops: as is set
-	as, err := d.bindAux(agentID, token, nil, cr)
+	endAck := asksEndAck(stream.Context())
+	as, err := d.bindAux(agentID, token, nil, cr, endAck)
 	if err != nil {
 		return err
 	}
@@ -424,13 +472,16 @@ func (d *TCPDispatcher) RegisterAuxStream(agentID, token string, stream pb.Dispa
 	if cr != nil {
 		md.Set(dataplane.CreditHeader, strconv.Itoa(tcpGRPCWindow))
 	}
+	if endAck {
+		md.Set(dataplane.EndAckHeader, "1")
+	}
 	_ = stream.SendHeader(md)
 	return d.serveAux(agentID, as, stream)
 }
 
 // bindAux adds an auxiliary stream bound with token to agentID's primary
 // stream to the agent's rotation; serveAux serves it.
-func (d *TCPDispatcher) bindAux(agentID, token string, dc *dataplane.Conn, cr *link.Credit) (*tcpAgentStream, error) {
+func (d *TCPDispatcher) bindAux(agentID, token string, dc *dataplane.Conn, cr *link.Credit, endAck bool) (*tcpAgentStream, error) {
 	d.Mu.Lock()
 	defer d.Mu.Unlock()
 	p := d.bound[token]
@@ -442,7 +493,7 @@ func (d *TCPDispatcher) bindAux(agentID, token string, dc *dataplane.Conn, cr *l
 	}
 	p.aux++
 	as := NewTCPAgentStream()
-	as.agent, as.primary, as.drained, as.DC, as.cr = agentID, p, make(chan struct{}), dc, cr
+	as.agent, as.primary, as.drained, as.DC, as.cr, as.endAck = agentID, p, make(chan struct{}), dc, cr, endAck
 	d.All[agentID] = append(d.All[agentID], as)
 	return as, nil
 }
@@ -463,6 +514,13 @@ func (d *TCPDispatcher) serveAux(agentID string, as *tcpAgentStream, stream tcpF
 	case <-p.Done:
 		return nil
 	}
+}
+
+// asksEndAck reports whether the agent of a gRPC stream announced the end
+// acknowledgement (dataplane.EndAckHeader); the relay then echoes it and
+// acks half closes (spec/README.md finding 2).
+func asksEndAck(ctx context.Context) bool {
+	return firstIncoming(ctx, dataplane.EndAckHeader) == "1"
 }
 
 func newBindToken() string {
@@ -755,6 +813,10 @@ func (d *TCPDispatcher) recvFrame(as *tcpAgentStream, frame *pb.TCPData, onContr
 			return err
 		}
 	}
+	if sid == dataplane.EndAckSID && as.endAck {
+		as.recvAck(frame)
+		return nil
+	}
 	if len(sid) > 0 && sid[0] == '_' {
 		if onControl != nil && sid != dataplane.WindowSID {
 			onControl(frame)
@@ -786,6 +848,9 @@ func (d *TCPDispatcher) agentStream(agentID string) *tcpAgentStream {
 func (d *TCPDispatcher) attach(agentID string, as *tcpAgentStream, id string, s *tcpSession) *tcpAgentStream {
 	for as != nil && !as.addSession(id, s) {
 		as = d.agentStream(agentID) // a stream stops taking sessions only after it left the rotation
+	}
+	if as != nil {
+		s.endAck = as.endAck // before the open frame: the agent sends nothing before
 	}
 	if as != nil && as.cr != nil {
 		as.openCredit(id, s) // before the open frame
@@ -911,8 +976,15 @@ type tcpSession struct {
 	reset atomic.Bool // reset (resetSession), not ended
 	lost  atomic.Bool // its stream ended under it (CloseAll), not ended
 	// selfHalf: the client half-closed (closeWrite); peerHalf: the agent
-	// did (peerClosedWrite). Both end the session (markClosed).
+	// did (peerClosedWrite). Both end the session (markClosed); with
+	// endAck only once the agent acked the client's half close (acked).
 	selfHalf, peerHalf atomic.Bool
+	// endAck: its stream acks half closes (tcpAgentStream.endAck; set
+	// before the session is attached). endMu orders selfHalf, peerHalf and
+	// acked with the decisions taken on them.
+	endAck bool
+	endMu  sync.Mutex
+	acked  bool // under endMu
 	// wmu orders an inProcConn's data frames with its close (closeWrite,
 	// inProcConn.Close): none goes after it.
 	wmu sync.Mutex
@@ -972,6 +1044,16 @@ func (s *tcpSession) deliver(data []byte, stall time.Duration) bool {
 	return true
 }
 
+// isClosed reports whether the session is done (markClosed).
+func (s *tcpSession) isClosed() bool {
+	select {
+	case <-s.closed:
+		return true
+	default:
+		return false
+	}
+}
+
 // markClosed records that the session is done (the agent's close, or its
 // client went away). Its queue stays poppable until drained, so data sent
 // before the close is delivered.
@@ -981,14 +1063,17 @@ func (s *tcpSession) markClosed() {
 }
 
 // lose ends a session its stream ended under; it reports whether the
-// session was lost: the agent had neither closed nor half-closed it.
+// session was lost: the agent had neither closed nor half-closed it, or
+// (end acknowledgement) had not acked the client's half close.
 func (s *tcpSession) lose() bool {
 	select {
 	case <-s.closed:
 		return false
 	default:
 	}
-	lost := !s.peerHalf.Load()
+	s.endMu.Lock()
+	lost := !s.peerHalf.Load() || s.endAck && s.selfHalf.Load() && !s.acked // its tail may not have reached the agent
+	s.endMu.Unlock()
 	if lost {
 		s.lost.Store(true) // before the queue closes: its reader sees it
 	}

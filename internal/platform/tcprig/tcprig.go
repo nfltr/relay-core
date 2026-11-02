@@ -261,11 +261,13 @@ func (ag HarnessAgent) older() bool { return ag == AgentAuxOnly || ag == AgentOn
 // allow:wrapper (implements pb.DispatcherServer)
 func (s connectTCPStub) ConnectTCP(st pb.Dispatcher_ConnectTCPServer) error {
 	if s.old != RelayCurrent || s.ag.older() {
-		// Credit on gRPC streams is newer than both: the agent's ask never
-		// reaches the relay, so neither side keeps it.
+		// Credit and the end acknowledgement on gRPC streams are newer
+		// than both: the agent's ask never reaches the relay, so neither
+		// side keeps them.
 		md, _ := metadata.FromIncomingContext(st.Context())
 		md = md.Copy()
 		delete(md, dataplane.CreditHeader)
+		delete(md, dataplane.EndAckHeader) // newer still
 		st = ctxStream{st, metadata.NewIncomingContext(st.Context(), md)}
 	}
 	if s.old == RelayLinkV1 {

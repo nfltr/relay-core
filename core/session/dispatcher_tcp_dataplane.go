@@ -172,7 +172,7 @@ func (d *TCPDispatcher) serveDataConn(c net.Conn) {
 	// Bound once the reply went out: a session placed here meanwhile would
 	// find no connection. A primary that ended meanwhile, or took its last
 	// auxiliary stream, ends this one.
-	as, err := d.bindAux(id.Subject, id.Method, dc, dc.Credit())
+	as, err := d.bindAux(id.Subject, id.Method, dc, dc.Credit(), false)
 	if err != nil {
 		d.logger.Debug("tcp data connection not bound", "agent_id", id.Subject, "error", err)
 		return

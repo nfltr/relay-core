@@ -60,6 +60,7 @@ type traceEvent struct {
 	N  int    `json:"n"`
 	T  string `json:"t"`
 	W  int    `json:"w,omitempty"` // Up: the agent's window
+	A  bool   `json:"a,omitempty"` // Up: the stream acks half closes (EndAck)
 
 }
 
@@ -80,7 +81,7 @@ func traceUp(a *tcpAgentStream) {
 	a.tr = &traceStreamState{f: f}
 	traceMu.Lock()
 	defer traceMu.Unlock()
-	traceLog(a.tr, traceEvent{Ev: "Up", N: a.cr.Window(), W: a.cr.PeerWindow()})
+	traceLog(a.tr, traceEvent{Ev: "Up", N: a.cr.Window(), W: a.cr.PeerWindow(), A: a.endAck})
 }
 
 // traceLog writes e; under traceMu.
@@ -183,6 +184,8 @@ func sentEvent(f *pb.TCPData) traceEvent {
 			panic(err)
 		}
 		return traceEvent{Ev: "SendWin", S: s, N: n}
+	case sid == dataplane.EndAckSID:
+		return traceEvent{Ev: "SendAck", S: string(f.GetData())}
 	case strings.HasPrefix(sid, "_"):
 		return traceEvent{} // control: not a step of the model
 	case f.GetOpen():
@@ -209,6 +212,8 @@ func traceRecv(a *tcpAgentStream, f *pb.TCPData, process func() error) error {
 		if err == nil {
 			e.T, e.S, e.N = "win", s, n
 		}
+	case sid == dataplane.EndAckSID:
+		e.T, e.S = "ack", string(f.GetData())
 	case strings.HasPrefix(sid, "_"):
 	case f.GetClose() && f.GetHalf():
 		e.T = "half"
