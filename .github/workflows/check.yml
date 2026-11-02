@@ -41,6 +41,7 @@ jobs:
         with:
           persist-credentials: false
       - run: make spec spec-mutants
+      - run: make check-spec-drift
   api:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest

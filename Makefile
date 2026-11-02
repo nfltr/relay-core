@@ -118,3 +118,13 @@ hooks:
 	@h="$$(git rev-parse --git-path hooks)/pre-push"; \
 	if [ -e "$$h" ] && ! grep -q 'scripts/pre-push' "$$h"; then echo "hooks: $$h exists and is not this one; move it away first" >&2; exit 1; fi; \
 	printf '#!/bin/sh\n# make hooks: scripts/pre-push of the checkout pushing (else of %s)\ns="$$(git rev-parse --show-toplevel)/scripts/pre-push"\n[ -x "$$s" ] || s=%s/scripts/pre-push\nexec "$$s" "$$@"\n' "$(CURDIR)" "$(CURDIR)" >"$$h" && chmod +x "$$h" && echo "hooks: installed $$h"
+
+# Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
+# identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
+# spec README's code-map entry exists, and the commits since origin/main
+# that change a file a code map lists change that spec too or carry
+# `Spec-Reviewed: <spec> <reason>`. The pre-push hook checks the pushed range.
+.PHONY: check-spec-drift
+check-spec-drift:
+	./scripts/check-spec-drift.sh maps
+	./scripts/check-spec-drift.sh ci
