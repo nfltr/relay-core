@@ -274,10 +274,13 @@ func (a *tcpAgentStream) peerClosedWrite(sess *tcpSession) bool {
 // agent's target reads EOF after the bytes sent before, and the agent's
 // bytes keep coming. Once the agent half-closed too, the session ends.
 func (a *tcpAgentStream) closeWrite(id string, sess *tcpSession) {
+	sess.wmu.Lock()
 	if sess.selfHalf.Swap(true) {
+		sess.wmu.Unlock()
 		return
 	}
 	a.send(&pb.TCPData{SessionId: id, Close: true, Half: true})
+	sess.wmu.Unlock()
 	if sess.peerHalf.Load() {
 		sess.markClosed()
 	}
@@ -903,6 +906,9 @@ type tcpSession struct {
 	// selfHalf: the client half-closed (closeWrite); peerHalf: the agent
 	// did (peerClosedWrite). Both end the session (markClosed).
 	selfHalf, peerHalf atomic.Bool
+	// wmu orders an inProcConn's data frames with its close (closeWrite,
+	// inProcConn.Close): none goes after it.
+	wmu sync.Mutex
 
 	closed    chan struct{}
 	closeOnce sync.Once

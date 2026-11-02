@@ -82,12 +82,16 @@ check-api:
 # caught and the documented races found (both in CI); spec-liveness,
 # spec-simulate and spec-traces: weekly. Java and tla2tools.jar come from
 # scripts/fetch-tla.sh (pinned, cached outside the repository).
-.PHONY: spec spec-mutants spec-liveness spec-simulate spec-traces
+.PHONY: spec spec-mutants spec-nightly spec-liveness spec-simulate spec-traces
 spec:
 	./scripts/spec.sh check
 
 spec-mutants:
 	./scripts/spec.sh mutants
+
+# spec-nightly: AgentLink's invariants at larger sizes (minutes; not in make ci).
+spec-nightly:
+	./scripts/spec.sh nightly
 
 spec-liveness:
 	./scripts/spec.sh liveness

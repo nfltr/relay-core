@@ -53,6 +53,7 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `finAt[p][s]` | the bytes written before this side's close | what the peer must have received at its EOF |
 | `why[p][s]` | `tcpSession.endErr`, agent `lost` | the reader's end: `eof`, `lost` (`errTCPSessionLost`, an RST), `reset` (`errTCPSessionStalled`) |
 | `clean[p][s]` | both halves closed, queue drained | the app's connection ended cleanly (FIN both ways) |
+| `acked[p][s]` | not in the code yet (finding 2) | the peer acknowledged this side's half close (`EndAck`) |
 | `alive`, `down[p]` | the stream; `unregister`+`CloseAll`, `closeAll` | the stream broke; side `p` noticed |
 
 ### What is abstracted
@@ -115,9 +116,13 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
    wrote before its close; every other end is typed (`lost`, `reset`).
 5. `DownEndsAll`: once a side noticed the stream ended, no session is open
    there.
-6. `NoSilentLoss` (expected to fail, see Findings): a session that ended
-   cleanly at a side had every byte that side wrote, and its close,
-   received by the peer once the stream is gone.
+6. `NoSilentLoss`: a session that ended cleanly at a side had every byte
+   that side wrote, and its close, received by the peer once the stream is
+   gone. It holds with `EndAck = TRUE` (the design of finding 2: a half
+   close is acknowledged by an `ack` frame, and both halves end a session
+   cleanly only once its own was acknowledged); the code is `EndAck =
+   FALSE` today (the trace configs), where it fails
+   (`race:clean-tail-lost`).
 
 ### Liveness (weak fairness on every step that is not an app's)
 
@@ -144,9 +149,12 @@ whole close in a config whose property needs the apps to finish.
   queue (`NoHOL`).
 - `lose-as-eof`: `CloseAll` ends a session the agent had not closed as a
   clean EOF (`TypedEnd`).
-- races of the code as it is (Findings): `race:inproc-closewrite`
-  (`NoProtocolError`: `afterfin`), `race:clean-tail-lost`
-  (`NoSilentLoss`).
+- `inproc-closewrite`: an inProcConn's Write queues its chunk after a
+  CloseWrite on another goroutine (`NoProtocolError`: `afterfin`; finding
+  1, fixed).
+- `no-credit` runs with 3 bytes (one past the window).
+- the code as it is (Findings): `race:clean-tail-lost` (`EndAck = FALSE`,
+  `NoSilentLoss`).
 
 ## Handoff.tla: agent link or frame streams
 
@@ -231,12 +239,13 @@ after its session's `Finish`.
 
 | config | what | states (distinct) | depth | time |
 |---|---|---|---|---|
-| `AgentLink.cfg` (CI) | invariants, 1 session, window 2 | 5,774,765 (1,217,770) | 39 | 81 s |
+| `AgentLink.cfg` (CI) | invariants, 1 session, window 2, 2 bytes, 1 a frame, in-process relay end, `EndAck` (2026-11-02, after findings 1-2) | 2,905,774 (601,711) | | 28 s |
+| `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries | 35,056 (11,526) | 20 | 4 s |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
 | `HandoffLive.cfg` | `Placed` | | | 7 s |
-| `make spec-mutants` | 9 mutants, each caught | | 5-11 | 21 s |
+| `make spec-mutants` | 9 mutants, each caught (on the CI config) | | 5-11 | 14 s |
 | `make spec-traces` | 8 traces (2-172 lines), all accepted | | | 72 s |
 
 `COVERAGE=1 scripts/spec.sh check` takes every action of both models
@@ -246,9 +255,10 @@ reset is never needed (that is `NoHOL`); the `no-credit` mutant takes it.
 ## Findings
 
 What writing the models and checking them against the code found
-(2026-11-02). None is fixed in this lane; each is a mutant-style race
-`make spec-mutants` must find, so the model is checked to describe the
-code as it is.
+(2026-11-02). Finding 1 is fixed (its race is the mutant
+`inproc-closewrite`); finding 2's design is in the model (`EndAck`), its
+code is open (below); the code as it is stays the mutant
+`race:clean-tail-lost`.
 
 1. **An in-process conn's Write racing its CloseWrite sends data after
    the FIN** (code; TLC, `race:inproc-closewrite`). `inProcConn.Write`
@@ -261,10 +271,12 @@ code as it is.
    The same race link had (link `spec/README.md` finding 1). Severity:
    low: today's callers (`peerlink.Join` over `DialAgent`/`ServeLinkTCP`)
    write and half-close from one goroutine, but `net.Conn` allows the two
-   at once. Fix: have `closeWrite` and the send of a data frame agree
-   under one per-session lock (check `selfHalf` after `Acquire`, before
-   the enqueue; give the credit back and return `io.ErrClosedPipe`), as
-   link did in `Conn.sendData`.
+   at once. **Fixed** (lane AGENTFIX): `inProcConn.send` takes each
+   chunk's credit, then under the session's `wmu` (which `closeWrite` and
+   `Close` hold around their frame) looks again; after a close it gives
+   the credit back (`Credit.Grant`) and returns the bytes sent before with
+   `io.ErrClosedPipe`, as link's `Conn.sendData`. Guard:
+   `TestInProcWriteRacingCloseWriteSendsNothingAfterFIN` (failed before).
 2. **A session ends cleanly at one side while its tail is still on the
    way** (design; TLC, `race:clean-tail-lost`). Once both halves are
    closed a side ends the session at once: the relay's `closeWrite` marks
@@ -278,10 +290,34 @@ code as it is.
    buffering proxy has such a window; this one is about one round trip
    plus the outbox, only after the peer half-closed first, and only when
    the stream fails inside it. Severity: low-medium (silent from the
-   app's point of view). Fix: an end acknowledgement: the side that closes
-   last keeps its app's connection open until the peer confirms it read
-   the close (a whole close back, once both halves are done), and resets
-   it if the stream ends first.
+   app's point of view). **Design (in the model, `EndAck`; code open)**:
+   an end acknowledgement. It needs the agent (github.com/nfltr/relay
+   `client/agent`) and a wire change, so it is not in relay-core yet:
+   - Wire: a frame `ack` for a session (e.g. `TCPData{Close, Half, Ack}`
+     or a new field), sent only on a stream whose both sides announced it
+     (a request/response metadata header such as `x-nfltr-tcp-end-ack`);
+     without both, the code as today (an older agent never sends it, so
+     a relay must not wait for it).
+   - Ordering: a side that takes the peer's half close (relay
+     `peerClosedWrite`, agent `closeFrame` with half) queues an `ack` for
+     the session from its receive loop at once; the stream is FIFO, so the
+     ack says every byte before the half close was received.
+   - Who closes what: both halves closed no longer end a session; a side
+     ends it cleanly (closes its app's connection with a FIN, removes the
+     session) once its own half close was acked and its queue drained. A
+     whole close needs no ack (the reader sees a reset either way).
+   - Failure: a stream that ends while a side waits for its ack ends the
+     session with a reset at that app (relay `lose`/`CloseAll`: the
+     client's connection is cut, agent `closeAll`: the target's), never a
+     clean end. Bound: one round trip plus the outbox.
+   - Invariant: `NoSilentLoss` (holds with `EndAck`, `make spec`); mutant
+     `race:clean-tail-lost` (`EndAck = FALSE`, the code today).
+   - Failing test to write first: in `tcprig`, the agent half-closes, the
+     client writes its tail and half-closes, the stream is cut before the
+     agent takes the tail: the client's connection must end with an
+     error, not a clean EOF/FIN (today it ends cleanly).
+   Relay-core's half (wait for the ack before `markClosed` on both
+   halves, reset on `lose`) lands with the agent's release.
 3. **The relay never sends `dataplane.AgentLinkClose`** (review). The
    agent still acts on it (`lazyLink.control`), and the relay keeps a
    primary's link for the primary's whole life (`agent_link.go`); the

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
 // joinBufs holds the buffers WriteTo joins a backlog in; one is taken only
@@ -109,18 +110,49 @@ func (c *inProcConn) Write(b []byte) (int, error) {
 	}
 	cp := make([]byte, len(b))
 	copy(cp, b)
-	c.agentStream.send(&pb.TCPData{SessionId: c.sessionID, Data: cp})
-	return len(b), nil
+	return c.send(cp)
 }
 
 // WriteOwned sends b to the agent without a copy: the caller gives b up
 // (dataplane.OwnedWriter: a tcp-connect data connection's session).
 func (c *inProcConn) WriteOwned(b []byte) error {
-	if c.writeEnded() {
-		return io.ErrClosedPipe
+	_, err := c.send(b)
+	return err
+}
+
+// send queues b for the agent in chunks it has credit for. Each chunk's
+// enqueue and a CloseWrite or Close on another goroutine agree under
+// sess.wmu: nothing is sent after the close (spec/README.md finding 1,
+// TestInProcWriteRacingCloseWriteSendsNothingAfterFIN); a chunk whose
+// credit was taken gives it back. It returns the bytes sent, and
+// io.ErrClosedPipe for the rest once the session ended.
+func (c *inProcConn) send(b []byte) (int, error) {
+	a, s := c.agentStream, c.sess
+	sent := 0
+	for sent < len(b) {
+		n := len(b) - sent
+		if a.cr != nil {
+			n = min(n, dataplane.MaxChunk)
+			if !a.cr.Acquire(c.sessionID, n) {
+				return sent, io.ErrClosedPipe
+			}
+		}
+		s.wmu.Lock()
+		if c.writeEnded() {
+			s.wmu.Unlock()
+			if a.cr != nil {
+				_ = a.cr.Grant(c.sessionID, n) // never sent: the credit is the session's again
+			}
+			return sent, io.ErrClosedPipe
+		}
+		if traceOn && a.cr != nil {
+			traceWrite(a, c.sessionID, n)
+		}
+		a.enqueue(&pb.TCPData{SessionId: c.sessionID, Data: b[sent : sent+n]})
+		s.wmu.Unlock()
+		sent += n
 	}
-	c.agentStream.send(&pb.TCPData{SessionId: c.sessionID, Data: b})
-	return nil
+	return sent, nil
 }
 
 // Reset ends the session as Close does: the frame streams carry no reset.
@@ -130,6 +162,9 @@ func (c *inProcConn) Reset() error { return c.Close() }
 // writeEnded reports whether the session takes no more bytes: it ended,
 // or this side half-closed it.
 func (c *inProcConn) writeEnded() bool {
+	if c.closed.Load() {
+		return true
+	}
 	select {
 	case <-c.sess.closed:
 		return true
@@ -147,10 +182,12 @@ func (c *inProcConn) CloseWrite() error {
 
 func (c *inProcConn) Close() error {
 	c.closeOnce.Do(func() {
+		c.sess.wmu.Lock()
 		c.closed.Store(true)
 		if !c.sess.selfHalf.Load() || !c.sess.peerHalf.Load() { // both half closes ended it already
 			c.agentStream.send(&pb.TCPData{SessionId: c.sessionID, Close: true})
 		}
+		c.sess.wmu.Unlock()
 		c.cleanupFn()
 	})
 	return nil

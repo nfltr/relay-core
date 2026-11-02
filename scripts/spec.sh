@@ -2,9 +2,11 @@
 # Copyright 2026 nfltr
 # SPDX-License-Identifier: Apache-2.0
 
-# spec.sh check|liveness|mutants|simulate|traces|trace F: the TLA+ models of
+# spec.sh check|nightly|liveness|mutants|simulate|traces|trace F: the TLA+ models of
 # spec/ (spec/README.md).
 #   check     TLC on spec/AgentLink.cfg and spec/Handoff.cfg: invariants (CI).
+#   nightly   TLC on spec/AgentLinkLarge.cfg: AgentLink's invariants at
+#             larger sizes (nightly, weekly).
 #   mutants   each Mutant must be caught, and each documented race found
 #             (spec/README.md "Findings") (CI).
 #   liveness  TLC on spec/AgentLinkLive.cfg, AgentLinkBreak.cfg and
@@ -81,6 +83,7 @@ CONSTANTS
     CanBreak = TRUE
     Fair = ""
     Aborts = TRUE
+    EndAck = FALSE
     Mutant = "none"
 INIT TraceInit
 NEXT TraceNext
@@ -102,6 +105,9 @@ check)
 	run AgentLink.cfg MCAgentLink.tla
 	run Handoff.cfg Handoff.tla
 	;;
+nightly)
+	run AgentLinkLarge.cfg MCAgentLink.tla
+	;;
 liveness)
 	run AgentLinkLive.cfg MCAgentLink.tla
 	run AgentLinkBreak.cfg MCAgentLink.tla
@@ -112,20 +118,21 @@ mutants)
 	# A bug put back per invariant.
 	expect AgentLink.cfg MCAgentLink.tla fin-overtakes -e "$m"'fin-overtakes"/'
 	expect AgentLink.cfg MCAgentLink.tla grant-early -e "$m"'grant-early"/'
-	expect AgentLink.cfg MCAgentLink.tla no-credit -e 's/Credit = TRUE/Credit = FALSE/'
+	expect AgentLink.cfg MCAgentLink.tla no-credit -e 's/Credit = TRUE/Credit = FALSE/' -e 's/MaxBytes = 2/MaxBytes = 3/' # a byte past the window
 	expect AgentLink.cfg MCAgentLink.tla lose-as-eof -e "$m"'lose-as-eof"/'
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'
 	expect Handoff.cfg Handoff.tla keep-conns -e "$m"'keep-conns"/'
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'
 	# The code's races (spec/README.md "Findings").
-	expect AgentLink.cfg MCAgentLink.tla race:inproc-closewrite -e 's/InProc = {}/InProc = {1}/'
-	expect AgentLink.cfg MCAgentLink.tla race:clean-tail-lost -e 's/DownEndsAll/DownEndsAll NoSilentLoss/'
+	expect AgentLink.cfg MCAgentLink.tla inproc-closewrite -e "$m"'inproc-closewrite"/'
+	# The code as it is: no end acknowledgement yet (finding 2).
+	expect AgentLink.cfg MCAgentLink.tla race:clean-tail-lost -e 's/EndAck = TRUE/EndAck = FALSE/'
 	exit $fail
 	;;
 simulate)
 	# Random walks on two sessions, window 2, 3 bytes each way (weekly).
-	sed -e 's/Sess = {1}/Sess = {1, 2}/' spec/AgentLink.cfg >"$work/Sim.cfg"
-	echo "== AgentLink.cfg, two sessions, -simulate num=${SIM_NUM:-100000} -depth ${SIM_DEPTH:-80}"
+	sed -e 's/Sess = {1}/Sess = {1, 2}/' spec/AgentLinkLarge.cfg >"$work/Sim.cfg"
+	echo "== AgentLinkLarge.cfg, two sessions, -simulate num=${SIM_NUM:-100000} -depth ${SIM_DEPTH:-80}"
 	st=0
 	tlc "$work/Sim.cfg" MCAgentLink.tla -simulate num="${SIM_NUM:-100000}" -depth "${SIM_DEPTH:-80}" >"$work/sim.out" 2>&1 || st=$?
 	grep -E 'states generated|traces generated|Finished in|Error|violated' "$work/sim.out" || true
@@ -163,7 +170,7 @@ trace)
 	trace "$2" && echo accepted || { echo rejected; exit 1; }
 	;;
 *)
-	echo "usage: spec.sh check|liveness|mutants|simulate|traces|trace FILE" >&2
+	echo "usage: spec.sh check|nightly|liveness|mutants|simulate|traces|trace FILE" >&2
 	exit 2
 	;;
 esac
