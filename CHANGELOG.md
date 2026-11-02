@@ -12,6 +12,13 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `(*session.Dispatcher).RouteHere(agentID)`: a route lease on the
+  agent's HTTP session here (ok while this replica routes to it), ended
+  by `release` once the request's first message is on the agent's topic.
+  The HTTP frontend takes one for every request it serves in process; a
+  move sends MOVE_DONE only once none is held (`spec/Move.tla`). An
+  ingress of its own that routes to `Dispatcher.Agents` in process takes
+  one the same way.
 - `spec/AgentLink.tla` and `spec/Handoff.tla`: TLA+ models of the agent's
   frame streams with per-session credit and of the choice between the agent
   link and the frame streams (`make spec spec-mutants` in CI; liveness,
@@ -79,6 +86,12 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- A make-before-break move no longer sends MOVE_DONE past a request
+  routed to the old stream (the 500 ms settle timer is gone: the route
+  leases end, then the session's consumer sends MOVE_DONE after what it
+  holds), and a rebalancing move given up whose agent's new session took
+  the record after all goes on with the move instead of ending the old
+  session with its requests (`spec/README.md` findings 6 and 7).
 - A revocation that landed between `Authenticator.Authenticate`'s
   provider read and the caller's `Hold` left that connection held, never
   cut, and cached the revoked key's answer for its `CacheTTL` (a key
