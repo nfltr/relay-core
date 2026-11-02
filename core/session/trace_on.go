@@ -127,6 +127,22 @@ func traceRead(s *tcpSession, n int) {
 	}
 }
 
+// traceEof: the reader gets the EOF of the agent's half close (the
+// client's FIN, an in-process io.EOF). Recorded after Down too: the spec
+// gives a lost session's reader no EOF (Trace.tla).
+func traceEof(s *tcpSession) {
+	if s.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	if s.tr.t.stopped {
+		s.tr.t.stopped = false
+		defer func() { s.tr.t.stopped = true }()
+	}
+	traceLog(s.tr.t, traceEvent{Ev: "Eof", S: s.tr.sid})
+}
+
 // traceDown: the stream ended here (unregister): CloseAll follows.
 func traceDown(a *tcpAgentStream) {
 	if a.tr == nil {

@@ -265,6 +265,8 @@ func (a *tcpAgentStream) Dispatch(frame *pb.TCPData, stall time.Duration) bool {
 			if !a.peerClosedWrite(sess) {
 				return false // the client's bytes still go to the agent, or its half close waits for its ack
 			}
+		} else if a.endAck && !sess.peerHalf.Load() {
+			sess.aborted.Store(true) // before the queue closes: its reader sees it
 		}
 		sess.markClosed() // its queued tail is still delivered
 		return false
@@ -975,6 +977,9 @@ type tcpSession struct {
 	abort func()
 	reset atomic.Bool // reset (resetSession), not ended
 	lost  atomic.Bool // its stream ended under it (CloseAll), not ended
+	// aborted: the agent's whole close came before its half close on a
+	// stream with the end acknowledgement (Dispatch), not ended.
+	aborted atomic.Bool
 	// selfHalf: the client half-closed (closeWrite); peerHalf: the agent
 	// did (peerClosedWrite). Both end the session (markClosed); with
 	// endAck only once the agent acked the client's half close (acked).
@@ -1083,13 +1088,15 @@ func (s *tcpSession) lose() bool {
 
 // endErr is what a reader of the session's drained queue gets: io.EOF,
 // errTCPSessionStalled for a reset session, errTCPSessionLost for a lost
-// one.
+// one, errTCPSessionAborted for one the agent aborted.
 func (s *tcpSession) endErr() error {
 	switch {
 	case s.reset.Load():
 		return errTCPSessionStalled
 	case s.lost.Load():
 		return errTCPSessionLost
+	case s.aborted.Load():
+		return errTCPSessionAborted
 	}
 	return io.EOF
 }
@@ -1097,6 +1104,12 @@ func (s *tcpSession) endErr() error {
 // errTCPSessionLost ends a session whose agent stream ended under it: a
 // join passes it on as link.CodeConnLost.
 var errTCPSessionLost = status.Error(codes.Unavailable, "tcp session lost: the agent's stream ended")
+
+// errTCPSessionAborted ends a session the agent aborted (a whole close
+// before its half close, on a stream with the end acknowledgement: its
+// target's read error, a stall reset, a refused open): the bytes before
+// it may be short of the whole stream (spec/README.md finding 15).
+var errTCPSessionAborted = status.Error(codes.Aborted, "tcp session reset by the agent")
 
 // errTCPSessionStalled ends a session reset because its client took none of
 // its bytes for the stall bound (tcpSessionStall).

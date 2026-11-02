@@ -86,6 +86,13 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- On a TCP frame stream with the end acknowledgement, a session lost to
+  the stream's end or aborted by the agent (its whole close before its
+  half close) now reaches the client only as a reset: before, the
+  client could get a FIN first (a held half close, or the agent's abort)
+  and take a cut stream for a whole one. An in-process reader of an
+  aborted session gets a `codes.Aborted` error instead of `io.EOF`
+  (`spec/README.md` finding 15).
 - Presence across replicas (`spec/Presence.tla`, findings 8, 10, 13): a
   label update (`UpdateAgentLabels`) renews its stream's own session
   record (Seq, credential, account and services kept) and is refused from

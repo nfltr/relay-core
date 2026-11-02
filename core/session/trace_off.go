@@ -22,6 +22,7 @@ func traceUp(*tcpAgentStream)                                         {}
 func traceOpenSess(*tcpAgentStream, string, *tcpSession)              {}
 func traceWrite(*tcpAgentStream, string, int)                         {}
 func traceRead(*tcpSession, int)                                      {}
+func traceEof(*tcpSession)                                            {}
 func traceDown(*tcpAgentStream)                                       {}
 func traceEnqueue(*tcpAgentStream, *pb.TCPData, <-chan struct{}) bool { return true }
 func traceRecv(*tcpAgentStream, *pb.TCPData, func() error) error      { return nil }

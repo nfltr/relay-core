@@ -337,7 +337,19 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 	for {
 		var ok bool
 		if bufs, ok = sess.recvQ.PopBatch(bufs[:0], tcpWriteBatch); !ok {
+			// A loss, a reset or the agent's abort (lose, resetSession,
+			// Dispatch set it before the queue closed) cuts the client: its
+			// only end, never a FIN before it (spec/README.md findings 2, 15;
+			// TestTCPTunnelEndAckStreamLossResetsHalfClosedClient,
+			// TestTCPTunnelEndAckAgentAbortResetsClient).
+			if sess.endErr() != io.EOF {
+				resetConn(conn)
+				return nil
+			}
 			if sess.peerHalf.Load() { // the agent half-closed: so does the client's conn
+				if traceOn {
+					traceEof(sess)
+				}
 				CloseWrite(conn)
 				<-sess.closed // the client's bytes still go to the agent until it ends too
 			}

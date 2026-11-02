@@ -42,7 +42,11 @@ func (c *inProcConn) Read(b []byte) (int, error) {
 	if len(c.rest) == 0 {
 		data, ok := c.sess.recvQ.Pop()
 		if !ok {
-			return 0, c.sess.endErr()
+			err := c.sess.endErr()
+			if traceOn && err == io.EOF && c.sess.peerHalf.Load() && !c.closed.Load() {
+				traceEof(c.sess)
+			}
+			return 0, err
 		}
 		c.rest = data
 	}
