@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"syscall"
@@ -144,7 +145,11 @@ func TestUploadDrainToSlowBackendIsProgressLink(t *testing.T) {
 // the agent acked chunks the backend read seconds later
 // (TestUploadDrainToSlowBackendIsProgress went 504 on Linux, not on macOS).
 // A 16 KiB window paces bulk reads on a loaded machine, so only the test
-// that needs it takes it.
+// that needs it takes it. The listener is plain TCP: Go listens with MPTCP
+// by default on Linux, and Linux 6.1's MPTCP refuses TCP_MAXSEG
+// (ENOPROTOOPT), so the agent's kernel took 3.5 MiB there and acked three
+// chunks the backend read 2 s later (a 504 on the build machine, lane
+// LINKBUMP). On Linux the MSS must take.
 func smallWindowListener(t *testing.T) net.Listener {
 	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
 		var err error
@@ -152,12 +157,15 @@ func smallWindowListener(t *testing.T) net.Listener {
 			err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 16<<10)
 			// macOS refuses an MSS above its default before a connection;
 			// its send buffers stay small without it.
-			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_MAXSEG, 1400)
+			if merr := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_MAXSEG, 1400); merr != nil && runtime.GOOS == "linux" && err == nil {
+				err = merr
+			}
 		}); cerr != nil {
 			return cerr
 		}
 		return err
 	}}
+	lc.SetMultipathTCP(false)
 	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
