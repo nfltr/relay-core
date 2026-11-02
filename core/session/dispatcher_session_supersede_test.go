@@ -85,8 +85,11 @@ func TestAgentSessionMovesBetweenReplicas(t *testing.T) {
 		relayKey := directory.GetStreamerCacheKey(rpcclient.RelayAgentID)
 		mc.Data[relayKey] = &directory.Value{PodIP: "10.0.0.2", Since: t0.Add(time.Minute).UnixNano()}
 		inv, _ := directory.NewIPInventory(fake.TestLogger(), mc, time.Second, "127.0.0.1", directory.GetStreamerCacheKey)
-		own := directory.Session{Since: t0}
-		if err := d.refreshAgentInventoryOnInboundActivity(t.Context(), rpcclient.RelayAgentID, inv, own, nil, nil); err != nil {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		own := NewHTTPStream(rpcclient.RelayAgentID, nil, t.Context(), make(chan proto.Message), ticker)
+		own.connectedAt = t0
+		if err := d.refreshAgentInventoryOnInboundActivity(t.Context(), rpcclient.RelayAgentID, inv, own); err != nil {
 			t.Fatalf("one replica's relay agent superseded another's: %v", err)
 		}
 	})

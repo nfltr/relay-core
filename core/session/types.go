@@ -89,6 +89,7 @@ type Stream[S, R proto.Message] struct {
 	Services                      []agentservices.Decl // named services under this identity (agent_services.go); nil for none
 	labels                        map[string]string    // key-value labels for fleet selection
 	labelsMu                      sync.RWMutex         // guards labels once the stream is published
+	recordMu                      sync.Mutex           // orders this stream's directory record writes (renewal, label update)
 	connectLabels                 map[string]string    // labels advertised at connect (an update never changes them)
 	capabilities                  []string             // advertised capabilities (p2p, ssh, http, a2a)
 	tlsFingerprint                string               // SHA-256 fingerprint of agent's E2EE TLS cert
@@ -259,6 +260,11 @@ func (a *Stream[S, R]) OutboundDataSentWithin(d time.Duration) bool {
 func (a *Stream[S, R]) Routes() []string {
 	return a.routes
 }
+
+// recordLock orders the stream's directory record writes: the renewal's and
+// the label update's (refreshAgentInventoryOnInboundActivity,
+// UpdateAgentLabels).
+func (a *Stream[S, R]) recordLock() *sync.Mutex { return &a.recordMu }
 
 // Labels returns the key-value labels the agent advertised on connect.
 func (a *Stream[S, R]) Labels() map[string]string {

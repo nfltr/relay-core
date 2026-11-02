@@ -6,6 +6,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/nfltr/relay-core/core/directory"
@@ -27,6 +28,15 @@ func (d *Dispatcher) inboundInventoryRefreshInterval() time.Duration {
 func streamLabels(tracker HeartbeatTracker) map[string]string {
 	if labeled, ok := tracker.(interface{ Labels() map[string]string }); ok {
 		return labeled.Labels()
+	}
+	return nil
+}
+
+// streamRecordLock orders a stream's directory record writes (nil when the
+// tracker has none).
+func streamRecordLock(tracker HeartbeatTracker) *sync.Mutex {
+	if l, ok := tracker.(interface{ recordLock() *sync.Mutex }); ok {
+		return l.recordLock()
 	}
 	return nil
 }
@@ -85,10 +95,11 @@ func streamCapabilities(tracker HeartbeatTracker) []string {
 // busy-stream messages are throttled so Redis is not updated per frame. It
 // returns directory.ErrSuperseded, writing nothing, when a newer session of
 // the agent (s) on another pod holds the record: the caller ends this one.
-func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context, agentID string, inv directory.IPInventory, s directory.Session, labels map[string]string, capabilities []string) error {
+func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context, agentID string, inv directory.IPInventory, tracker HeartbeatTracker) error {
 	if d == nil || agentID == "" || inv == nil {
 		return nil
 	}
+	s := streamSession(tracker)
 	if d.IsInternalAgent(agentID) {
 		// Every replica runs its own (the relay's agent): no session of it
 		// supersedes another's, each renews its record as before.
@@ -120,7 +131,14 @@ func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context,
 	}
 	d.InventoryRefreshByAgentID.Store(agentID, now)
 
-	err := renewAgentRecord(ctx, inv, agentID, s, labels, capabilities, recvThreshold)
+	// The labels are read under the stream's record lock, as a label
+	// update writes them: a renewal never writes labels an update replaced
+	// (spec/README.md finding 10).
+	if lock := streamRecordLock(tracker); lock != nil {
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	err := renewAgentRecord(ctx, inv, agentID, s, streamLabels(tracker), streamCapabilities(tracker), recvThreshold)
 	if errors.Is(err, directory.ErrSuperseded) {
 		d.Logger.Info("agent reconnected to another pod: ending its old session here", "AgentID", agentID)
 		return err

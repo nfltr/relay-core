@@ -185,3 +185,30 @@ func TestDeleteSessionKeepsAnotherSessionsRecord(t *testing.T) {
 		})
 	}
 }
+
+// Finding 13 (relay-core spec/README.md, Presence.tla renew-resurrects): a
+// renewal that finds no record while the agent's Seq counter went past its
+// session's (a newer session claimed it, then ended) is superseded instead
+// of writing the agent back unannounced; at the counter it renews (its own
+// record expired).
+func TestRenewalAfterANewerSessionEndedIsSuperseded(t *testing.T) {
+	viper.Set("pod_ip.env_var", "POD_IP")
+	t.Cleanup(viper.Reset)
+	t.Setenv("POD_IP", "10.0.0.1")
+	key := GetStreamerCacheKey("agent-1")
+	for _, tc := range []struct {
+		seq  int64
+		want error
+	}{{4, ErrSuperseded}, {5, nil}} {
+		mc := newMockCache()
+		mc.counters = map[string]int64{seqKey("agent-1"): 5}
+		inv, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
+		err := inv.(SessionStore).PutSession(context.Background(), "agent-1", Session{Since: time.Now(), Seq: tc.seq}, true, nil, nil, time.Minute)
+		if !errors.Is(err, tc.want) && err != tc.want {
+			t.Fatalf("Seq %d: err %v, want %v", tc.seq, err, tc.want)
+		}
+		if _, ok := mc.store[key]; ok != (tc.want == nil) {
+			t.Fatalf("Seq %d: record written=%v", tc.seq, ok)
+		}
+	}
+}

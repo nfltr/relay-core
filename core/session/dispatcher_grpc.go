@@ -673,7 +673,7 @@ func (d *Dispatcher) receiveFromGRPCAgent(ctx context.Context, stream *GRPCStrea
 // Heartbeats (zero-size or empty transaction ID) are forwarded to the heartbeat channel.
 // Data messages are validated, enriched, and fanned out via the TransactionRegistry.
 func (d *Dispatcher) processGRPCInput(ctx context.Context, stream *GRPCStream, input *pb.TunnelFrame, receivedAt time.Time) error {
-	_ = d.refreshAgentInventoryOnInboundActivity(ctx, stream.ID, d.StreamerIPInventory, stream.Session(), stream.Labels(), stream.Capabilities()) // superseded: the session's watch ends it
+	_ = d.refreshAgentInventoryOnInboundActivity(ctx, stream.ID, d.StreamerIPInventory, stream) // superseded: the session's watch ends it
 	logger := logging.With(d.Logger, "AgentID", stream.ID)
 	if input == nil || proto.Size(input) == 0 || len(input.TransactionId) == 0 {
 		logger.Debug("received a heartbeat")

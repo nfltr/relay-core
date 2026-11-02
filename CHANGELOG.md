@@ -86,6 +86,17 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- Presence across replicas (`spec/Presence.tla`, findings 8, 10, 13): a
+  label update (`UpdateAgentLabels`) renews its stream's own session
+  record (Seq, credential, account and services kept) and is refused from
+  a session a newer one superseded, instead of writing a record with no
+  session that a stale session's end then deleted while the agent stayed
+  connected; the renewal reads the labels and writes the record under the
+  stream's record lock, so it never writes labels an update replaced; a
+  renewal that finds no record while the agent's Seq counter went past its
+  session's is superseded (`directory.ErrSuperseded`) instead of listing
+  the agent again unannounced.
+
 - A make-before-break move no longer sends MOVE_DONE past a request
   routed to the old stream (the 500 ms settle timer is gone: the route
   leases end, then the session's consumer sends MOVE_DONE after what it

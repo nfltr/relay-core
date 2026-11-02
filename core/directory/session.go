@@ -34,7 +34,7 @@ import (
 // record's Seq, wins.
 
 // ErrSuperseded is returned by a renewal when a newer session of the agent
-// on another pod holds its record.
+// on another pod holds its record, or held it and has ended.
 var ErrSuperseded = errors.New("a newer session of this agent on another relay replica holds its record")
 
 // Session is one agent session as its record names it: when it started,
@@ -61,7 +61,8 @@ type SessionStore interface {
 	// PutSession writes the agent's record for this pod's session s. With
 	// renew it first reads the record and writes nothing, returning
 	// ErrSuperseded, when the record names another pod's session that is
-	// newer than s (Session.newer).
+	// newer than s (Session.newer), or there is none and the agent's Seq
+	// counter is past s's.
 	PutSession(ctx context.Context, agentID string, s Session, renew bool, labels map[string]string, capabilities []string, expiration time.Duration) error
 	// ClaimSession starts this pod's session s of the agent: it takes the
 	// agent's next Seq and writes the record (PutSession without renew).
@@ -95,13 +96,24 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 	if renew {
 		// ponytail: get-then-set, not atomic; a session that loses the
 		// microsecond race is corrected by the newer one's next renewal.
-		if v, err := d.inventory.Get(ctx, key); err == nil && v != nil && recordSession(v).newer(s) {
+		v, err := d.inventory.Get(ctx, key)
+		if err == nil && v != nil && recordSession(v).newer(s) {
 			if v.PodIP != GetPodIP() {
 				return ErrSuperseded
 			}
 			// A newer session of the agent here holds it: write nothing
 			// (lowering the Seq would let this one's DeleteSession take it).
 			return nil
+		}
+		// No record, but the agent's counter went past this session's
+		// Seq: a newer session claimed it and has ended. Writing it back
+		// would list the agent again with nothing announcing it
+		// (relay-core spec/README.md finding 13); this session ends and
+		// the agent's reconnect claims anew.
+		if (errors.Is(err, ErrNotFound) || err == nil && v == nil) && s.Seq != 0 {
+			if n, err := d.inventory.Incr(ctx, seqKey(agentID), 0, seqTTL); err == nil && n > s.Seq {
+				return ErrSuperseded
+			}
 		}
 	}
 	value := Value{

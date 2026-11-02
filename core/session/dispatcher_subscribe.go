@@ -403,7 +403,7 @@ func (d *Dispatcher) receiveFromHTTPAgent(ctx context.Context, stream *HTTPStrea
 // Data messages are enriched with metadata and forwarded via the broker.
 func (d *Dispatcher) processHTTPInput(ctx context.Context, stream *HTTPStream, input *pb.HTTPProxyResponse, receivedAt time.Time) error {
 	if !stream.moving.Load() {
-		_ = d.refreshAgentInventoryOnInboundActivity(ctx, stream.ID, d.IPInventory, stream.Session(), stream.Labels(), stream.Capabilities()) // superseded: the session's watch ends it
+		_ = d.refreshAgentInventoryOnInboundActivity(ctx, stream.ID, d.IPInventory, stream) // superseded: the session's watch ends it
 	}
 	logger := logging.With(d.Logger, "AgentID", stream.ID)
 	if input.Response == nil && input.GetMove() == pb.Move_MOVE_CONNECTED {

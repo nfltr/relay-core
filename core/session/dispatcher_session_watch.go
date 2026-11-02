@@ -57,7 +57,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 	var reannounce <-chan struct{}
 	if interval := d.inboundInventoryRefreshInterval(); agentID != "" && tracker != nil && inv != nil && d.Config.HeartbeatRecvThreshold > 0 && interval > 0 {
 		reannounce = d.reannounced()
-		if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, streamSession(tracker), streamLabels(tracker), streamCapabilities(tracker)); err != nil {
+		if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, tracker); err != nil {
 			return errSessionReplaced
 		}
 		ticker := time.NewTicker(interval)
@@ -137,7 +137,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			return err
 		case <-reannounce: // the store lost the records: rewrite now (gates lifted)
 			reannounce = d.reannounced()
-			if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, streamSession(tracker), streamLabels(tracker), streamCapabilities(tracker)); err != nil {
+			if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, tracker); err != nil {
 				if gaveUp == nil {
 					return errSessionReplaced // directory.ErrSuperseded
 				}
@@ -145,7 +145,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 				gaveUp = nil
 			}
 		case <-refresh:
-			if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, streamSession(tracker), streamLabels(tracker), streamCapabilities(tracker)); err != nil {
+			if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, tracker); err != nil {
 				if gaveUp == nil {
 					return errSessionReplaced // directory.ErrSuperseded
 				}

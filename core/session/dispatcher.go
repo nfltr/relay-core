@@ -573,6 +573,12 @@ func (d *Dispatcher) UpdateAgentLabels(agentID string, labels map[string]string,
 	if !ok {
 		return nil, false
 	}
+	// The update renews the stream's own session record with the new
+	// labels, under the record lock the renewal takes: a session a newer
+	// one superseded writes nothing, and no renewal writes the labels this
+	// replaces (spec/README.md findings 8, 10).
+	grpc.recordMu.Lock()
+	defer grpc.recordMu.Unlock()
 	next := map[string]string{}
 	if patch {
 		maps.Copy(next, grpc.Labels())
@@ -583,10 +589,14 @@ func (d *Dispatcher) UpdateAgentLabels(agentID string, labels map[string]string,
 		}
 	}
 	maps.Copy(next, grpc.connectLabels)
-	grpc.SetLabels(next)
-	if err := d.StreamerIPInventory.SetIPWithAgentInfo(context.Background(), agentID, next, grpc.Capabilities(), d.Config.HeartbeatRecvThreshold); err != nil {
+	err := renewAgentRecord(context.Background(), d.StreamerIPInventory, agentID, grpc.Session(), next, grpc.Capabilities(), d.Config.HeartbeatRecvThreshold)
+	if errors.Is(err, directory.ErrSuperseded) {
+		return nil, false
+	}
+	if err != nil {
 		d.Logger.Warn("label update: redis inventory failed", "agent_id", agentID, "error", err)
 	}
+	grpc.SetLabels(next)
 	d.Presence.labels(agentID, next)
 	return maps.Clone(next), true
 }
