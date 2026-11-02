@@ -72,6 +72,8 @@ expect() {
 # trace FILE: TLC on one recorded trace (spec/Trace.tla); 0 when accepted.
 trace() {
 	cfg=$work/$(basename "$1").cfg
+	endack=FALSE # the stream acked half closes (Up's "a", dataplane.EndAckHeader)
+	! head -1 "$1" | grep -q '"a":true' || endack=TRUE
 	cat >"$cfg" <<CFG
 CONSTANTS
     TraceFile = "$1"
@@ -84,7 +86,7 @@ CONSTANTS
     CanBreak = TRUE
     Fair = ""
     Aborts = TRUE
-    EndAck = FALSE
+    EndAck = $endack
     OutCap = 1000000
     Mutant = "none"
 INIT TraceInit
@@ -123,13 +125,14 @@ mutants)
 	expect AgentLink.cfg MCAgentLink.tla grant-early -e "$m"'grant-early"/'
 	expect AgentLink.cfg MCAgentLink.tla no-credit -e 's/Credit = TRUE/Credit = FALSE/' -e 's/MaxBytes = 2/MaxBytes = 3/' # a byte past the window
 	expect AgentLink.cfg MCAgentLink.tla lose-as-eof -e "$m"'lose-as-eof"/'
+	expect AgentLink.cfg MCAgentLink.tla lose-unacked-clean -e "$m"'lose-unacked-clean"/'
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'
 	expect Handoff.cfg Handoff.tla keep-conns -e "$m"'keep-conns"/'
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'
 	# The code's races (spec/README.md "Findings").
 	expect AgentLink.cfg MCAgentLink.tla inproc-closewrite -e "$m"'inproc-closewrite"/'
 	expect AgentLinkWrite.cfg MCAgentLink.tla inproc-enqueue-blocks -e "$m"'inproc-enqueue-blocks"/'
-	# The code as it is: no end acknowledgement yet (finding 2).
+	# A stream without the end acknowledgement (finding 2: an older agent or relay).
 	expect AgentLink.cfg MCAgentLink.tla race:clean-tail-lost -e 's/EndAck = TRUE/EndAck = FALSE/'
 	exit $fail
 	;;

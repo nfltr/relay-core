@@ -30,6 +30,7 @@ Step ==
       [] E.ev = "CloseWrite" -> CloseWrite("r", E.s)
       [] E.ev = "Abort" -> Abort("r", E.s)
       [] E.ev = "SendWin" -> gpend["r"][E.s] = E.n /\ SendWin("r", E.s)
+      [] E.ev = "SendAck" -> SendAck("r", E.s)
       [] E.ev = "Read" -> Read("r", E.s, E.n)
       [] E.ev = "Recv" -> Got(E) /\ Recv("r")
       [] E.ev = "Finish" -> Finish("r", E.s)
@@ -72,7 +73,7 @@ Unlogged ==
        \/ E.ev = "Recv" /\ ch["r"] = <<>> /\ ch["a"] = <<>> /\ LET s == E.s IN
             \/ AgentWrite(s) /\ UNCHANGED nw
             \/ AgentRead(s) /\ UNCHANGED nd
-            \/ (SendData("a", s) \/ SendWin("a", s) \/ CloseWrite("a", s) \/ Abort("a", s) \/ Finish("a", s))
+            \/ (SendData("a", s) \/ SendWin("a", s) \/ SendAck("a", s) \/ CloseWrite("a", s) \/ Abort("a", s) \/ Finish("a", s))
                /\ UNCHANGED <<nd, nw>>
        \/ E.ev = "Down" /\ (Break \/ Down("a")) /\ UNCHANGED <<nd, nw>>
 
