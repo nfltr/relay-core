@@ -4,11 +4,12 @@
 
 # spec.sh check|nightly|liveness|mutants|simulate|traces|trace F: the TLA+ models of
 # spec/ (spec/README.md).
-#   check     TLC on spec/AgentLink.cfg, spec/Handoff.cfg, spec/Move.cfg and
+#   check     TLC on spec/AgentLink.cfg (Refines left out), AgentLinkIface.cfg
+#             (Refines on fewer bytes), spec/Handoff.cfg, spec/Move.cfg and
 #             spec/Presence.cfg: invariants;
 #             spec/AgentLinkWrite.cfg: WriteReturns (CI).
-#   nightly   TLC on spec/AgentLinkLarge.cfg: AgentLink's invariants at
-#             larger sizes (nightly, weekly).
+#   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
+#             AgentLink's invariants at larger sizes (nightly, weekly).
 #   mutants   each Mutant must be caught, and each documented race found
 #             (spec/README.md "Findings") (CI).
 #   liveness  TLC on spec/AgentLinkLive.cfg, AgentLinkBreak.cfg,
@@ -124,13 +125,18 @@ linksession() {
 case ${1:-} in
 check)
 	linksession
-	run AgentLink.cfg MCAgentLink.tla
+	# AgentLink.cfg's Refines is the nightly's (it triples the run); in CI
+	# AgentLinkIface.cfg checks it on fewer bytes.
+	sed '/^PROPERTY Refines/d' spec/AgentLink.cfg >"$work/AgentLink.cfg"
+	run "$work/AgentLink.cfg" MCAgentLink.tla
+	run AgentLinkIface.cfg MCAgentLink.tla
 	run AgentLinkWrite.cfg MCAgentLink.tla
 	run Handoff.cfg Handoff.tla
 	run Move.cfg Move.tla
 	run Presence.cfg Presence.tla
 	;;
 nightly)
+	run AgentLink.cfg MCAgentLink.tla
 	run AgentLinkLarge.cfg MCAgentLink.tla
 	;;
 liveness)

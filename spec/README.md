@@ -202,7 +202,9 @@ sessions in three places and models them only by these guarantees:
 
 `AgentLink.tla` does not run on link sessions: it builds sessions of its
 own on a gRPC frame stream. `MCAgentLink.tla` maps it onto
-`LinkSession` and `AgentLink.cfg` checks `Refines` (`make spec`), so a
+`LinkSession` and `AgentLinkIface.cfg` checks `Refines` (`make spec`, one
+byte each way: on `AgentLink.cfg` it tripled CI's run; `AgentLink.cfg` and
+`AgentLinkLarge.cfg` check it in `make spec-nightly`, lane SPECTRIM), so a
 session placed on the frame streams gives what one placed on the agent
 link gives, and a layer above (`Handoff.tla`) can treat the two alike.
 The mapping: `w` the bytes written before this side's close (`finAt`
@@ -220,7 +222,7 @@ every AgentLink invariant left out).
 Frame streams give one guarantee link's interface does not: a session
 that ended cleanly at a side had its tail and FIN received by the peer
 (`NoSilentLoss`, the end acknowledgement of finding 2). Sessions on the
-agent link do not have it (finding 23).
+agent link get it from link's `peerlink.Join` (finding 23, fixed in link).
 
 ## Handoff.tla: agent link or frame streams
 
@@ -815,11 +817,16 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     streams, which their end acknowledgement fixed, open for the agent
     link. Severity: low-medium (silent from the client's point of view;
     the window is one round trip plus the write buffer, only when the
-    connection dies inside it). Next: a design here first (Handoff or a
-    model of `Join` over `LinkSession`): either link's interface gains an
-    acknowledged end (a session's `Done` after the peer read its FIN), or
-    the relay holds the agent's FIN from the client until the agent's
-    answer.
+    connection dies inside it). **Fixed in link** (lane SPECTRIM; the code
+    is link's `peerlink.Join`, so the design and model are link's
+    `spec/Join.tla`, README "Join's clean end"): after the session's
+    CloseWrite the joint syncs (`Session.Sync`: a ping after the FIN,
+    answered by the peer's Mux; no wire change), holds the agent's FIN
+    from the client meanwhile, and resets the client when the connection
+    dies first; the agent's target gets the same. `NoSilentLoss` there;
+    mutants `no-sync` (the code before) and `no-hold`; guard link
+    `TestJoinCleanEndOnlyOnceThePeerReadTheFIN`. In effect here once
+    relay-core and relay's client require that link version (promote-chain).
 
 The spec's `GiveUp` required no `MOVE_CONNECTED`; the code gives up on
 the timer regardless (review MV-3). Dropping the guard keeps every
