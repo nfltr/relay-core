@@ -61,8 +61,8 @@ expect() {
 	if tlc "$work/Mutant.cfg" "$mod" >"$work/m.out" 2>&1; then
 		echo "$name: not caught"
 		fail=1
-	elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* was violated)' "$work/m.out"; then
-		echo "$name: caught: $(grep -m1 -E '^Error: (Invariant|Temporal)' "$work/m.out" | sed 's/^Error: //') ($(grep -c '^State [0-9]*:' "$work/m.out") states deep, $(grep -E '^[0-9]+ states generated' "$work/m.out" | cut -d' ' -f1) states)"
+	elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* was violated|Action property .* is violated)' "$work/m.out"; then
+		echo "$name: caught: $(grep -m1 -E '^Error: (Invariant|Temporal|Action)' "$work/m.out" | sed 's/^Error: //') ($(grep -c '^State [0-9]*:' "$work/m.out") states deep, $(grep -E '^[0-9]+ states generated' "$work/m.out" | cut -d' ' -f1) states)"
 	else
 		echo "$name: TLC failed:"
 		tail -20 "$work/m.out"
@@ -105,8 +105,21 @@ CFG
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
 }
 
+# LinkSession.tla is link's (spec/README.md "The link session interface"):
+# once the required link module carries it, the copy here must be the same.
+linksession() {
+	dir=$(go list -m -f '{{.Dir}}' github.com/nfltr/link 2>/dev/null) || dir=
+	if [ -n "$dir" ] && [ -f "$dir/spec/LinkSession.tla" ]; then
+		tail -n +4 spec/LinkSession.tla | cmp -s - "$dir/spec/LinkSession.tla" || {
+			echo "spec/LinkSession.tla differs from $dir/spec/LinkSession.tla: copy link's"
+			exit 1
+		}
+	fi
+}
+
 case ${1:-} in
 check)
+	linksession
 	run AgentLink.cfg MCAgentLink.tla
 	run AgentLinkWrite.cfg MCAgentLink.tla
 	run Handoff.cfg Handoff.tla
@@ -133,6 +146,11 @@ mutants)
 	expect AgentLink.cfg MCAgentLink.tla no-hold -e "$m"'no-hold"/'
 	expect AgentLink.cfg MCAgentLink.tla abort-as-eof -e "$m"'abort-as-eof"/'
 	# Witnesses: the states the invariants above guard are reached.
+	# The same bugs break link's session interface alone (Refines, every
+	# invariant of AgentLink left out).
+	for b in fin-overtakes grant-early lose-as-eof abort-as-eof inproc-closewrite; do
+		expect AgentLink.cfg MCAgentLink.tla "interface:$b" -e "$m$b\"/" -e '/^INVARIANTS/,$d'
+	done
 	expect AgentLink.cfg MCAgentLink.tla witness:abort -e 's/    AbortTyped/    WitnessAbort/'
 	expect AgentLink.cfg MCAgentLink.tla witness:held-eof -e 's/    NoSilentLoss/    WitnessHeldEof/'
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'

@@ -185,6 +185,43 @@ whole close in a config whose property needs the apps to finish.
 - a stream without the end acknowledgement (finding 2: an older agent or
   relay): `race:clean-tail-lost` (`EndAck = FALSE`, `NoSilentLoss`).
 
+## The link session interface (LinkSession.tla, lane LINKIFACE)
+
+`LinkSession.tla` is github.com/nfltr/link's `spec/LinkSession.tla`, the
+guarantees a layer above may assume of a link session (link
+`spec/README.md` "The session interface"; link's `Link.tla` refines it).
+The copy here must equal the link module's once the required link
+version carries it (`make spec` compares them). relay-core uses link's
+sessions in three places and models them only by these guarantees:
+
+| where | which guarantees | spec |
+|---|---|---|
+| sessions on the agent link (`agentLink.open`, `ServeLinkTCP`, `peerlink.Join`) | a connection's end ends its sessions `lost` (`GConn`: Handoff's `cut`); an open either opens or is refused before any byte (`GSessions`); a dead link connection is detected within Interval + Timeout + 2 x Late, a live one never (link `Liveness.tla`: Handoff's `Silent`) | `Handoff.tla` (`LinkDrop`, `Silent`) |
+| bytes of a session on a data connection (`dataplane.Conn`, link v2) | ordered, credited, half close, typed ends (`GWrites`, `GReads`, `GEnds`) | none here: link's |
+| AgentLink's frame streams | none: a frame stream is gRPC, not a link session; it uses link's `Credit` (modelled in `AgentLink.tla`'s `cr`, `Thr`: the same algorithm as link's `Link.tla`) | `AgentLink.tla` refines the interface (below) |
+
+`AgentLink.tla` does not run on link sessions: it builds sessions of its
+own on a gRPC frame stream. `MCAgentLink.tla` maps it onto
+`LinkSession` and `AgentLink.cfg` checks `Refines` (`make spec`), so a
+session placed on the frame streams gives what one placed on the agent
+link gives, and a layer above (`Handoff.tla`) can treat the two alike.
+The mapping: `w` the bytes written before this side's close (`finAt`
+once it closed: a send that held credit before a whole close queues its
+frame after it, and the peer, which takes the close first, drops it),
+`d` the bytes received (`rcv`), `c` those read (`rcv - q`), `rend` the
+reader's end (`why`), `shut` this side's whole close; the relay's whole
+close is a Close (the agent's target reads EOF: finding 15, open) and the
+agent's an abort (the relay's reader reads a reset); a stream has no
+GOAWAY (`ga` FALSE: its end is `Break`). `make spec-mutants` checks that
+`fin-overtakes`, `grant-early`, `lose-as-eof`, `abort-as-eof` and
+`inproc-closewrite` each fail the interface alone (`interface:<mutant>`,
+every AgentLink invariant left out).
+
+Frame streams give one guarantee link's interface does not: a session
+that ended cleanly at a side had its tail and FIN received by the peer
+(`NoSilentLoss`, the end acknowledgement of finding 2). Sessions on the
+agent link do not have it (finding 23).
+
 ## Handoff.tla: agent link or frame streams
 
 ### What is modelled
@@ -234,7 +271,7 @@ how its bytes end is AgentLink's and link's.
 
 Liveness (`HandoffLive.cfg`): `Placed`: an arriving session is placed or
 refused (the dial wait is bounded); `SilentEnds`: a primary whose link
-went silent ends (finding 16).
+went silent ends (finding 23).
 
 Mutants (`make spec-mutants`): `attach-ended` (`PlacedOnLive`),
 `keep-conns` (`NoOrphanLink`), `wait-forever` (`Placed`),
@@ -765,6 +802,24 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     `waitIdle`. **Fixed**: it leaves the rotation (its open sessions run
     on, as a takeover's). `NoTCPAfterMove`; guard
     `TestConnectTCPMovingAgentKeepsOldStream`.
+
+23. **A session on the agent link can end cleanly at the client while its
+    tail is lost** (design; stating link's interface, LINKIFACE). Link's
+    sessions do not guarantee `NoSilentLoss` (link `spec/README.md` "The
+    session interface": `CleanEndReceived` is violated by a crash in link's
+    `Link.cfg`): `peerlink.Join` passes the agent's FIN to the client and
+    ends the client's connection cleanly once both directions ended, while
+    the client's last bytes and FIN may still be in the link connection's
+    write buffer; if that connection dies then, the agent's target is cut
+    (`lost`) and the client saw a clean end. Finding 2 for the frame
+    streams, which their end acknowledgement fixed, open for the agent
+    link. Severity: low-medium (silent from the client's point of view;
+    the window is one round trip plus the write buffer, only when the
+    connection dies inside it). Next: a design here first (Handoff or a
+    model of `Join` over `LinkSession`): either link's interface gains an
+    acknowledged end (a session's `Done` after the peer read its FIN), or
+    the relay holds the agent's FIN from the client until the agent's
+    answer.
 
 The spec's `GiveUp` required no `MOVE_CONNECTED`; the code gives up on
 the timer regardless (review MV-3). Dropping the guard keeps every
