@@ -412,8 +412,10 @@ the agent's `waitIdle` bounds).
 two replicas sharing the directory and a Redis pub/sub bus
 (relay-server `redisbus`), with the label update (`UpdateAgentLabels`),
 the record renewal (`dispatcher_inventory_refresh.go`) and one watcher
-(github.com/nfltr/relay `client/presenceclient` `Wait`, then relay-server
-`ListAgents`: the cursor first, then the snapshot from `myAgents`). The
+(github.com/nfltr/relay `client/presenceclient` `Wait`, then a re-list:
+the cursor first, then the snapshot from relay-server `myAgents`, through
+presence `ListAgents` or `/api/v1/my/agents`, which the nfltr hub's slot
+wait reads; `Snap` is either). The
 feed is a wake signal, not an event log: no consumer applies events, a
 woken watcher re-lists. So the guarantee checked is `NoSilentStale`: a
 watcher whose snapshot differs from what a list answers now is owed a
@@ -430,54 +432,92 @@ it), exact for the wake: the watcher only asks "anything after my
 cursor?". One watcher suffices (watchers only observe); with it on `r1`
 the agent's stream is local or remote by where it connects.
 
+Scope: every agent `myAgents` lists. `ConnectAgentTunnel` agents (the
+agents the nfltr hub places work on), `ConnectHTTP` agents and TCP-only
+(`ConnectTCP`) agents take the same `Connect` and `End` actions: each
+writes its record, then publishes its up; each releases, then publishes
+its down once no session of it is listed here (finding 29).
+The relay-core fixes of findings 8, 10, 13 and 25-27 reach the hosted
+relay with the next promote-chain round (relay-server requires
+relay-core v0.7.2, which has none of them; review r2 F8).
+
 | action | Go |
 |---|---|
-| `Connect`, `End`, `Supersede` | `ConnectAgentTunnel`: `claimAgentRecord`, `notifyUpstreamRegistered`; its teardown `releaseAgentRecord`, `publishDeparture`; a renewal's `directory.ErrSuperseded` |
+| `Connect`, `End`, `Supersede` | `ConnectAgentTunnel`: `claimAgentRecord`, `notifyUpstreamRegistered`; `ConnectHTTP` (`Presence.up` after `Agents.Store`; `DeregisterAgent`), `ConnectTCP`; their teardowns `releaseAgentRecord`, `departed`, `publishDeparture`; a renewal's `directory.ErrSuperseded` |
 | `Renew` (`RenewWrite`) | `refreshAgentInventoryOnInboundActivity`, `renewAgentRecord`, `PutSession` renew |
 | `Update` (`UpdateWrite`) | `UpdateAgentLabels` (relay-server `serveUpdateLabels`) |
-| `Publish`, `Deliver` | `presenceOutbox`, `BindBus`'s subscriber: `bump` |
+| `Publish`, `PublishFail`, `Deliver` | `presenceOutbox` (`publish`, `requeue` on a failed send), `BindBus`'s subscriber: `bump` |
 | `Drop`, `Resubscribe` | Redis dropping a subscriber, go-redis resubscribing; redisbus's empty payload, `presenceFeed.resync` |
-| `Wake`, `Cursor`, `Snap` | `presenceFeed.Watch` answering, `ListAgents` (`Presence.Cursor`, `myAgents`) |
-| `CrashR`, `Expire` | a replica gone without its teardown; its records' TTL |
+| `Wake`, `Cursor`, `Snap` | `presenceFeed.Watch` answering, `ListAgents` (`Presence.Cursor`, `myAgents`) or `handleMyAgents` |
+| `UpdateFail`, `EndFail`, `Lose` | a failed record write (`UpdateAgentLabels`, `releaseAgentRecord`); the store losing a live session's record (Redis restarted empty, renewals failing past the TTL; relay-server `inventory_epoch.go`: `reannounceAll`) |
+| `LateDown` | `departed`'s second down a TTL after a failed release |
+| `Sweep` | relay-server `inventory_epoch.go` `noteReplicas`, `presence_resync.go` `resyncBus` |
+| `CrashR`, `Expire` | a replica gone without its teardown; a record's TTL (its replica gone, or a failed release's leftover) |
 
 The design (`Presence.cfg`, `make spec`, 17k states): a label update is a
 fenced renewal of the stream's own session (refused when superseded), and
 a renewal and an update write the record under the stream's record lock;
-every directory write that changes a listing is published after it; a
+every directory write that changes a listing is published after it (a
+write that failed, or a record the store lost, once a later renewal
+lands; a release that failed, again once its record's TTL passed); a
 renewal finding no record while the agent's Seq counter is past its
 session's is superseded (it does not write back a record a newer session
 left); a list whose directory read fails answers Unavailable, not the
-local agents only; the bus never drops a payload it could not hand over
-without a resync. Mutants (`make spec-mutants`), each caught:
-`unfenced-label-write` (finding 8), `partial-list` (9), `renew-race`
-(10), `drop-no-resync` (11), `renew-resurrects` (13),
-`publish-before-write`, `resync-early` (the resync before the
-subscription is back), `resync-ignored` (the feed ignoring the bus's
-resync signal: the bug a0154c2 fixed); `race:crash-expiry` (`Crash = TRUE`, finding 12,
-open). `COVERAGE=1` takes every action but those only a mutant or the
-race enables (`RenewWrite`, `UpdateWrite`, `CrashR`, `Expire`).
-Witnesses, each violated: `WitnessStale` (a watcher's snapshot stale,
-owed a wake), `WitnessRemoteUpdate` (a label update made on the other
-replica reaches the watcher's snapshot).
+local agents only, on either list (presence `ListAgents` and
+`/api/v1/my/agents`); a publish that fails stays pending and is sent
+again (`PublishFail` is a stutter in the design); the bus never drops a
+payload it could not hand over without a resync. Witnesses, each violated, so `NoSilentStale` is not vacuous:
+`WitnessStale` (a watcher's snapshot stale, owed a wake),
+`WitnessRemoteUpdate` (a label update made on the other replica reaches
+the watcher's snapshot). `PresenceLive.cfg` (`make spec-liveness`, 57 s) checks `Woken`
+under weak fairness on the feed's steps (`Publish`, `Deliver`,
+`Resubscribe`, `Wake`, `Cursor`, `Snap`): a stale watcher is woken, or
+the listing comes back to its snapshot. Mutants (`make spec-mutants`),
+each caught: `unfenced-label-write` (finding 8), `partial-list` (9),
+`partial-my-agents` (24), `renew-race` (10), `drop-no-resync` (11),
+`renew-resurrects` (13), `publish-drop` (25), `publish-before-write`,
+`resync-early` (the resync before the subscription is back),
+`resync-ignored` (the feed ignoring the bus's resync signal: the bug
+a0154c2 fixed), `silent-rewrite`, `no-late-down` (27);
+on `PresenceLive.cfg` (`Woken`): `subscriber-stops` and `outbox-stops`
+(the subscriber or the outbox gone while the replica drains and serves:
+the safety config cannot see them, finding 26) and `publish-drop`;
+`no-crash-resync` (`Crash = TRUE`, finding 12). `PresenceLarge.cfg`
+(`make spec-nightly`) checks the design with a crash. `COVERAGE=1` takes
+every action but those only a mutant or a larger config enables
+(`PublishFail`, `RenewWrite`, `UpdateWrite`; `CrashR`, `Sweep` in
+`PresenceLarge.cfg`).
 
 ### Environment assumptions
 
 | assumption | source |
 |---|---|
-| Redis pub/sub delivers at most once: a message published while a subscriber is disconnected, or past its output buffer, is lost with the subscription | Redis docs "Pub/Sub" (delivery semantics); `client-output-buffer-limit pubsub` in redis.conf |
-| A subscription's confirmation comes before any message published after it; go-redis resubscribes after a reconnect and reports it | Redis protocol (`SUBSCRIBE` reply order); go-redis `PubSub` reconnect; relay-server `redisbus` |
-| The directory fences a session's writes by Seq; the newest session holds the record; a record without renewal expires by its TTL | relay-server `spec/Replicas.tla`; `directory.SessionStore` |
-| A replica may crash without its teardown; its records stay until their TTL (finding 12, open) | `CrashR`, `Expire` |
+| Redis pub/sub is at most once: a subscriber gets a message only while subscribed; nothing is kept for one that was away | Redis docs, "Pub/Sub" (delivery semantics) |
+| Messages of one publisher reach a subscriber in publish order | Redis docs, "Pub/Sub" (one connection, in order) |
+| PUBLISH can fail or time out on the publisher alone while peers stay subscribed, and succeeds again eventually (`PresenceLive.cfg`) | go-redis `Publish` error; redisbus `Bus.Publish` |
+| A dropped subscription is followed by a resubscription, whose confirmation redisbus turns into a resync (empty payload), in order before later messages | go-redis `PubSub` reconnect; redisbus `Resync` |
+| A directory write may fail (`MaxFail`); the store may lose a live session's record; relay-server's epoch tick (every 5 s) then has every session here rewrite its record (`Lose` sets `stale` at once: the 5 s gap is unmodelled) | relay-server `inventory_epoch.go`, `Replicas.tla` |
+| A record expires at its TTL after its last write: a timer one TTL after a failed release fires after it (`LateDown` waits for `Expire`) | Redis `EXPIRE`; `departed` |
+| The newest session (by Seq) holds the record; an older one is superseded at its next renewal | `Move.tla`, relay-server `Replicas.tla` |
+| A replica crash takes its streams with no teardown; a graceful stop runs the teardowns with the outbox and the subscriber still bound (until the composition's `After`, finding 26), so it is a sequence of `End`s | `CrashR`; compose `Composition.Run`, relay-server `Composition` |
+| A crashed replica's marker expires within 30 s (`inventoryEpochTTL`); its records within their TTL of its last renewal, so a resync one TTL after another replica sees the marker gone follows them (`Sweep` waits for `Expire`); a replica starting resyncs once a TTL after its first look | relay-server `inventory_epoch.go` |
+| The watcher's cursor, its long-poll and its re-list reach one replica (another one answers reset: a re-list, safe since the write precedes the publish) | presence.proto; review F10 |
 | A watcher re-lists on any wake (no event is applied); `ListAgents` takes the cursor before the snapshot | relay `client/presenceclient` `Wait`; relay-server `my_agents.go` |
 
 ### Code map (drift check)
 
 | file | what the spec models |
 |---|---|
-| `core/session/presence.go` | `presenceFeed` (`bump`, `resync`, `Cursor`, `Watch`, `BindBus`), `presenceOutbox`, `notifyUpstreamRegistered` |
-| `core/session/dispatcher.go` | `UpdateAgentLabels`, `publishDeparture` |
-| `core/session/dispatcher_inventory_refresh.go` | `claimAgentRecord`, `renewAgentRecord`, `releaseAgentRecord`, `refreshAgentInventoryOnInboundActivity` |
-| relay-server `redisbus`, `presence.go`, `my_agents.go`; relay `client/presenceclient` | the bus, the gateway, `ListAgents`, the watcher |
+| `core/session/presence.go` | `presenceFeed` (`bump`, `resync`, `Watch`, `Cursor`), `BindBus`, `presenceOutbox` (`add`, `run`, `publish`, `requeue`), `notifyUpstreamRegistered` |
+| `core/session/dispatcher.go` | `UpdateAgentLabels`, `publishDeparture`, `DeregisterAgent` (`ConnectHTTP`'s End) |
+| `core/session/dispatcher_inventory_refresh.go` | `claimAgentRecord`, `renewAgentRecord`, `releaseAgentRecord`, `refreshAgentInventoryOnInboundActivity`, `rewriteRecord`, `departed` |
+| `core/session/dispatcher_grpc.go` | `ConnectAgentTunnel`: its record, its up, its teardown |
+| `core/session/dispatcher_subscribe.go` | `ConnectHTTP`'s Connect (`Presence.up` after `Agents.Store`) |
+| `core/session/dispatcher_tcp.go` | `ConnectTCP`'s Connect and End (`claimAgentRecord`, `departed`) |
+| `core/session/dispatcher_session_watch.go` | the reannounce case (`rewriteRecord`) |
+| `core/session/dispatcher_stale_agents.go` | `disconnectAgent` (the reaper's End) |
+| `core/directory/session.go` | `PutSession`, `DeleteSession` |
+| relay-server `redisbus`, `presence.go`, `my_agents.go`, `server_run.go`, `inventory_epoch.go`, `presence_resync.go`; relay `client/presenceclient` | the bus, the gateway, `ListAgents`, `handleMyAgents`, the bus's context, `noteReplicas`, `resyncBus`, the watcher |
 
 ## Trace validation
 
@@ -606,10 +646,12 @@ rebalancing move gave up, a drain's `stopNow` asks the agent again
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 24) | 205,995 (47,884) | | 2-4 s |
 | `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain (findings 25, 26) | 69,096 (16,515) | | 3 s |
-| `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription | 90,105 (16,971) | | 4 s CPU (12 s at load 15) |
+| `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription, 1 failed write | 604,624 (100,778) | | 15 s at load 14 (2026-11-03; 4 s before failed writes) |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
 | `HandoffLive.cfg` | `Placed` | | | 7 s |
+| `PresenceLive.cfg` | `Woken`, as `Presence.cfg` with a crash | 1,438,047 (244,286) | | 57 s (2026-11-03) |
+| `PresenceLarge.cfg` (`make spec-nightly`) | `NoSilentStale`, as `Presence.cfg` with a crash | 1,438,047 (244,286) | | 26 s (2026-11-03) |
 | `make spec-mutants` | 9 mutants, each caught (on the CI config) | | 5-11 | 14 s |
 | `make spec-traces` | 16 AgentLink, 64 Move, 12 Handoff traces, all accepted; 14 reject fixtures rejected | | | 6 min 38 s (load 15-35) |
 
@@ -791,13 +833,18 @@ acknowledgement, and `inproc-enqueue-blocks`).
     resyncing bus never blocks go-redis; a payload it cannot hand over is
     replaced by a resync. Guard: relay-server `TestBusOverflowIsAResync`.
 12. **A crashed replica's agents vanish without a wake** (model,
-    `race:crash-expiry`, open). A replica that dies publishes no down;
-    its records expire at their TTL (as does a record whose renewals
-    failed past it), publishing nothing; a watcher that listed the agent
-    keeps it until some other change. Severity: medium (an agent that
-    reconnects elsewhere is announced by its new up). Next: publish on a
-    record's expiry (Redis keyspace `expired` notifications into the bus,
-    or the replica link's peer loss plus a resync a TTL later).
+    `no-crash-resync`, was `race:crash-expiry`). A replica that dies
+    publishes no down; its records expire at their TTL, publishing
+    nothing; a watcher that listed the agent kept it until some other
+    change. Severity: medium (an agent that reconnects elsewhere is
+    announced by its new up). Fixed in relay-server (lane PRESFIX): every
+    replica that knew it (its epoch marker lived at its last look,
+    whichever replica pruned it) resyncs its own feed one record TTL
+    after it is gone, and once a TTL after its own first look; the resync
+    is an empty payload into its bus subscription (`resyncBus`). Model:
+    `Sweep`, `PresenceLarge.cfg` (nightly). Guard: relay-server
+    `TestEpochResyncsPresenceAfterAReplicaIsGone`. A record whose
+    renewals failed past its TTL on a live replica is finding 27's.
 13. **An older session could write back a record a newer one left**
     (model, `renew-resurrects`). A session superseded by a newer one on
     another replica renews when that newer one has already ended and
@@ -983,3 +1030,76 @@ overtakes data; a session the stream ended under ends `lost` (an RST)
 unless the peer had closed its side; a session is never placed on a
 primary that ended (`TestOpenWokenByItsStreamsEndIsRefused`'s rule) and a
 relay link connection never outlives every primary holding its token.
+24. **The hub's re-list answered the local agents only when the directory
+    read failed** (review r2 F1; model `partial-my-agents`; relay-server
+    `handleMyAgents`). Finding 9's fix covered presence `ListAgents`, but
+    the nfltr hub's slot wait re-reads `/api/v1/my/agents` after
+    `presenceclient.Wait`, and that answered 200 with this replica's
+    agents (the inventory error dropped; the endpoint registry's error
+    not even reported): the hub believed the other replicas' workers gone
+    with its cursor already advanced. Severity: high. Fixed in
+    relay-server: `/api/v1/my/agents` answers 503 when the directory or
+    the endpoint registry does not answer. Guard: relay-server
+    `TestHandleMyAgents_FailsWhenTheDirectoryDoes`.
+25. **A failed PUBLISH was dropped with no resync** (review r2 F2; model
+    `publish-drop`). The outbox took the change before the send and
+    ignored its error; peers' subscriptions never broke, so none
+    resynced: their watchers stayed stale until an unrelated change.
+    Severity: high. Fixed: a failed send goes back into the outbox
+    (folded under any newer change of the agent) and is sent again after
+    a backoff (`requeue`). Guard: `TestPresenceOutboxRepublishesAFailedSend`.
+27. **Failed directory writes changed listings with no wake** (review r2
+    F5; model `UpdateFail`, `EndFail`, `Lose`; mutants `silent-rewrite`,
+    `no-late-down`). A label update whose write failed was published
+    while the record kept the old labels, and the renewal that later
+    wrote them published nothing; a record the store lost (Redis
+    restarted empty, renewals failing past the TTL) was written back by
+    the next renewal with no wake; a release that failed published its
+    down while the record still listed the agent everywhere until its TTL,
+    whose expiry publishes nothing. Severity: medium. Fixed: a failed
+    write or a lost record (relay-server's reannounce) marks the stream's
+    record stale, and the renewal that lands next publishes an up; a
+    failed update also asks for the reannounce (`RecordWriteFailed`); a
+    failed release publishes a second down one TTL later (`departed`).
+    Guards: `TestPresenceRecordRewriteIsPublished`,
+    `TestPresenceFailedReleaseDownsAgainAfterTheTTL`.
+26. **Liveness was not checked** (review r2 F7): `Owed` was a promise
+    nothing discharged; a design whose publish or subscription never
+    resumes passed. Fixed in the model: `PresenceLive.cfg` (`Woken`),
+    mutants `subscriber-stops`, `outbox-stops` and `publish-drop` on it.
+    Its code case (review r2 F3): at a graceful stop the outbox and the
+    subscriber ended with the run's context (SIGTERM), so downs and label
+    changes during the drain reached no peer and the draining replica's
+    watchers stopped hearing peers (the code was `outbox-stops` and
+    `subscriber-stops` for that window). Severity: medium. Fixed in
+    relay-server: the bus is bound to a context that ends at the
+    composition's `After`. Guard: relay-server
+    `TestPresenceBusOutlivesTheDrain`.
+28. **An older session's down folded a newer session's up away** (review
+    r2 F6, code; not in the model: one stream per replica, review F9).
+    On a same-replica reconnect the older session's `CompareAndDelete`
+    can precede the newer one's `Store`, so the feed got the newer up and
+    then the older down for a connected agent; the outbox folded the pair
+    into a down for every peer, and a peer's nfltr hub that applies ups
+    (`hubArrivals`, `awaitLaunched`) missed the arrival until its
+    deadline. Severity: medium. Fixed: no down while a session of the
+    agent is listed here (`publishDeparture`). Guard:
+    `TestPresenceReplacedSessionPublishesNoDown`. Open (F6): the feed's
+    contract is a wake, but nfltr's `hubArrivals` applies `up` contents
+    (labels, E2EE peer facts), and an older session's up delayed in one
+    replica's outbox can reach a peer after a newer one's from another;
+    next: nfltr re-lists on an up (or the event carries the session Seq,
+    a relay proto change), and the model gains same-replica replacement
+    with finding 14 (F9).
+29. **HTTP-tunnel and TCP-only agents never moved the feed** (review r2
+    F4, code: these agents are the model's `Connect` and `End`, which
+    their code did not take). `myAgents` lists them (the TCP agent through
+    its record on every replica), but neither published an up or a down,
+    so a watcher's snapshot held a departed one, or missed an arrived
+    one, with nothing to wake it. Severity: medium. Fixed: `ConnectHTTP`
+    publishes an up once its stream is in `Agents` and a down in
+    `DeregisterAgent`; `ConnectTCP` an up after its record and a down
+    through `departed` (with finding 27's second down); no down while
+    another session of the agent is listed here. Guard:
+    `TestPresenceHTTPAndTCPAgentsPublish`. Open: an HTTP agent whose
+    release failed publishes no second down.

@@ -9,11 +9,12 @@
 #             spec/Presence.cfg: invariants;
 #             spec/AgentLinkWrite.cfg: WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
-#             AgentLink's invariants at larger sizes (nightly, weekly).
+#             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
+#             Presence's with a crash (nightly, weekly).
 #   mutants   each Mutant must be caught, and each documented race found
 #             (spec/README.md "Findings") (CI).
 #   liveness  TLC on spec/AgentLinkLive.cfg, AgentLinkBreak.cfg,
-#             HandoffLive.cfg and MoveLive.cfg (weekly).
+#             HandoffLive.cfg, MoveLive.cfg and PresenceLive.cfg (weekly).
 #   simulate  random walks on two sessions with larger sizes (weekly).
 #   traces    the core/session tests in TRACE_TESTS run with -tags
 #             relaytrace; each stream's trace checked against spec/Trace.tla,
@@ -214,12 +215,14 @@ check)
 nightly)
 	run AgentLink.cfg MCAgentLink.tla
 	run AgentLinkLarge.cfg MCAgentLink.tla
+	run PresenceLarge.cfg Presence.tla
 	;;
 liveness)
 	run AgentLinkLive.cfg MCAgentLink.tla
 	run AgentLinkBreak.cfg MCAgentLink.tla
 	run HandoffLive.cfg Handoff.tla
 	run MoveLive.cfg Move.tla
+	run PresenceLive.cfg Presence.tla
 	;;
 mutants)
 	m='s/Mutant = "none"/Mutant = "'
@@ -271,14 +274,18 @@ mutants)
 	expect Move.cfg Move.tla witness:remote -e 's/^    RunOnce$/    WitnessRemote/'
 	expect Move.cfg Move.tla witness:owner -e 's/^    OneOwner$/    WitnessOwner/'
 	expect Move.cfg Move.tla witness:tcp -e 's/^    NoTCPAfterMove$/    WitnessTCP/'
-	# Presence.tla: the bugs the design prevents (findings 8-11, 13) and
-	# the open race of a crashed replica's records (finding 12).
-	for b in unfenced-label-write partial-list renew-race drop-no-resync renew-resurrects publish-before-write resync-early resync-ignored; do
+	# Presence.tla: the bugs the design prevents (findings 8-13, 24-27).
+	for b in unfenced-label-write partial-list partial-my-agents renew-race drop-no-resync renew-resurrects publish-before-write resync-early resync-ignored publish-drop silent-rewrite no-late-down; do
 		expect Presence.cfg Presence.tla "$b" -e "$m$b\"/"
 	done
-	expect Presence.cfg Presence.tla race:crash-expiry -e 's/Crash = FALSE/Crash = TRUE/'
 	expect Presence.cfg Presence.tla witness:stale -e 's/^    NoSilentStale$/    WitnessStale/'
 	expect Presence.cfg Presence.tla witness:remote-update -e 's/^    NoSilentStale$/    WitnessRemoteUpdate/'
+	# The wake is paid only if the feed's steps go on (finding 26); no
+	# failed writes, to keep these quick.
+	for b in subscriber-stops outbox-stops publish-drop; do
+		expect PresenceLive.cfg Presence.tla "live:$b" -e "$m$b\"/" -e 's/MaxFail = 1/MaxFail = 0/' -e 's/Crash = TRUE/Crash = FALSE/'
+	done
+	expect Presence.cfg Presence.tla no-crash-resync -e "$m"'no-crash-resync"/' -e 's/Crash = FALSE/Crash = TRUE/'
 	exit $fail
 	;;
 simulate)
