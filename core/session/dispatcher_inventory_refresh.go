@@ -41,6 +41,15 @@ func streamRecordLock(tracker HeartbeatTracker) *sync.Mutex {
 	return nil
 }
 
+// streamRecordStale is the stream's stale-record flag, read and written
+// under streamRecordLock (nil when the tracker has none).
+func streamRecordStale(tracker HeartbeatTracker) *bool {
+	if l, ok := tracker.(interface{ staleRecord() *bool }); ok {
+		return l.staleRecord()
+	}
+	return nil
+}
+
 // streamSession is the session a tracker's stream is (zero when unknown).
 func streamSession(tracker HeartbeatTracker) directory.Session {
 	if s, ok := tracker.(interface{ Session() directory.Session }); ok {
@@ -138,7 +147,15 @@ func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context,
 		lock.Lock()
 		defer lock.Unlock()
 	}
-	err := renewAgentRecord(ctx, inv, agentID, s, streamLabels(tracker), streamCapabilities(tracker), recvThreshold)
+	labels, caps := streamLabels(tracker), streamCapabilities(tracker)
+	err := renewAgentRecord(ctx, inv, agentID, s, labels, caps, recvThreshold)
+	stale := streamRecordStale(tracker) // under the record lock
+	if err == nil && stale != nil && *stale {
+		// The other replicas listed what the failed write or the lost
+		// record left: wake their watchers (spec/README.md finding 27).
+		*stale = false
+		d.Presence.up(agentID, labels, caps)
+	}
 	if errors.Is(err, directory.ErrSuperseded) {
 		d.Logger.Info("agent reconnected to another pod: ending its old session here", "AgentID", agentID)
 		return err
@@ -156,6 +173,9 @@ func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context,
 			// later (inventory_epoch.go).
 			d.InventoryRefreshByAgentID.Delete(agentID)
 			d.RecordWriteFailed.Store(true)
+			if stale != nil {
+				*stale = true
+			}
 		}
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			metrics.RegisterUpstreamHeartbeatFailure("setip_warn")
@@ -172,4 +192,31 @@ func (d *Dispatcher) agentInventoryRegistrationContext(streamCtx context.Context
 		return streamCtx
 	}
 	return context.Background()
+}
+
+// rewriteRecord renews the stream's record when the store may have lost it
+// (reannounceAll): the renewal that writes it publishes (finding 27).
+func (d *Dispatcher) rewriteRecord(ctx context.Context, agentID string, inv directory.IPInventory, tracker HeartbeatTracker) error {
+	if lock, stale := streamRecordLock(tracker), streamRecordStale(tracker); lock != nil && stale != nil {
+		lock.Lock()
+		*stale = true
+		lock.Unlock()
+	}
+	return d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, tracker)
+}
+
+// departed releases the agent's record for session s, then publishes its
+// down. A release that failed leaves the record, listed by every replica
+// until its TTL, whose expiry publishes nothing: a second down once the TTL
+// passed wakes their watchers to re-list it gone (spec/README.md finding 27).
+func (d *Dispatcher) departed(agentID string, s directory.Session, stream Streamer) {
+	if err := releaseAgentRecord(context.Background(), d.StreamerIPInventory, agentID, s); err != nil {
+		d.Logger.Error("failed to delete agentID dispatcher addr from cache", "AgentID", agentID, "error", err)
+		if ttl := d.Config.HeartbeatRecvThreshold; ttl > 0 {
+			time.AfterFunc(ttl+time.Second, func() { d.publishDeparture(agentID, stream) })
+		}
+	} else {
+		d.Logger.Debug("deleted agentID dispatcher addr from cache", "AgentID", agentID)
+	}
+	d.publishDeparture(agentID, stream)
 }

@@ -147,10 +147,13 @@ func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Sessi
 	// store compares and deletes in one step.
 	key := d.getCacheKey(agentID)
 	v, err := d.inventory.Get(ctx, key)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err // the record may stay: the caller's release failed (relay-core spec/README.md finding 27)
+	}
 	// A record without a Seq here (a renewal by SetIP: the relay's own
 	// agent) is deleted by its pod, as DeleteIPs does.
-	if err != nil || v == nil || v.PodIP != GetPodIP() || (v.Seq != 0 && v.Seq != s.Seq) {
-		return nil // gone (ErrNotFound), or another session's
+	if v == nil || v.PodIP != GetPodIP() || (v.Seq != 0 && v.Seq != s.Seq) {
+		return nil // gone, or another session's
 	}
 	if _, err := d.inventory.SRem(ctx, d.activeAgentSetKey(), agentID); err != nil {
 		return err

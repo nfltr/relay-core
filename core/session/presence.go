@@ -26,7 +26,7 @@ const presenceHistory = 256
 
 var presenceEvents = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "nfltr_relay_presence_events_total",
-	Help: "Presence changes (up, down, labels) published on the relay presence feed, by origin (local, peer; folded: a local change not yet sent to peers that folded into the agent's next); change resync: the bus's subscription was re-established, a new feed epoch makes every watcher re-list.",
+	Help: "Presence changes (up, down, labels) published on the relay presence feed, by origin (local, peer; folded: a local change not yet sent to peers that folded into the agent's next; failed: a send to peers that failed and is retried); change resync: the bus's subscription was re-established, a new feed epoch makes every watcher re-list.",
 }, []string{"change", "origin"})
 
 // PresenceBus carries presence events between relay replicas sharing one
@@ -334,9 +334,35 @@ func (o *presenceOutbox) run(ctx context.Context, bus PresenceBus) {
 	}
 }
 
+// requeue puts back ev, whose send failed, ahead of the others. A change
+// of its agent queued since is newer and wins, folded as add folds it: a
+// label change updates the failed up, is dropped after a failed down.
+func (o *presenceOutbox) requeue(ev *presencev1.PresenceEvent) {
+	id := ev.GetAgentId()
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	newer, ok := o.pending[id]
+	switch {
+	case !ok:
+		o.order = append([]string{id}, o.order...)
+		o.pending[id] = ev
+	case newer.GetLabels() != nil && ev.GetUp() != nil:
+		ev.GetUp().Labels = newer.GetLabels().GetLabels()
+		o.pending[id] = ev
+	case newer.GetLabels() != nil && ev.GetDown() != nil:
+		o.pending[id] = ev
+	}
+}
+
+// presenceRetryMin and presenceRetryMax bound the wait after a failed send.
+const presenceRetryMin, presenceRetryMax = 100 * time.Millisecond, 5 * time.Second
+
 // publish sends the pending changes, in order, until none is left or ctx
-// ends; each send is bounded at 5 s.
+// ends; each send is bounded at 5 s. A failed send is put back and sent
+// again after a backoff: the peers' subscriptions did not break, so no
+// resync would tell them (spec/README.md finding 25).
 func (o *presenceOutbox) publish(ctx context.Context, bus PresenceBus) {
+	backoff := presenceRetryMin
 	for ctx.Err() == nil {
 		o.mu.Lock()
 		if len(o.order) == 0 {
@@ -354,7 +380,20 @@ func (o *presenceOutbox) publish(ctx context.Context, bus PresenceBus) {
 			continue
 		}
 		pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_ = bus.Publish(pubCtx, payload)
+		err = bus.Publish(pubCtx, payload)
 		cancel()
+		if err == nil {
+			backoff = presenceRetryMin
+			continue
+		}
+		presenceEvents.WithLabelValues(presenceChangeName(ev), "failed").Inc()
+		o.requeue(ev)
+		t := time.NewTimer(backoff)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+		}
+		backoff = min(2*backoff, presenceRetryMax)
 	}
 }

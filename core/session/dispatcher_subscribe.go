@@ -231,6 +231,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 
 	agentStream.takeover = &sessionTakeover{keyHash: apiKeyHash, replace: func() { cancel(errSessionReplaced) }, ended: ended}
 	d.Agents.Store(agentID, agentStream)
+	d.Presence.up(agentID, agentStream.labels, agentStream.capabilities)
 	if d.OnAgentMetadata != nil {
 		caps := agentStream.capabilities
 		if len(caps) == 0 {

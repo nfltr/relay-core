@@ -144,7 +144,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			return err
 		case <-reannounce: // the store lost the records: rewrite now (gates lifted)
 			reannounce = d.reannounced()
-			if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, tracker); err != nil {
+			if err := d.rewriteRecord(ctx, agentID, inv, tracker); err != nil {
 				if gaveUp == nil {
 					return errSessionReplaced // directory.ErrSuperseded
 				}

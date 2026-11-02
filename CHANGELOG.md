@@ -86,6 +86,25 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- A presence change whose PUBLISH to peers failed is sent again (after a
+  backoff of 100 ms doubling to 5 s), folded under the agent's newer
+  changes; before, it was dropped and the peers, whose subscriptions did
+  not break, never resynced (`spec/README.md` finding 25). Failed sends
+  are counted as `nfltr_relay_presence_events_total{origin="failed"}`.
+- Failed directory writes no longer change what other replicas list
+  without a presence wake (`spec/README.md` finding 27): a label update
+  whose write failed, or a record the store lost, is published again
+  (an `up`) by the renewal that writes it next, and the failed update
+  asks for the next epoch tick's rewrite (`RecordWriteFailed`); a release
+  that failed publishes a second `down` once the record's TTL passed.
+  `DeleteSession` returns the store's read error instead of reporting the
+  record released.
+- No presence `down` while a session of the agent is listed on this
+  replica: an older session's teardown running after a newer one's `up`
+  folded that up away for the peers (`spec/README.md` finding 28).
+- HTTP-tunnel (`ConnectHTTP`) and TCP-only (`ConnectTCP`) agents publish
+  their presence `up` and `down`: listed by `myAgents`, they never woke a
+  watcher (`spec/README.md` finding 29).
 - Requests a peer replica forwards take the route lease too
   (`Ingress.peer`): refused once this replica no longer routes to the
   agent, they are answered 503 `Retry-After` and never reach an agent

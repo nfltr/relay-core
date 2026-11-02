@@ -5,6 +5,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nfltr/relay-core/core/directory"
 	"github.com/nfltr/relay-core/core/session/sessiontest/fake"
+	presencev1 "github.com/nfltr/relay/proto/nfltr/presence/v1"
 )
 
 // recordsTestDispatcher holds agent-1's stream on this replica (10.0.0.1),
@@ -117,5 +119,112 @@ func TestPresenceRenewalNeverWritesReplacedLabels(t *testing.T) {
 	<-updated
 	if got := gc.Data[directory.GetStreamerCacheKey("agent-1")].Labels["k"]; got != "new" {
 		t.Fatalf("record labels k=%q after the update, want new", got)
+	}
+}
+
+func setCacheErr(mc *fake.MockCache, err error) {
+	mc.Mu.Lock()
+	mc.Err = err
+	mc.Mu.Unlock()
+}
+
+// presenceSince returns the feed's events of change (up, down) after cursor.
+func presenceSince(t *testing.T, d *Dispatcher, cursor, change string) []*presencev1.PresenceEvent {
+	var out []*presencev1.PresenceEvent
+	for _, ev := range d.Presence.Watch(t.Context(), cursor, 0, nil).GetEvents() {
+		if presenceChangeName(ev) == change {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// Finding 27 (spec/README.md, Presence.tla UpdateFail and Lose, mutant
+// silent-rewrite): a record write that failed, or a record the store lost,
+// is published by the renewal that writes it next. The other replicas
+// listed the old labels, or no agent, and nothing else would wake their
+// watchers when the record changed back.
+func TestPresenceRecordRewriteIsPublished(t *testing.T) {
+	key := directory.GetStreamerCacheKey("agent-1")
+	current := func() *directory.Value {
+		return &directory.Value{PodIP: "10.0.0.1", Seq: 3, Credential: "cred", Account: "acct"}
+	}
+	t.Run("failed label update", func(t *testing.T) {
+		d, stream, mc := recordsTestDispatcher(t, 3, current(), nil)
+		setCacheErr(mc, errors.New("store down"))
+		if _, ok := d.UpdateAgentLabels("agent-1", map[string]string{"k": "v"}, true); !ok {
+			t.Fatal("update refused")
+		}
+		if !d.RecordWriteFailed.Load() {
+			t.Fatal("a failed label write asked for no rewrite (RecordWriteFailed)")
+		}
+		cursor := d.Presence.Cursor()
+		setCacheErr(mc, nil)
+		if err := d.refreshAgentInventoryOnInboundActivity(t.Context(), "agent-1", d.StreamerIPInventory, stream); err != nil {
+			t.Fatal(err)
+		}
+		if got := mc.Data[key].Labels["k"]; got != "v" {
+			t.Fatalf("record labels k=%q after the renewal, want v", got)
+		}
+		if ups := presenceSince(t, d, cursor, "up"); len(ups) != 1 || ups[0].GetUp().GetLabels()["k"] != "v" {
+			t.Fatalf("published %v after the renewal wrote the labels, want one up with k=v", ups)
+		}
+	})
+	t.Run("record lost", func(t *testing.T) {
+		d, stream, mc := recordsTestDispatcher(t, 3, current(), nil)
+		delete(mc.Data, key) // the store restarted empty
+		cursor := d.Presence.Cursor()
+		if err := d.rewriteRecord(t.Context(), "agent-1", d.StreamerIPInventory, stream); err != nil {
+			t.Fatal(err)
+		}
+		if mc.Data[key] == nil {
+			t.Fatal("record not written back")
+		}
+		if ups := presenceSince(t, d, cursor, "up"); len(ups) != 1 {
+			t.Fatalf("published %v after the record was written back, want one up", ups)
+		}
+	})
+}
+
+// Finding 27 (Presence.tla EndFail, LateDown, mutant no-late-down): a
+// release that failed leaves the record, listed by every replica until its
+// TTL, whose expiry publishes nothing; a second down once the TTL passed
+// wakes their watchers to re-list the agent gone.
+func TestPresenceFailedReleaseDownsAgainAfterTheTTL(t *testing.T) {
+	d, stream, mc := recordsTestDispatcher(t, 3, &directory.Value{PodIP: "10.0.0.1", Seq: 3, Credential: "cred", Account: "acct"}, nil)
+	d.Config.HeartbeatRecvThreshold = 50 * time.Millisecond
+	setCacheErr(mc, errors.New("store down"))
+	cursor := d.Presence.Cursor()
+	d.Upstreams.Delete("agent-1") // the teardown's DeregisterUpstreamAgent
+	d.departed("agent-1", stream.Session(), stream)
+	downs := 0
+	for deadline := time.Now().Add(10 * time.Second); downs < 2 && time.Now().Before(deadline); {
+		resp := d.Presence.Watch(t.Context(), cursor, time.Second, nil)
+		for _, ev := range resp.GetEvents() {
+			if ev.GetDown() != nil {
+				downs++
+			}
+		}
+		cursor = resp.GetCursor()
+	}
+	if downs != 2 {
+		t.Fatalf("%d downs after a failed release, want 2 (now, and after the record's TTL)", downs)
+	}
+}
+
+// Review r2 F6: an older session's end on this replica publishes no down
+// once a newer session of the agent is listed here. Its CompareAndDelete
+// can precede the newer one's Store, so the feed got the newer up and
+// then the older down for a connected agent, and the outbox folded the
+// pair into a down for every peer: a peer's hub that applies ups
+// (hubArrivals) missed the arrival.
+func TestPresenceReplacedSessionPublishesNoDown(t *testing.T) {
+	d, older, _ := recordsTestDispatcher(t, 3, &directory.Value{PodIP: "10.0.0.1", Seq: 4, Credential: "cred", Account: "acct"}, nil)
+	newer := NewGRPCStream("agent-1", nil, nil, nil, nil)
+	d.Upstreams.Store("agent-1", newer) // session 4 listed here
+	cursor := d.Presence.Cursor()
+	d.departed("agent-1", older.Session(), older)
+	if downs := presenceSince(t, d, cursor, "down"); len(downs) != 0 {
+		t.Fatalf("published %v for a session replaced here, want no down", downs)
 	}
 }

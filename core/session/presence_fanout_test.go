@@ -5,9 +5,11 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,5 +106,75 @@ func TestPresenceFanoutOrderedAndBounded(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// flakyPresenceBus fails every Publish while failing is set, signalling
+// each failure on failed; otherwise it records the payloads in order.
+type flakyPresenceBus struct {
+	failing atomic.Bool
+	failed  chan struct{}
+	mu      sync.Mutex
+	got     []*presencev1.PresenceEvent
+}
+
+func (b *flakyPresenceBus) Publish(_ context.Context, p []byte) error {
+	if b.failing.Load() {
+		select {
+		case b.failed <- struct{}{}:
+		default:
+		}
+		return errors.New("publish failed")
+	}
+	var ev presencev1.PresenceEvent
+	if err := protojson.Unmarshal(p, &ev); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.got = append(b.got, &ev)
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *flakyPresenceBus) Subscribe(context.Context) <-chan []byte { return nil }
+
+// A change whose PUBLISH failed is sent again, folded under the agent's
+// newer changes: the peers' subscriptions did not break, so no resync
+// would ever tell their watchers (spec/README.md finding 25, Presence.tla
+// publish-drop). Before, the outbox took the change before the send and
+// ignored the error.
+func TestPresenceOutboxRepublishesAFailedSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	bus := &flakyPresenceBus{failed: make(chan struct{}, 1)}
+	bus.failing.Store(true)
+	var f presenceFeed
+	f.BindBus(ctx, bus)
+	f.up("a", map[string]string{"v": "1"}, nil)
+	<-bus.failed
+	f.labels("a", map[string]string{"v": "2"}) // newer than the failed up
+	f.up("b", nil, nil)
+	<-bus.failed
+	f.down("b") // a pending or failed up of b becomes its down
+	bus.failing.Store(false)
+	last := func() (map[string]*presencev1.PresenceEvent, int) {
+		bus.mu.Lock()
+		defer bus.mu.Unlock()
+		m := map[string]*presencev1.PresenceEvent{}
+		for _, ev := range bus.got {
+			m[ev.GetAgentId()] = ev
+		}
+		return m, len(bus.got)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		m, n := last()
+		a, b := m["a"], m["b"]
+		aOK := a != nil && (a.GetUp() != nil && a.GetUp().GetLabels()["v"] == "2" || a.GetLabels().GetLabels()["v"] == "2")
+		if aOK && b != nil && b.GetDown() != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("published %d events, last per agent %v: want a up with v=2 and b down", n, m)
+		}
 	}
 }

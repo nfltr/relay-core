@@ -588,12 +588,7 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 			// removal could take.
 			d.removeEphemeralRegistration(agentID)
 		}
-		if err := releaseAgentRecord(context.Background(), d.StreamerIPInventory, agentID, session); err != nil {
-			d.Logger.Error("failed to delete agentID dispatcher addr from cache", "AgentID", agentID, "error", err)
-		} else {
-			d.Logger.Debug("deleted agentID dispatcher addr from cache", "AgentID", agentID)
-		}
-		d.publishDeparture(agentID, currentStream)
+		d.departed(agentID, session, currentStream)
 	}(agentID, agentStream, agentLabels)
 
 	sessionCtx := ctx

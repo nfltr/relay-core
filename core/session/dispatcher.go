@@ -534,6 +534,7 @@ func (d *Dispatcher) DeregisterAgent(agentID string, s *HTTPStream, streamCtxErr
 		d.Logger.Info("skipping stale cleanup for replaced agent session", "AgentID", agentID)
 		return
 	}
+	d.publishDeparture(agentID, nil)
 	d.forgetAgent(agentID)
 }
 
@@ -596,7 +597,12 @@ func (d *Dispatcher) UpdateAgentLabels(agentID string, labels map[string]string,
 		return nil, false
 	}
 	if err != nil {
+		// Published below while the record keeps the old labels: the next
+		// renewal that lands publishes again, asked for at the next epoch
+		// tick (spec/README.md finding 27).
 		d.Logger.Warn("label update: redis inventory failed", "agent_id", agentID, "error", err)
+		grpc.recordStale = true
+		d.RecordWriteFailed.Store(true)
 	}
 	grpc.SetLabels(next)
 	d.Presence.labels(agentID, next)
@@ -628,7 +634,22 @@ func (d *Dispatcher) DeregisterUpstreamAgent(agentID string, agentStream *GRPCSt
 // only once the agent is out of everything /api/v1/my/agents lists
 // (upstreams and the streamer inventory): a watcher woken earlier re-read the
 // departed agent as connected (graceful node stop under load, 2026-10-02).
+// None while a newer session of the agent is listed here: an older
+// session's teardown can run after the newer one's up, and its down would
+// fold that up away for the peers (review r2 F6 in spec/README.md
+// "Presence.tla").
 func (d *Dispatcher) publishDeparture(agentID string, _ Streamer) {
+	if _, ok := d.Upstreams.Load(agentID); ok {
+		return
+	}
+	if d.Agents != nil {
+		if _, ok := d.Agents.Load(agentID); ok {
+			return
+		}
+	}
+	if d.TCPDispatcher != nil && d.TCPDispatcher.agentStream(agentID) != nil {
+		return
+	}
 	d.Presence.down(agentID)
 }
 
