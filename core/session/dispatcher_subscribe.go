@@ -148,7 +148,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	}
 
 	defer func() {
-		err = d.IPInventory.DeleteIPs(context.Background(), agentID)
+		err = releaseAgentRecord(context.Background(), d.IPInventory, agentID, session)
 		if err != nil {
 			d.Logger.Error("failed to delete agentID dispatcher addr from cache", "agent_id", agentID, "error", err)
 		}
@@ -324,7 +324,7 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 				continue
 			}
 			if err := stream.Send(&pb.HTTPProxyRequest{}); err != nil {
-				d.onHeartbeatSendError(agentID, err, d.IPInventory)
+				d.onHeartbeatSendError(agentID, err, d.IPInventory, stream.Session())
 				return err
 			}
 			logger.Debug("sent heartbeat to agentID agent")

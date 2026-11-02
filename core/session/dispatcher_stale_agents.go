@@ -108,7 +108,7 @@ func (d *Dispatcher) disconnectAgent(agentID string) {
 	if !d.DeregisterUpstreamAgent(agentID, grpcStream, errors.New("stale agent reaper eviction")) {
 		return
 	}
-	if err := d.StreamerIPInventory.DeleteIPs(context.Background(), agentID); err != nil {
+	if err := releaseAgentRecord(context.Background(), d.StreamerIPInventory, agentID, grpcStream.Session()); err != nil {
 		d.Logger.Error("failed to delete agentID dispatcher addr from cache", "AgentID", agentID, "error", err)
 	}
 	d.publishDeparture(agentID, grpcStream)

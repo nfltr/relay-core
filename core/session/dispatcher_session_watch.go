@@ -130,7 +130,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			err := fmt.Errorf("agentID %s: %w", agentID, errNoHeartbeat)
 			d.Logger.Error("heartbeat timeout", "error", err)
 			metrics.RegisterUpstreamHeartbeatFailure("recv_timeout")
-			if cacheErr := inv.DeleteIPs(context.Background(), agentID); cacheErr != nil {
+			if cacheErr := releaseAgentRecord(context.Background(), inv, agentID, streamSession(tracker)); cacheErr != nil {
 				d.Logger.Error("failed to delete agentID dispatcher addr from cache", "AgentID", agentID, "error", cacheErr)
 			}
 			d.logStreamLifecycle("monitoring heartbeats from agent stream", err, "AgentID", agentID)

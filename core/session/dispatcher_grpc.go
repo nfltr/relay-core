@@ -143,6 +143,14 @@ func (d *Dispatcher) RelayTunnel(incomingStream relayTunnelStream) (retErr error
 	if !agentConnectedToThisPod && d.DrainedAway(agentID) {
 		return status.Error(codes.Unavailable, agentDrainingDetail)
 	}
+	if !agentConnectedToThisPod && incomingStreamCtx.Value(PeerLinkCaller{}) != nil {
+		// A peer forwarded it here (the record named this replica): served
+		// here only, never forwarded again, as ServeLinkTCP; a record
+		// flapping between replicas, or naming this one with no stream
+		// here, would bounce it with no hop bound.
+		// Guard: TestRelayTunnelFromAPeerIsServedHereOnly.
+		return status.Error(codes.NotFound, "agent not connected")
+	}
 	route := "local"
 	if !agentConnectedToThisPod {
 		route = "remote"
@@ -640,7 +648,7 @@ func (d *Dispatcher) sendGRPCHeartbeats(ctx context.Context, agentID string, str
 				continue
 			}
 			if err := stream.Send(&pb.TunnelFrame{}); err != nil {
-				d.onHeartbeatSendError(agentID, err, d.StreamerIPInventory)
+				d.onHeartbeatSendError(agentID, err, d.StreamerIPInventory, stream.Session())
 				return err
 			}
 			logger.Debug("sent heartbeat to agentID agent")

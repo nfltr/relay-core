@@ -13,7 +13,6 @@ import (
 
 	"github.com/nfltr/relay-core/broker"
 	"github.com/nfltr/relay-core/core/directory"
-	"github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/spf13/viper"
 	"google.golang.org/protobuf/proto"
@@ -495,83 +494,6 @@ func TestRelayTunnel_AgentConnectedToThisPod_NoTransactionID(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		streamCancel()
 		t.Fatal("timed out waiting for RelayTunnel")
-	}
-}
-
-// ===========================================================================
-// RelayTunnel: agent NOT on this pod, its replica unreachable
-// ===========================================================================
-
-func TestRelayTunnel_AgentNotOnThisPod_MaxRetries(t *testing.T) {
-	// ENV must be a recognized multi-pod environment (config.IsK8sMultiPodEnv)
-	// for NewDispatcher to construct a podDialer (here without a replica
-	// link, so every forward is refused) — otherwise
-	// dialPeerStream short-circuits with codes.NotFound ("not in k8s
-	// multi-pod mode") before ever attempting a dial, and this test
-	// exercises the wrong branch entirely. A multi-replica test stack sets
-	// ENV=CI on its replicas for exactly this reason.
-	viper.Set("ENV", config.EnvCI)
-	viper.Set("pod_id.env_var", "TEST_POD_ID")
-	viper.Set("pod_ip.env_var", "TEST_POD_IP")
-	t.Setenv("TEST_POD_ID", "test-pod")
-	t.Setenv("TEST_POD_IP", "10.0.0.1")
-	defer viper.Reset()
-
-	b := broker.NewInMemoryMessageBroker()
-	_ = b.SetTopicAutoCreation("ns", true)
-
-	mc := newMockCache()
-	agentID := "agentID-maxretry"
-	cacheKey := directory.GetStreamerCacheKey(agentID)
-	mc.Data[cacheKey] = &directory.Value{PodIP: "127.0.0.1", Env: "test-env"}
-
-	streamerInv, _ := directory.NewIPInventory(fake.TestLogger(), mc, 5*time.Second, "127.0.0.1", directory.GetStreamerCacheKey)
-
-	localCtx := t.Context()
-
-	localDispatcher := NewDispatcher(localCtx, fake.TestLogger(), b, &fake.TestProducer{}, directory.NewNoOpInventory(), streamerInv, 5*time.Second, DispatcherConfig{
-		ConnectedAgentsThreshold: 100,
-		HeartbeatRecvThreshold:   5 * time.Second,
-		RecvBufferSize:           10,
-		SyncMapClearTimeout:      time.Second,
-	})
-
-	firstMsg := &pb.TunnelFrame{
-		MessageType:   "test",
-		Routing:       &pb.RoutingInfo{AgentId: agentID},
-		TransactionId: "txn-retry-1",
-		Eom:           true,
-	}
-
-	streamCtx, streamCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer streamCancel()
-
-	inStream := &mockRelayTunnelServer{
-		ctx:      relayPeerCtx(t, streamCtx),
-		recvMsgs: []*pb.TunnelFrame{firstMsg},
-	}
-
-	before := podToPodConnectionFailuresValue(t)
-
-	err := localDispatcher.RelayTunnel(inStream)
-	if err == nil {
-		t.Fatal("expected an error: the agent's replica cannot be reached")
-	}
-	t.Logf("unreachable replica error: %v", err)
-
-	// Found via a live chaostoolkit fault-injection run
-	// (docker/chaostoolkit/experiments) against a real svc-1-style
-	// RelayTunnel client (cmd/samples/endurance-svc): this exact branch in
-	// RelayTunnel (dispatcher_grpc.go) returned dialErr directly without
-	// ever registering dispatcher_pod_to_pod_connection_failures_total —
-	// unlike routeAgentToAgentRemote's identical dial-failure branch
-	// (dispatcher_agent_routing.go), which already had this fixed. A plain
-	// RelayTunnel client (the actual chaos-test traffic pattern) exercises
-	// this function, not routeAgentToAgentRemote, so the metric never fired
-	// for a real "downstream pod died" scenario until this was fixed here
-	// too.
-	if after := podToPodConnectionFailuresValue(t); after != before+1 {
-		t.Fatalf("dispatcher_pod_to_pod_connection_failures_total = %v, want %v — RelayTunnel's own dial-failure branch must record this metric, not just routeAgentToAgentRemote's", after, before+1)
 	}
 }
 

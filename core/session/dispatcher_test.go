@@ -208,15 +208,15 @@ func TestDispatcher_validateAgentConnection_StaleReconnect(t *testing.T) {
 	inv, _ := directory.NewIPInventory(fake.TestLogger(), mc, 5*time.Second, "127.0.0.1", directory.GetDispatcherCacheKey)
 
 	// No local stream exists (simulates ungraceful disconnect).
-	// validateAgentConnection should clean up and allow reconnection.
+	// validateAgentConnection allows the reconnection; it deletes nothing:
+	// the new session's claim replaces the stale record, and a delete here
+	// could remove a newer session's record (TestNoPodOnlyRecordDelete).
 	_, err := d.validateAgentConnection(context.Background(), "agentID-1", "", inv)
 	if err != nil {
 		t.Fatalf("stale reconnection should be allowed, got: %v", err)
 	}
-
-	// Verify the stale cache entry was cleaned up.
-	if _, ok := mc.Data["dipi:agentID:agentID-1"]; ok {
-		t.Fatal("expected stale inventory entry to be deleted")
+	if _, ok := mc.Data["dipi:agentID:agentID-1"]; !ok {
+		t.Fatal("validateAgentConnection deleted the agent's record")
 	}
 }
 

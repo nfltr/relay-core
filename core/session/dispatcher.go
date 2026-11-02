@@ -393,8 +393,8 @@ func isExpectedStreamDisconnect(err error) bool {
 // One API key may run any number of sessions under distinct agent IDs.
 //
 // When the inventory shows the agent on this pod but no local stream exists
-// (stale Redis entry after an ungraceful disconnect), the stale entry is
-// cleaned up and the reconnection is allowed immediately.
+// (stale Redis entry after an ungraceful disconnect), the new session's
+// claim replaces the stale entry and the reconnection is allowed at once.
 //
 // On success the caller defers release, which is a no-op without a limit.
 func (d *Dispatcher) validateAgentConnection(ctx context.Context, agentID, credential string, inv directory.IPInventory) (release func(), err error) {
@@ -411,10 +411,12 @@ func (d *Dispatcher) validateAgentConnection(ctx context.Context, agentID, crede
 		// until the Redis TTL expires.
 		if podIP == d.Config.LoopbackAddr {
 			if _, live := d.Agents.Load(agentID); !live {
-				d.Logger.Info("cleaning up stale inventory entry for reconnecting agent",
+				// Allow the new connection: its claim writes a newer
+				// record over the stale one. Never delete it here: a
+				// newer session of the agent on this pod that claimed
+				// the record and has not registered yet would lose it.
+				d.Logger.Info("stale inventory entry for reconnecting agent: its claim replaces it",
 					"AgentID", agentID)
-				_ = inv.DeleteIPs(ctx, agentID)
-				// Fall through — allow the new connection.
 			} else {
 				d.Logger.Info("agent already connected to this pod", "AgentID", agentID)
 				return nil, status.Errorf(codes.AlreadyExists, "Agent for AgentID %s is already connected", agentID)
@@ -705,11 +707,12 @@ func (d *Dispatcher) markAgentStreamAlive(tracker HeartbeatTracker, msg proto.Me
 }
 
 // onHeartbeatSendError handles the common error path when a heartbeat send fails:
-// it logs the send error and removes the agent's IP from the inventory.
-func (d *Dispatcher) onHeartbeatSendError(agentID string, sendErr error, ipInventory directory.IPInventory) {
+// it logs the send error and removes the agent's record if it is still
+// session s's (releaseAgentRecord: a newer session's stays).
+func (d *Dispatcher) onHeartbeatSendError(agentID string, sendErr error, ipInventory directory.IPInventory, s directory.Session) {
 	d.Logger.Error("failed to send heartbeat to agent", "AgentID", agentID, "error", sendErr)
 	metrics.RegisterUpstreamHeartbeatFailure("send_failure")
-	cacheErr := ipInventory.DeleteIPs(context.Background(), agentID)
+	cacheErr := releaseAgentRecord(context.Background(), ipInventory, agentID, s)
 	if cacheErr != nil {
 		d.Logger.Error("failed to delete agentID dispatcher addr from cache", "AgentID", agentID, "error", cacheErr)
 	}
