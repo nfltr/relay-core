@@ -261,6 +261,56 @@ finding 6), `race:supersede-ends` (finding 7), `done-ignores-leases`,
 `done-overtakes` (`MOVE_DONE` sent past the channel), `close-early` (the
 agent closes the old stream with requests unanswered).
 
+## Presence.tla: the presence feed across replicas
+
+`Presence.tla` models the presence feed (`presence.go`) of one agent on
+two replicas sharing the directory and a Redis pub/sub bus
+(relay-server `redisbus`), with the label update (`UpdateAgentLabels`),
+the record renewal (`dispatcher_inventory_refresh.go`) and one watcher
+(github.com/nfltr/relay `client/presenceclient` `Wait`, then relay-server
+`ListAgents`: the cursor first, then the snapshot from `myAgents`). The
+feed is a wake signal, not an event log: no consumer applies events, a
+woken watcher re-lists. So the guarantee checked is `NoSilentStale`: a
+watcher whose snapshot differs from what a list answers now is owed a
+wake (its cursor is behind the feed, a change is still to be published or
+delivered, its replica's subscription is down and its resync comes, or its
+replica is down). Event order across replicas does not matter for it.
+The agent's sessions are ordered by Seq as `Move.tla` and relay-server
+`Replicas.tla` give them (the newest session holds the record; an older
+one ends); the bus loses every message in flight with the subscription
+(Redis drops a slow subscriber's buffer, restarts), and the
+resubscription is the resync (a new epoch: every cursor answers reset).
+The cursor is abstracted to `due` (the feed moved since the watcher took
+it), exact for the wake: the watcher only asks "anything after my
+cursor?". One watcher suffices (watchers only observe); with it on `r1`
+the agent's stream is local or remote by where it connects.
+
+| action | Go |
+|---|---|
+| `Connect`, `End`, `Supersede` | `ConnectAgentTunnel`: `claimAgentRecord`, `notifyUpstreamRegistered`; its teardown `releaseAgentRecord`, `publishDeparture`; a renewal's `directory.ErrSuperseded` |
+| `Renew` (`RenewWrite`) | `refreshAgentInventoryOnInboundActivity`, `renewAgentRecord`, `PutSession` renew |
+| `Update` (`UpdateWrite`) | `UpdateAgentLabels` (relay-server `serveUpdateLabels`) |
+| `Publish`, `Deliver` | `presenceOutbox`, `BindBus`'s subscriber: `bump` |
+| `Drop`, `Resubscribe` | Redis dropping a subscriber, go-redis resubscribing; redisbus's empty payload, `presenceFeed.resync` |
+| `Wake`, `Cursor`, `Snap` | `presenceFeed.Watch` answering, `ListAgents` (`Presence.Cursor`, `myAgents`) |
+| `CrashR`, `Expire` | a replica gone without its teardown; its records' TTL |
+
+The design (`Presence.cfg`, `make spec`, 17k states): a label update is a
+fenced renewal of the stream's own session (refused when superseded), and
+a renewal and an update write the record under the stream's record lock;
+every directory write that changes a listing is published after it; a
+renewal finding no record while the agent's Seq counter is past its
+session's is superseded (it does not write back a record a newer session
+left); a list whose directory read fails answers Unavailable, not the
+local agents only; the bus never drops a payload it could not hand over
+without a resync. Mutants (`make spec-mutants`), each caught:
+`unfenced-label-write` (finding 8), `partial-list` (9), `renew-race`
+(10), `drop-no-resync` (11), `renew-resurrects` (13),
+`publish-before-write`, `resync-early` (the resync before the
+subscription is back); `race:crash-expiry` (`Crash = TRUE`, finding 12,
+open). `COVERAGE=1` takes every action but those only a mutant or the
+race enables (`RenewWrite`, `UpdateWrite`, `CrashR`, `Expire`).
+
 ## Trace validation
 
 With `-tags relaytrace` and `RELAYTRACE=<dir>`, each relay frame stream
@@ -312,6 +362,7 @@ close first (FIFO) and resets its target, so nothing ends cleanly.
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries | 35,056 (11,526) | 20 | 4 s |
+| `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription | 90,105 (16,971) | | 4 s CPU (12 s at load 15) |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
 | `HandoffLive.cfg` | `Placed` | | | 7 s |
@@ -461,6 +512,71 @@ acknowledgement, and `inproc-enqueue-blocks`).
    goes on with the move (`resumeMove`). Guards (both failed before):
    `TestAgentMovesBeforeTheReplicaLetsItGo` (finding 6),
    `TestRebalanceMoveLateConnectedGoesOn` (finding 7).
+8. **A label update wrote the agent's record without its session**
+   (model, `Presence.tla` `unfenced-label-write`). `UpdateAgentLabels`
+   wrote `SetIPWithAgentInfo`: a record with no Seq, credential, account
+   or services, unfenced. From the stream of a session a newer one on
+   another replica superseded (a move, a duplicate), it pointed the
+   record back at the stale replica; that session's end then deleted the
+   record by pod (no Seq), so every other replica listed the agent as
+   gone while it was connected, and the next renewal put it back with no
+   wake: watchers believed it offline until some other change. Also,
+   until the next renewal, other replicas saw the agent with no account
+   (scoping) and no services. Severity: high. Fixed: the update is a
+   fenced renewal of the stream's session (`renewAgentRecord`), refused
+   when superseded. Guard: `TestPresenceLabelUpdateKeepsTheSession`.
+9. **A list whose directory read failed answered the local agents only**
+   (model, `partial-list`; relay-server `myAgents`). The other replicas'
+   agents were missing from a snapshot taken with a valid cursor: the
+   watcher believed them offline with nothing more to wake it. Severity:
+   medium. Fixed in relay-server: presence `ListAgents` answers
+   Unavailable. Guard: relay-server `TestPresenceListFailsWhenTheDirectoryDoes`.
+10. **A renewal could write labels an update had replaced** (model,
+    `renew-race`). The renewal read the stream's labels before its
+    throttle and wrote them later; an update writing and publishing in
+    between was overwritten in the directory with no wake, so watchers on
+    other replicas kept the stale labels. Severity: medium. Fixed: both
+    write under the stream's record lock, the renewal reading the labels
+    under it. Guard: `TestPresenceRenewalNeverWritesReplacedLabels`.
+11. **The bus could drop a payload with its subscription up** (model,
+    `drop-no-resync`; relay-server `redisbus`). go-redis drops a message,
+    or even a subscribe confirmation (the resync), it could not hand to a
+    reader blocked 60 s. Severity: low. Fixed in relay-server: a
+    resyncing bus never blocks go-redis; a payload it cannot hand over is
+    replaced by a resync. Guard: relay-server `TestBusOverflowIsAResync`.
+12. **A crashed replica's agents vanish without a wake** (model,
+    `race:crash-expiry`, open). A replica that dies publishes no down;
+    its records expire at their TTL (as does a record whose renewals
+    failed past it), publishing nothing; a watcher that listed the agent
+    keeps it until some other change. Severity: medium (an agent that
+    reconnects elsewhere is announced by its new up). Next: publish on a
+    record's expiry (Redis keyspace `expired` notifications into the bus,
+    or the replica link's peer loss plus a resync a TTL later).
+13. **An older session could write back a record a newer one left**
+    (model, `renew-resurrects`). A session superseded by a newer one on
+    another replica renews when that newer one has already ended and
+    removed the record: no record, so nothing superseded it, and the
+    agent reappeared in every other replica's list with no wake.
+    Severity: low. Fixed: a renewal that finds no record while the
+    agent's Seq counter is past its session's is superseded
+    (`PutSession`). Guard: `TestRenewalAfterANewerSessionEndedIsSuperseded`.
+14. **An update in flight from a replaced connection applies to its
+    replacement** (review, open). `serveUpdateLabels` names the agent
+    (`SourceAgentID`), not the session: a request received on a stream
+    a newer connection of the agent on the same replica replaced is
+    applied to the newer one's labels. Severity: low (a window of one
+    request). Next: the source session on the agent-to-agent call (relay
+    proto and `rpcclient`, a release of github.com/nfltr/relay).
+
+Checked by review and holding for the feed itself: a revision only grows
+within a process; a cursor of another epoch (a resync, another process)
+or past the revision answers reset; one older than the kept history
+answers reset with what is kept; `ListAgents` takes the cursor before the
+snapshot; every local change is published after the directory write
+that makes it visible (`claimAgentRecord` before `notifyUpstreamRegistered`,
+`releaseAgentRecord` before `publishDeparture`); the resync is the
+subscribe confirmation, which Redis sends before any message published
+after it.
 
 
 Checked and holding: per-session credit never goes negative or past a

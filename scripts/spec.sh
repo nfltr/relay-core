@@ -4,7 +4,8 @@
 
 # spec.sh check|nightly|liveness|mutants|simulate|traces|trace F: the TLA+ models of
 # spec/ (spec/README.md).
-#   check     TLC on spec/AgentLink.cfg, spec/Handoff.cfg and spec/Move.cfg: invariants;
+#   check     TLC on spec/AgentLink.cfg, spec/Handoff.cfg, spec/Move.cfg and
+#             spec/Presence.cfg: invariants;
 #             spec/AgentLinkWrite.cfg: WriteReturns (CI).
 #   nightly   TLC on spec/AgentLinkLarge.cfg: AgentLink's invariants at
 #             larger sizes (nightly, weekly).
@@ -110,6 +111,7 @@ check)
 	run AgentLinkWrite.cfg MCAgentLink.tla
 	run Handoff.cfg Handoff.tla
 	run Move.cfg Move.tla
+	run Presence.cfg Presence.tla
 	;;
 nightly)
 	run AgentLinkLarge.cfg MCAgentLink.tla
@@ -142,6 +144,12 @@ mutants)
 	expect Move.cfg Move.tla close-early -e "$m"'close-early"/'
 	expect Move.cfg Move.tla race:settle-timer -e 's/Lease = TRUE/Lease = FALSE/'
 	expect Move.cfg Move.tla race:supersede-ends -e "$m"'supersede-ends"/'
+	# Presence.tla: the bugs the design prevents (findings 8-11, 13) and
+	# the open race of a crashed replica's records (finding 12).
+	for b in unfenced-label-write partial-list renew-race drop-no-resync renew-resurrects publish-before-write resync-early; do
+		expect Presence.cfg Presence.tla "$b" -e "$m$b\"/"
+	done
+	expect Presence.cfg Presence.tla race:crash-expiry -e 's/Crash = FALSE/Crash = TRUE/'
 	exit $fail
 	;;
 simulate)
