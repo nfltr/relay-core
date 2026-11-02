@@ -300,7 +300,7 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 	interval := d.agentHeartbeat(stream.streamCtx)
 	heartbeatTicker := time.NewTicker(interval)
 	defer heartbeatTicker.Stop()
-	var bookkept time.Time
+	var bookkept, renewed time.Time
 	var bookkeeping atomic.Bool
 	incomingMessages := consumer.Chan()
 	moveDone := stream.moveDone
@@ -325,6 +325,14 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 			}
 			logger.Info("agent moved to another replica: told it no request follows on its old stream")
 		case <-heartbeatTicker.C:
+			// The hook renews busy or not: a session that keeps sending data
+			// skips its heartbeats, and a skipped renewal let a busy
+			// WireGuard tunnel's address expire under it (relay-server
+			// spec/IPAM.tla "busy-skips-renew", TestBusyHookedSessionStillRenews).
+			if h := stream.hooked; h != nil && time.Since(renewed) >= heartbeatBookkeepingEvery {
+				renewed = time.Now()
+				h.Renew()
+			}
 			if stream.OutboundDataSentWithin(interval) {
 				logger.Debug("skipping heartbeat to agentID agent: outbound data recently sent")
 				continue
@@ -338,9 +346,6 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 				continue
 			}
 			bookkept = time.Now()
-			if h := stream.hooked; h != nil {
-				h.Renew()
-			}
 			d.bookkeepHeartbeat(agentID, &bookkeeping)
 		case message, ok := <-incomingMessages:
 			if !ok {

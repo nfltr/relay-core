@@ -33,7 +33,8 @@ type HookedSession interface {
 	Start(send func(*pb.HTTPProxyRequest) error, end func()) error
 	// Frame takes a frame the hook claims.
 	Frame(txnID string, payload []byte)
-	// Renew runs on each of the session's heartbeats.
+	// Renew runs on the session's heartbeat ticks, at most every 15 s,
+	// whether or not the heartbeat itself is skipped for recent data.
 	Renew()
 	// Close runs when the session ends, after a Start that succeeded.
 	Close()
