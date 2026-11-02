@@ -228,14 +228,14 @@ connection closes once they ended (`waitIdle`).
 
 | action | Go |
 |---|---|
-| `Pick` | `dispatcherURL`: A while A's `Agents` holds the stream (with a route lease, `RouteHere`), else the record |
-| `Publish` | `Proxy.publishRequest` of a transaction's first message: on the consumer's channel, or `ErrNoConsumer` |
+| `Pick` | `dispatcherURL`: A while `RouteHere` gives a route lease, else the record |
+| `Publish` | `Proxy.publishRequest` of a transaction's first message (on the consumer's channel, or `ErrNoConsumer`), then the lease's release |
 | `Forward` | `relayRequestsToAgent`: the channel's next message onto the stream |
 | `Ask` | `startMove`: `MOVE_RECONNECT`, the record no longer renewed |
 | `GiveUp` | the rebalance's `moveBound` without `MOVE_CONNECTED` (`giveUp`) |
-| `StopRouting` | `recordMoved`, `stopRouting`; also after `GiveUp` (a late `MOVE_CONNECTED`) |
-| `Refresh` | the renewal after `GiveUp` finding B's record (`directory.ErrSuperseded`) |
-| `Done` | `MOVE_DONE` |
+| `StopRouting` | `recordMoved`, `stopRouting` |
+| `Refresh` | the renewal after `GiveUp` finding B's record (`directory.ErrSuperseded`): `resumeMove` |
+| `Done` | `routeLeases` idle, then `relayRequestsToAgent`'s `moveDone`: the channel drained, `MOVE_DONE` |
 | `RecvA` | `receiveFromHTTPAgent`; the agent's EOF ends the session (`failInflight`, `failQueued`) |
 | `RecvAgent`, `ConnectB`, `DialFails`, `Answer`, `CloseOld` | `processStream`, `moveConnect`, a handler's answer, `closeWhenAnswered` |
 
@@ -458,7 +458,9 @@ acknowledgement, and `inproc-enqueue-blocks`).
    again, finds it superseded and ends the old session
    (`errSessionReplaced`): every request in flight there failed 502.
    Severity: low. Fixed: a superseded renewal of a session asked to move
-   goes on with the move.
+   goes on with the move (`resumeMove`). Guards (both failed before):
+   `TestAgentMovesBeforeTheReplicaLetsItGo` (finding 6),
+   `TestRebalanceMoveLateConnectedGoesOn` (finding 7).
 
 
 Checked and holding: per-session credit never goes negative or past a

@@ -97,7 +97,7 @@ GiveUp ==
 
 \* stopRouting: the record names the new session; A routes no more.
 StopRouting ==
-    /\ rel \in {"asked", "gaveUp"} \* a late MOVE_CONNECTED goes on with the move
+    /\ rel = "asked"
     /\ conn /\ rec = "B"
     /\ rel' = "stopped" /\ routes' = FALSE
     /\ UNCHANGED <<conn, rec, ag, rq, exec, infl, cq, chA, upA>>
