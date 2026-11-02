@@ -271,7 +271,7 @@ how its bytes end is AgentLink's and link's.
 
 Liveness (`HandoffLive.cfg`): `Placed`: an arriving session is placed or
 refused (the dial wait is bounded); `SilentEnds`: a primary whose link
-went silent ends (finding 23).
+went silent ends (finding 16).
 
 Mutants (`make spec-mutants`): `attach-ended` (`PlacedOnLive`),
 `keep-conns` (`NoOrphanLink`), `wait-forever` (`Placed`),

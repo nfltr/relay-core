@@ -57,7 +57,11 @@ fail=0
 expect() {
 	c=$1 mod=$2 name=$3
 	shift 3
-	sed "$@" "spec/$c" >"$work/Mutant.cfg"
+	# A mutant's own invariant must catch it: Refines only for interface:*.
+	case $name in
+	interface:*) sed "$@" "spec/$c" >"$work/Mutant.cfg" ;;
+	*) sed "$@" "spec/$c" | sed '/^PROPERTY Refines/d' >"$work/Mutant.cfg" ;;
+	esac
 	if tlc "$work/Mutant.cfg" "$mod" >"$work/m.out" 2>&1; then
 		echo "$name: not caught"
 		fail=1
