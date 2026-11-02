@@ -151,7 +151,7 @@ func traceFinish(a *tcpAgentStream, id string, remove func()) {
 // stream's frames is the wire's. Every sender of the stream comes here, and
 // only the sender loop takes frames out, so a free slot stays free under
 // the lock; a full outbox is waited on outside it.
-func traceEnqueue(a *tcpAgentStream, f *pb.TCPData) {
+func traceEnqueue(a *tcpAgentStream, f *pb.TCPData, stop <-chan struct{}) bool {
 	for {
 		traceMu.Lock()
 		if len(a.SendCh) < cap(a.SendCh) {
@@ -159,13 +159,15 @@ func traceEnqueue(a *tcpAgentStream, f *pb.TCPData) {
 			metrics.AddTransferBytes(metrics.PathTCPGRPC, len(f.GetData()), 0)
 			traceLog(a.tr, sentEvent(f))
 			traceMu.Unlock()
-			return
+			return true
 		}
 		traceMu.Unlock()
 		select {
 		case <-a.Done: // the stream ended: the frame is lost (SendData on a dead stream)
 			traceStep(a.tr, sentEvent(f))
-			return
+			return true
+		case <-stop: // its session ended: not sent (SendData gives the credit back)
+			return false
 		case <-time.After(50 * time.Microsecond):
 		}
 	}

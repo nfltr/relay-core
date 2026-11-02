@@ -7,8 +7,10 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/nfltr/link"
+	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
@@ -51,5 +53,47 @@ func TestInProcWriteRacingCloseWriteSendsNothingAfterFIN(t *testing.T) {
 	}
 	if r.n != dataplane.MaxChunk || !errors.Is(r.err, io.ErrClosedPipe) {
 		t.Fatalf("Write returned %d, %v; want %d, io.ErrClosedPipe", r.n, r.err, dataplane.MaxChunk)
+	}
+}
+
+// TestInProcWriteReturnsOnceClosed: a Write waiting for room in the
+// stream's outbox (the agent reads nothing more, its stream stays up)
+// returns once its conn is closed or its session ends (spec/README.md
+// finding 3, WriteReturns). Before, it waited in enqueue holding the
+// session's wmu, so Close waited for it too: relay-server's leakcheck
+// found the Write of a link session's drain left behind.
+func TestInProcWriteReturnsOnceClosed(t *testing.T) {
+	for _, end := range []struct {
+		name string
+		do   func(a *tcpAgentStream, c *inProcConn)
+	}{
+		{"close", func(_ *tcpAgentStream, c *inProcConn) { go func() { _ = c.Close() }() }},
+		{"stream-ended", func(a *tcpAgentStream, _ *inProcConn) { a.CloseAll() }},
+	} {
+		t.Run(end.name, func(t *testing.T) {
+			a := NewTCPAgentStream() // no credit: the outbox alone holds the Write back
+			defer close(a.Done)      // the stream ends after the test: Close's own frame waits for the outbox until then
+			sess := newTCPSession()
+			a.addSession("s", sess)
+			c := &inProcConn{agentStream: a, sessionID: "s", sess: sess, cleanupFn: func() { a.removeSession("s"); sess.markClosed() }}
+			for len(a.SendCh) < cap(a.SendCh) {
+				a.enqueue(&pb.TCPData{SessionId: "other", Data: []byte{0}})
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := c.Write([]byte("blocked"))
+				done <- err
+			}()
+			time.Sleep(20 * time.Millisecond) // the Write waits in enqueue (it cannot do otherwise: the outbox is full)
+			end.do(a, c)
+			select {
+			case err := <-done:
+				if !errors.Is(err, io.ErrClosedPipe) {
+					t.Fatalf("Write returned %v, want io.ErrClosedPipe", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("a Write waiting for the outbox did not return once its session ended")
+			}
+		})
 	}
 }

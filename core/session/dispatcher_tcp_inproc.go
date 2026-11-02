@@ -148,7 +148,15 @@ func (c *inProcConn) send(b []byte) (int, error) {
 		if traceOn && a.cr != nil {
 			traceWrite(a, c.sessionID, n)
 		}
-		a.enqueue(&pb.TCPData{SessionId: c.sessionID, Data: b[sent : sent+n]})
+		// The outbox may stay full (an agent that reads nothing more):
+		// the session's end stops the wait, which holds wmu (finding 3).
+		if !a.enqueueUnless(&pb.TCPData{SessionId: c.sessionID, Data: b[sent : sent+n]}, s.closed) {
+			s.wmu.Unlock()
+			if a.cr != nil {
+				_ = a.cr.Grant(c.sessionID, n)
+			}
+			return sent, io.ErrClosedPipe
+		}
 		s.wmu.Unlock()
 		sent += n
 	}
@@ -182,6 +190,7 @@ func (c *inProcConn) CloseWrite() error {
 
 func (c *inProcConn) Close() error {
 	c.closeOnce.Do(func() {
+		c.sess.markClosed() // first: a Write waiting for the outbox holds wmu (spec/README.md finding 3)
 		c.sess.wmu.Lock()
 		c.closed.Store(true)
 		if !c.sess.selfHalf.Load() || !c.sess.peerHalf.Load() { // both half closes ended it already

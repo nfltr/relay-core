@@ -18,12 +18,12 @@ type (
 	traceSess   struct{}
 )
 
-func traceUp(*tcpAgentStream)                                    {}
-func traceOpenSess(*tcpAgentStream, string, *tcpSession)         {}
-func traceWrite(*tcpAgentStream, string, int)                    {}
-func traceRead(*tcpSession, int)                                 {}
-func traceDown(*tcpAgentStream)                                  {}
-func traceEnqueue(*tcpAgentStream, *pb.TCPData)                  {}
-func traceRecv(*tcpAgentStream, *pb.TCPData, func() error) error { return nil }
-func traceFinish(*tcpAgentStream, string, func())                {}
-func traced(*tcpAgentStream) bool                                { return false }
+func traceUp(*tcpAgentStream)                                         {}
+func traceOpenSess(*tcpAgentStream, string, *tcpSession)              {}
+func traceWrite(*tcpAgentStream, string, int)                         {}
+func traceRead(*tcpSession, int)                                      {}
+func traceDown(*tcpAgentStream)                                       {}
+func traceEnqueue(*tcpAgentStream, *pb.TCPData, <-chan struct{}) bool { return true }
+func traceRecv(*tcpAgentStream, *pb.TCPData, func() error) error      { return nil }
+func traceFinish(*tcpAgentStream, string, func())                     {}
+func traced(*tcpAgentStream) bool                                     { return false }

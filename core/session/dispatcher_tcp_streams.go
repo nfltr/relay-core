@@ -154,24 +154,31 @@ func (a *tcpAgentStream) send(f *pb.TCPData) {
 	a.enqueue(f)
 }
 
-func (a *tcpAgentStream) enqueue(f *pb.TCPData) {
+func (a *tcpAgentStream) enqueue(f *pb.TCPData) { a.enqueueUnless(f, nil) }
+
+// enqueueUnless is enqueue that gives up once stop is closed (an
+// in-process session's end: spec/README.md finding 3); it reports false
+// then, the frame not sent.
+func (a *tcpAgentStream) enqueueUnless(f *pb.TCPData, stop <-chan struct{}) bool {
 	if a.DC != nil {
 		// Written inline, or with other sessions' frames when a write is
 		// in flight (dataplane.Conn): no hand-off to the sender.
 		if a.DC.Send(f) != nil || a.DC.Flush() != nil {
 			_ = a.DC.Close()
 		}
-		return
+		return true
 	}
 	if traceOn && traced(a) {
-		traceEnqueue(a, f)
-		return
+		return traceEnqueue(a, f, stop)
 	}
 	select {
 	case a.SendCh <- f: // a data connection's bytes are its link connection's (serveDataConn)
 		metrics.AddTransferBytes(metrics.PathTCPGRPC, len(f.GetData()), 0)
 	case <-a.Done:
+	case <-stop:
+		return false
 	}
+	return true
 }
 
 // addSession adds a session unless the stream takes no more (retired or
