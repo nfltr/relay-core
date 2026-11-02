@@ -51,8 +51,9 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `q`, `rcv`, `wr` | `tcpSession.recvQ` / the agent's `bytequeue.Queue`; counts | bytes queued unread, received, written by the app |
 | `wfin`, `rfin` | relay `selfHalf`/`peerHalf`, agent `peerHalf`; whole closes | this side's close (`half`, `whole`), the peer's |
 | `finAt[p][s]` | the bytes written before this side's close | what the peer must have received at its EOF |
-| `why[p][s]` | `tcpSession.endErr`, agent `lost` | the reader's end: `eof`, `lost` (`errTCPSessionLost`, an RST), `reset` (`errTCPSessionStalled`) |
-| `clean[p][s]` | both halves closed, queue drained | the app's connection ended cleanly (FIN both ways) |
+| `why[p][s]` | `tcpSession.endErr`, agent `lost` | the reader's end: `eof` (the peer's half close released to the app: relay `recvQ` closed, agent hold released), `lost` (`errTCPSessionLost`, an RST), `reset` (`errTCPSessionStalled`; relay side: `errTCPSessionAborted`, the agent's abort, finding 15) |
+| `clean[p][s]` | both halves closed, queue drained; or an EOF released after this side's half close | the app's connection ended cleanly (FIN both ways) |
+| `waits[p][s]` | relay `selfHalf` before `peerClosedWrite`/`recvAck` closed `recvQ` | the app half-closed before the peer's half close was released to it: the EOF it then gets is a clean end |
 | `acked[p][s]` | relay `tcpSession.acked`, agent `halfEnd.acked` | the peer acknowledged this side's half close (`EndAck`, finding 2) |
 | `apend[p][s]` | the `go enqueue` of the ack frame | an ack of the peer's half close decided, not yet queued |
 | `closing[s]` | `inProcConn.Close` called (finding 3) | the relay's in-process conn is being closed |
@@ -120,13 +121,23 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
    wrote before its close; every other end is typed (`lost`, `reset`).
 5. `DownEndsAll`: once a side noticed the stream ended, no session is open
    there.
-6. `NoSilentLoss`: a session that ended cleanly at a side had every byte
+6. `NoSilentLoss`: a session that ended cleanly at a side (`clean`: its
+   end, or an EOF released after its own half close: a TCP client sees
+   FIN both ways) had every byte
    that side wrote, and its close, received by the peer once the stream is
    gone. It holds with `EndAck = TRUE` (finding 2: a half close is
    acknowledged by an `ack` frame, and both halves end a session cleanly
    only once its own was acknowledged); a stream without it (an older
    agent or relay) is `EndAck = FALSE`, where it fails
    (`race:clean-tail-lost`).
+7. `AbortTyped` (`EndAck`): the agent's whole close before its half close
+   (an abort) reaches the relay's reader as a reset, never an EOF
+   (finding 15).
+
+Witnesses (`make spec-mutants`, each must be violated, so the invariants
+above guard reachable states): `WitnessAbort` (an agent abort reaches the
+relay), `WitnessHeldEof` (an app that half-closed first gets a released
+EOF).
 
 ### Liveness (weak fairness on every step that is not an app's)
 
@@ -166,6 +177,10 @@ whole close in a config whose property needs the apps to finish.
 - `inproc-enqueue-blocks`: an inProcConn's Write waits for outbox room
   holding `wmu`, and Close waits for `wmu` (`WriteReturns`; finding 3,
   fixed).
+- `no-hold`: the peer's half close is released to an app whose own half
+  close is not acked yet (`NoSilentLoss`; finding 2's hold, review AL-2).
+- `abort-as-eof`: the agent's abort reaches the relay's reader as an EOF
+  (`AbortTyped`; finding 15).
 - `no-credit` runs with 3 bytes (one past the window).
 - a stream without the end acknowledgement (finding 2: an older agent or
   relay): `race:clean-tail-lost` (`EndAck = FALSE`, `NoSilentLoss`).
@@ -341,8 +356,13 @@ it ran past 5 minutes with a growing queue.
 `make spec-traces` runs the tests named in `scripts/spec.sh` (the
 in-process harness: concurrent sessions, half close, close after data,
 stream loss, a stuck target) and checks each stream's trace, after
-checking that `spec/testdata/reject-data-after-fin.ndjson` (data sent
-after the relay's half close) is rejected.
+checking that each `spec/testdata/reject-*.ndjson` is rejected:
+`reject-data-after-fin` (data sent after the relay's half close),
+`reject-eof-after-loss` (the client got the EOF of an agent half close
+held for the ack after the stream ended: finding 15's race). The
+recorder's `Eof` (`traceEof`: `handleLocalConn`'s FIN to the client, an
+inProcConn's `io.EOF`) is logged after `Down` too, and the model takes it
+only for a released half close.
 
 The recorder logs a relay-side `Write` when `Acquire` returns and the
 `SendData` when the frame is enqueued; between the two a session can be
@@ -437,7 +457,9 @@ acknowledgement, and `inproc-enqueue-blocks`).
      still write): this side's own half close then waits for the ack
      before the session ends (relay `closeWrite` does not `markClosed`,
      agent `pump` waits on `halfEnd.done` before closing the target). A
-     whole close needs no ack (the reader sees a reset either way).
+     whole close needs no ack; the agent's reaches the relay's reader as
+     a reset (finding 15), the relay's reaches the agent's target as a
+     FIN (open, finding 15).
    - Failure: a stream that ends while a side waits for its ack ends the
      session with a reset at that app, never a clean end: relay `lose`
      counts a session whose own half close was not acked as lost (the
@@ -567,6 +589,36 @@ acknowledgement, and `inproc-enqueue-blocks`).
     applied to the newer one's labels. Severity: low (a window of one
     request). Next: the source session on the agent-to-agent call (relay
     proto and `rpcclient`, a release of github.com/nfltr/relay).
+15. **A lost or aborted session reached the client as a clean end** (code,
+    Linux runner flake of
+    `TestTCPTunnelEndAckStreamLossResetsHalfClosedClient/endpoint`, and
+    review AL-1/AL-2; lane ENDACKFIX, 2026-11-02). (a) Race: `CloseAll`'s
+    `lose` closes the session's queue, then aborts the client (RST); the
+    drained queue woke `handleLocalConn`'s writer, which sent the agent's
+    held half close to the client as a FIN first. A client that had
+    half-closed read EOF: a clean end while its tail was lost (finding 2's
+    guarantee broken on that interleaving; 21 of 200 runs at
+    GOMAXPROCS=2 under load). The spec was right (a held half close is
+    never released by `Down`); the model did not have the hold itself
+    (AL-2): it now releases a half close (`Release`) at receipt or at the
+    ack, `waits` marks an app that half-closed before, and `NoSilentLoss`
+    covers that EOF (mutant `no-hold`). (b) The agent's whole close
+    before its half close (target read error, stall reset, refused open)
+    reached the client as a FIN and an in-process reader as `io.EOF`: a
+    cut stream looked whole (AL-1). Severity: medium (silent truncation).
+    **Fixed** on streams with the end acknowledgement: `Dispatch` marks
+    such a session `aborted` (`errTCPSessionAborted`, `codes.Aborted`),
+    and `handleLocalConn`'s writer resets the client itself for every
+    typed end (`endErr` not `io.EOF`), never a FIN first; the bytes before
+    are delivered. `AbortTyped`, mutant `abort-as-eof`; the recorder's
+    `Eof` and `spec/testdata/reject-eof-after-loss.ndjson`. Guards:
+    `TestTCPTunnelEndAckStreamLossResetsHalfClosedClient` (deterministic
+    now: the test's connection resets late), `TestTCPTunnelEndAckAgentAbortResetsClient`.
+    **Open**: the relay's whole close reaches the agent's target as a FIN
+    (agent `closeFrame`, github.com/nfltr/relay): the relay sends whole
+    both for a client's error and for a normal `inProcConn.Close`, so the
+    agent cannot tell them apart without a frame flag (relay proto,
+    `client/agent`). The model keeps `AbortTyped` to the relay side.
 
 Checked by review and holding for the feed itself: a revision only grows
 within a process; a cursor of another epoch (a resync, another process)

@@ -130,6 +130,11 @@ mutants)
 	expect AgentLink.cfg MCAgentLink.tla no-credit -e 's/Credit = TRUE/Credit = FALSE/' -e 's/MaxBytes = 2/MaxBytes = 3/' # a byte past the window
 	expect AgentLink.cfg MCAgentLink.tla lose-as-eof -e "$m"'lose-as-eof"/'
 	expect AgentLink.cfg MCAgentLink.tla lose-unacked-clean -e "$m"'lose-unacked-clean"/'
+	expect AgentLink.cfg MCAgentLink.tla no-hold -e "$m"'no-hold"/'
+	expect AgentLink.cfg MCAgentLink.tla abort-as-eof -e "$m"'abort-as-eof"/'
+	# Witnesses: the states the invariants above guard are reached.
+	expect AgentLink.cfg MCAgentLink.tla witness:abort -e 's/    AbortTyped/    WitnessAbort/'
+	expect AgentLink.cfg MCAgentLink.tla witness:held-eof -e 's/    NoSilentLoss/    WitnessHeldEof/'
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'
 	expect Handoff.cfg Handoff.tla keep-conns -e "$m"'keep-conns"/'
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'
@@ -169,11 +174,13 @@ traces)
 		exit 1
 	}
 	# The checker must reject a trace that is no behaviour.
-	cp spec/testdata/reject-data-after-fin.ndjson "$work/reject.ndjson"
-	if trace "$work/reject.ndjson"; then
-		echo "spec/testdata/reject-data-after-fin.ndjson: accepted, want rejected"
-		exit 1
-	fi
+	for r in spec/testdata/reject-*.ndjson; do
+		cp "$r" "$work/reject.ndjson"
+		if trace "$work/reject.ndjson"; then
+			echo "$r: accepted, want rejected"
+			exit 1
+		fi
+	done
 	n=0 bad=0
 	for t in "$work"/traces/*.ndjson; do
 		n=$((n + 1))

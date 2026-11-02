@@ -35,6 +35,9 @@ Step ==
       [] E.ev = "Recv" -> Got(E) /\ Recv("r")
       [] E.ev = "Finish" -> Finish("r", E.s)
       [] E.ev = "Down" -> Down("r")
+      \* The reader gets an EOF: only of a released half close, and before
+      \* Down (after it reads are not logged) once its tail was read.
+      [] E.ev = "Eof" -> why["r"][E.s] = "eof" /\ rfin["r"][E.s] = "half" /\ (down["r"] \/ q["r"][E.s] = 0) /\ UNCHANGED vars
       [] OTHER -> Print(<<"unknown event", E>>, FALSE)
 
 \* The agent: its receive loop, its app's writes sized as the relay

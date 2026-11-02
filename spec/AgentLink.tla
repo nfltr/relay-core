@@ -42,10 +42,11 @@ VARIABLES
     clean,  \* [P -> [Sess -> BOOLEAN]]: ended with both halves closed (FIN both ways)
     acked,  \* [P -> [Sess -> BOOLEAN]]: the peer acknowledged this side's half close (EndAck)
     apend,  \* [P -> [Sess -> BOOLEAN]]: an ack of the peer's half close decided, not yet queued
+    waits,  \* [P -> [Sess -> BOOLEAN]]: the app half-closed before the peer's half close was released to it: the EOF it then gets is a clean end (FIN both ways)
     closing, \* [Sess -> BOOLEAN]: the relay's inProcConn.Close was called (finding 3)
     err     \* receive steps that broke the protocol
 
-vars == <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, closing, err>>
+vars == <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
 NoCr == [on |-> FALSE, n |-> 0, held |-> 0, cons |-> 0]
 Zero == [p \in P |-> [s \in Sess |-> 0]]
@@ -68,6 +69,7 @@ Init ==
     /\ clean = [p \in P |-> [s \in Sess |-> FALSE]]
     /\ acked = [p \in P |-> [s \in Sess |-> FALSE]]
     /\ apend = [p \in P |-> [s \in Sess |-> FALSE]]
+    /\ waits = [p \in P |-> [s \in Sess |-> FALSE]]
     /\ closing = [s \in Sess |-> FALSE]
     /\ err = {}
 
@@ -77,7 +79,7 @@ Open(s) ==
     /\ st' = [st EXCEPT !["r"][s] = "open"]
     /\ cr' = [cr EXCEPT !["r"][s] = [NoCr EXCEPT !.on = Credit, !.n = Win["a"]]]
     /\ Put("r", Frame("open", s, 0, 0))
-    /\ UNCHANGED <<alive, down, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, closing, err>>
+    /\ UNCHANGED <<alive, down, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
 \* send -> sendData: Credit.Acquire takes n (waiting for it), the frame is
 \* queued by SendData. Without credit nothing is taken.
@@ -89,7 +91,7 @@ Write(p, s, n) ==
                /\ cr' = [cr EXCEPT ![p][s].n = @ - n]
           ELSE UNCHANGED cr
     /\ pend' = [pend EXCEPT ![p][s] = n]
-    /\ UNCHANGED <<ch, alive, down, st, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, closing, err>>
+    /\ UNCHANGED <<ch, alive, down, st, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
 \* An inProcConn's send looks again under the session's wmu: after a close
 \* (CloseWrite or Close on another goroutine) it gives the credit back and
@@ -107,7 +109,7 @@ SendData(p, s) ==
                /\ wr' = [wr EXCEPT ![p][s] = @ + pend[p][s]]
                /\ UNCHANGED cr
     /\ pend' = [pend EXCEPT ![p][s] = 0]
-    /\ UNCHANGED <<alive, down, st, gpend, q, rcv, wfin, rfin, finAt, why, clean, acked, apend, closing, err>>
+    /\ UNCHANGED <<alive, down, st, gpend, q, rcv, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
 \* The app's EOF: relay closeWrite, agent pump's half close. Its data is
 \* sent by the same goroutine first, except on an inProcConn, whose Write
@@ -117,6 +119,7 @@ CloseWrite(p, s) ==
     /\ pend[p][s] = 0 \/ (p = "r" /\ s \in InProc)
     /\ wfin' = [wfin EXCEPT ![p][s] = "half"]
     /\ finAt' = [finAt EXCEPT ![p][s] = wr[p][s]]
+    /\ waits' = [waits EXCEPT ![p][s] = why[p][s] = ""]
     /\ IF Mutant = "fin-overtakes" /\ alive
           THEN ch' = [ch EXCEPT ![p] = <<Frame("half", s, 0, wr[p][s])>> \o @]
           ELSE Put(p, Frame("half", s, 0, wr[p][s]))
@@ -133,13 +136,13 @@ Abort(p, s) ==
     /\ wfin' = [wfin EXCEPT ![p][s] = "whole"]
     /\ finAt' = [finAt EXCEPT ![p][s] = IF wfin[p][s] = "" THEN wr[p][s] ELSE @]  \* the first close's
     /\ Put(p, Frame("whole", s, 0, wr[p][s]))
-    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, apend, closing, err>>
+    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, apend, waits, closing, err>>
 
 \* inProcConn.Close is called (it marks the session closed first).
 StartClose(s) ==
     /\ s \in InProc /\ st["r"][s] = "open" /\ ~closing[s]
     /\ closing' = [closing EXCEPT ![s] = TRUE]
-    /\ UNCHANGED <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, err>>
+    /\ UNCHANGED <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, err>>
 
 
 \* The app takes k bytes: Credit.Consumed, a window update once a quarter
@@ -157,13 +160,13 @@ Read(p, s, k) ==
                      ELSE /\ cr' = [cr EXCEPT ![p][s].cons = c]
                           /\ UNCHANGED gpend
           ELSE UNCHANGED <<cr, gpend>>
-    /\ UNCHANGED <<ch, alive, down, st, pend, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, closing, err>>
+    /\ UNCHANGED <<ch, alive, down, st, pend, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
 SendWin(p, s) ==
     /\ gpend[p][s] > 0
     /\ Put(p, Frame("win", s, gpend[p][s], 0))
     /\ gpend' = [gpend EXCEPT ![p][s] = 0]
-    /\ UNCHANGED <<alive, down, st, cr, pend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, closing, err>>
+    /\ UNCHANGED <<alive, down, st, cr, pend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
 \* The frame at the head of p's input waits for room in its session's queue:
 \* the receive loop of every session on the stream waits with it.
@@ -202,15 +205,36 @@ RecvWin(p, f) ==
     ELSE /\ cr' = [cr EXCEPT ![p][f.s].n = @ + f.n]
          /\ UNCHANGED err
 
-\* relay Dispatch (peerClosedWrite / markClosed), agent closeFrame: the
-\* reader gets EOF once the queued tail is read. After this side's whole
-\* close the session takes nothing (its queue is closed, the agent forgot it).
+\* relay Dispatch (peerClosedWrite / markClosed), agent closeFrame. A half
+\* close is released to the app (why = "eof": its EOF follows the queued
+\* tail; relay recvQ closed, agent hold released) at once, unless (EndAck)
+\* this side half-closed and the peer has not acked it: then it is held
+\* until the ack (Recv) and the stream's end makes the session lost (Down;
+\* finding 2, no-hold). An app that half-closed before the release (waits)
+\* then sees FIN both ways: a clean end (NoSilentLoss). A whole close
+\* not preceded by the peer's half close is the peer's abort (the agent's
+\* target read error, a stall reset, a refused open): with EndAck the
+\* relay's reader gets a reset, never a clean end (finding 15,
+\* abort-as-eof). The relay's own whole close may be inProcConn.Close, a
+\* normal close: the agent's reader gets EOF (finding 15, open). After
+\* this side's whole close the session takes nothing (its queue is closed,
+\* the agent forgot it).
+Release(p, s) ==
+    /\ why' = [why EXCEPT ![p][s] = IF @ = "" THEN "eof" ELSE @]
+    /\ clean' = [clean EXCEPT ![p][s] = @ \/ (why[p][s] = "" /\ waits[p][s])]
+
 RecvClose(p, f) ==
     IF st[p][f.s] = "open" /\ rfin[p][f.s] = "" /\ wfin[p][f.s] # "whole"
        THEN /\ rfin' = [rfin EXCEPT ![p][f.s] = f.t]
-            /\ why' = [why EXCEPT ![p][f.s] = IF @ = "" THEN "eof" ELSE @]
+            /\ IF f.t = "whole"
+                  THEN /\ why' = [why EXCEPT ![p][f.s] = IF @ # "" THEN @
+                                    ELSE IF p = "r" /\ EndAck /\ Mutant # "abort-as-eof" THEN "reset" ELSE "eof"]
+                       /\ UNCHANGED clean
+               ELSE IF ~EndAck \/ wfin[p][f.s] = "" \/ acked[p][f.s] \/ Mutant = "no-hold"
+                  THEN Release(p, f.s)
+               ELSE UNCHANGED <<why, clean>>
             /\ UNCHANGED err
-       ELSE UNCHANGED <<rfin, why, err>>
+       ELSE UNCHANGED <<rfin, why, clean, err>>
 
 \* relay recvLoop (grpcCreditFrame, Dispatch), agent serveTCPStream. With
 \* EndAck a half close taken (RecvClose) is acknowledged (SendAck): every
@@ -226,12 +250,14 @@ Recv(p) ==
                    /\ p = "a"
                    /\ st' = [st EXCEPT !["a"][f.s] = "open"]
                    /\ cr' = [cr EXCEPT !["a"][f.s] = [NoCr EXCEPT !.on = Credit, !.n = Win["r"]]]
-                   /\ UNCHANGED <<q, rcv, rfin, why, err>>
-              [] f.t = "data" -> RecvData(p, f) /\ UNCHANGED <<st, rfin, why>>
-              [] f.t = "win" -> RecvWin(p, f) /\ UNCHANGED <<st, q, rcv, rfin, why>>
-              [] f.t = "ack" -> UNCHANGED <<st, cr, q, rcv, rfin, why, err>>
+                   /\ UNCHANGED <<q, rcv, rfin, why, clean, err>>
+              [] f.t = "data" -> RecvData(p, f) /\ UNCHANGED <<st, rfin, why, clean>>
+              [] f.t = "win" -> RecvWin(p, f) /\ UNCHANGED <<st, q, rcv, rfin, why, clean>>
+              [] f.t = "ack" -> \* recvAck: a held half close is released
+                   /\ IF st[p][f.s] = "open" /\ rfin[p][f.s] = "half" THEN Release(p, f.s) ELSE UNCHANGED <<why, clean>>
+                   /\ UNCHANGED <<st, cr, q, rcv, rfin, err>>
               [] OTHER -> RecvClose(p, f) /\ UNCHANGED <<st, cr, q, rcv>>
-    /\ UNCHANGED <<alive, down, pend, gpend, wr, wfin, finAt, clean, closing>>
+    /\ UNCHANGED <<alive, down, pend, gpend, wr, wfin, finAt, waits, closing>>
 
 \* The ack goes out on its own (relay `go a.enqueue`, agent `go t.enqueue`;
 \* the relay's waits for outbox room like its data):
@@ -241,7 +267,7 @@ SendAck(p, s) ==
     /\ p = "r" /\ alive => Len(ch["r"]) < OutCap
     /\ Put(p, Frame("ack", s, 0, 0))
     /\ apend' = [apend EXCEPT ![p][s] = FALSE]
-    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, closing, err>>
+    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, waits, closing, err>>
 
 \* The session ends here (relay removeSession, agent closeSession): both
 \* halves closed (relay closeWrite/peerClosedWrite -> markClosed, agent
@@ -258,7 +284,7 @@ Finish(p, s) ==
     /\ cr' = [cr EXCEPT ![p][s] = NoCr]
     /\ q' = [q EXCEPT ![p][s] = 0]
     /\ clean' = [clean EXCEPT ![p][s] = wfin[p][s] = "half" /\ rfin[p][s] = "half"]
-    /\ UNCHANGED <<ch, alive, down, pend, gpend, rcv, wr, wfin, rfin, finAt, why, acked, apend, closing, err>>
+    /\ UNCHANGED <<ch, alive, down, pend, gpend, rcv, wr, wfin, rfin, finAt, why, acked, apend, waits, closing, err>>
 
 \* Without credit only: the head frame's session took nothing for the stall
 \* bound (deliver, PushWithin): resetSession drops it and closes it.
@@ -271,14 +297,14 @@ Stall(p) ==
          /\ wfin' = [wfin EXCEPT ![p][s] = "whole"]
          /\ finAt' = [finAt EXCEPT ![p][s] = wr[p][s]]
          /\ ch' = [ch EXCEPT ![Peer(p)] = Tail(@), ![p] = Append(@, Frame("whole", s, 0, wr[p][s]))]
-    /\ UNCHANGED <<alive, down, cr, pend, gpend, rcv, wr, rfin, clean, acked, apend, closing, err>>
+    /\ UNCHANGED <<alive, down, cr, pend, gpend, rcv, wr, rfin, clean, acked, apend, waits, closing, err>>
 
 \* The stream fails: what was on the way is lost.
 Break ==
     /\ CanBreak /\ alive
     /\ alive' = FALSE
     /\ ch' = [p \in P |-> <<>>]
-    /\ UNCHANGED <<down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, closing, err>>
+    /\ UNCHANGED <<down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
 \* relay unregister -> CloseAll (lose: an RST unless the agent had closed
 \* its side), Credit.Close; agent closeAll (a target the relay had not
@@ -301,7 +327,7 @@ Down(p) ==
                    THEN [clean EXCEPT ![p] = [s \in Sess |->
                           @[s] \/ (st[p][s] = "open" /\ wfin[p][s] = "half" /\ rfin[p][s] = "half")]]
                    ELSE clean
-    /\ UNCHANGED <<ch, alive, q, rcv, wr, wfin, rfin, finAt, acked, closing, err>>
+    /\ UNCHANGED <<ch, alive, q, rcv, wr, wfin, rfin, finAt, acked, waits, closing, err>>
 
 App(p, s) ==
     \/ \E n \in 1..Chunk : Write(p, s, n)
@@ -381,6 +407,15 @@ DownEndsAll == \A p \in P : down[p] => \A s \in Sess : st[p][s] # "open"
 NoSilentLoss ==
     \A p \in P, s \in Sess : clean[p][s] /\ ~alive =>
         rcv[Peer(p)][s] = finAt[p][s] /\ rfin[Peer(p)][s] # ""
+
+\* The agent's abort reaches the relay's reader as a reset (finding 15).
+AbortTyped == EndAck => \A s \in Sess : rfin["r"][s] = "whole" => why["r"][s] # "eof"
+
+\* Witnesses (make spec-mutants: TLC must violate each, so the invariants
+\* above are not vacuous): the agent's abort reaches the relay; an app
+\* that half-closed first gets a released EOF (a clean end).
+WitnessAbort == EndAck => \A s \in Sess : rfin["r"][s] # "whole"
+WitnessHeldEof == \A p \in P, s \in Sess : ~(waits[p][s] /\ why[p][s] = "eof")
 
 (* Liveness. *)
 EndsAfterBreak == (~alive) ~> (\A p \in P, s \in Sess : st[p][s] # "open")
