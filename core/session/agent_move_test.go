@@ -20,19 +20,28 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/nfltr/relay-core/broker"
 	"github.com/nfltr/relay-core/core/directory"
 )
 
 // moveSink records what the relay sends an agent.
 type moveSink struct {
-	mu   sync.Mutex
-	sent []pb.Move
+	mu     sync.Mutex
+	sent   []pb.Move
+	before []int // the requests sent before each move step
+	reqs   int
 }
 
 func (s *moveSink) Send(r *pb.HTTPProxyRequest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sent = append(s.sent, r.GetMove())
+	switch {
+	case r.GetRequest() != nil:
+		s.reqs++
+	case r.GetMove() != pb.Move_MOVE_UNSPECIFIED:
+		s.sent = append(s.sent, r.GetMove())
+		s.before = append(s.before, s.reqs)
+	}
 	return nil
 }
 func (s *moveSink) Recv() (*pb.HTTPProxyResponse, error) { select {} }
@@ -40,6 +49,38 @@ func (s *moveSink) steps() []pb.Move {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]pb.Move(nil), s.sent...)
+}
+
+// serveTopic runs the session's consumer of its agent's topic
+// (relayRequestsToAgent), as ConnectHTTP does: it sends the move's
+// MOVE_DONE.
+func serveTopic(t *testing.T, d *Dispatcher, s *HTTPStream) {
+	t.Helper()
+	if err := d.broker.CreateTopic(s.ID, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	c, err := d.broker.Subscribe(broker.ConsumerOptions{Topic: s.ID, SubscriptionName: s.ID, Type: broker.ConsumerTypeExclusive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.relayRequestsToAgent(ctx, s, c) }()
+	t.Cleanup(func() { cancel(); <-done; c.Close() })
+}
+
+// publishTo publishes a request's first message to the agent's topic, as
+// the ingress's proxy does.
+func publishTo(t *testing.T, d *Dispatcher, agentID, txn string) {
+	t.Helper()
+	p, err := d.broker.CreateProducer(broker.ProducerOptions{Topic: agentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.SendProto(t.Context(), &pb.HTTPProxyRequest{Request: &pb.HTTPRequest{TransactionId: txn}, Timestamps: &pb.Timestamps{}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func waitMove(t *testing.T, what string, ok func() bool) {
@@ -71,8 +112,9 @@ func movingSession(t *testing.T) (d *Dispatcher, s *HTTPStream, sink *moveSink, 
 	t.Cleanup(ticker.Stop)
 	s = NewHTTPStream("agent-1", sink, t.Context(), make(chan proto.Message), ticker)
 	s.connectedAt = time.Now().Add(-time.Minute)
-	s.moved = make(chan struct{})
+	s.moved, s.moveDone = make(chan struct{}), make(chan struct{})
 	d.Agents.Store("agent-1", s)
+	serveTopic(t, d, s)
 	mc.Data[directory.GetDispatcherCacheKey("agent-1")] = &directory.Value{PodIP: "10.0.0.1", Since: s.connectedAt.UnixNano()}
 	return d, s, sink, mc, inv, drain
 }
@@ -81,9 +123,16 @@ func movingSession(t *testing.T) (d *Dispatcher, s *HTTPStream, sink *moveSink, 
 // letting it go; once the agent reports its new connection and its record
 // names the new session, the replica stops routing to the old stream, then
 // tells the agent no request follows (MOVE_DONE), and the session ends when
-// the agent closes the stream.
+// the agent closes the stream. A request the ingress picked this replica
+// for before routing stopped (its route lease) holds MOVE_DONE back until
+// its first message is on the agent's topic, and goes out before it
+// (spec/README.md finding 6: a timer sent MOVE_DONE past it).
 func TestAgentMovesBeforeTheReplicaLetsItGo(t *testing.T) {
 	d, s, sink, mc, inv, drain := movingSession(t)
+	release, ok := d.RouteHere("agent-1") // picked: its body's first chunk still being read
+	if !ok {
+		t.Fatal("no route lease on a session that routes")
+	}
 	received := make(chan error, 1)
 	done := make(chan error, 1)
 	go func() { done <- d.WatchAgentSession(t.Context(), "agent-1", s, inv, received) }()
@@ -100,10 +149,20 @@ func TestAgentMovesBeforeTheReplicaLetsItGo(t *testing.T) {
 	mc.Mu.Unlock()
 	d.processHTTPInput(t.Context(), s, &pb.HTTPProxyResponse{Move: pb.Move_MOVE_CONNECTED}, time.Now()) //nolint:errcheck
 	waitMove(t, "routing stopped", func() bool { return !d.IsAgentConnected("agent-1") })
-	if steps := sink.steps(); len(steps) != 1 {
-		t.Fatalf("MOVE_DONE before the queued requests settled: %v", steps)
+	if _, ok := d.RouteHere("agent-1"); ok {
+		t.Fatal("a route lease on a session that no longer routes")
 	}
+	time.Sleep(time.Second) // the old settle timer was 500 ms
+	if steps := sink.steps(); len(steps) != 1 {
+		t.Fatalf("MOVE_DONE while a request routed here was not yet published: %v", steps)
+	}
+	publishTo(t, d, "agent-1", "txn-picked")
+	release()
 	waitMove(t, "MOVE_DONE", func() bool { return len(sink.steps()) == 2 && sink.steps()[1] == pb.Move_MOVE_DONE })
+	if sink.mu.Lock(); sink.before[1] != 1 {
+		t.Fatalf("MOVE_DONE went out before the routed request (%d requests before it)", sink.before[1])
+	}
+	sink.mu.Unlock()
 	select {
 	case err := <-done:
 		t.Fatalf("session ended (%v) before the agent closed the stream", err)

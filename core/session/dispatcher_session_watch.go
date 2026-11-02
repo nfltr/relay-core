@@ -84,7 +84,9 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 	// connection, check until its record names it, settle until MOVE_DONE.
 	var mv *agentMove
 	var moved <-chan struct{}
-	var check, settle <-chan time.Time
+	var check <-chan time.Time
+	var settle <-chan struct{} // the route leases ended
+	var gaveUp *HTTPStream     // a rebalancing move given up: B's record later goes on with it
 	// A rebalancing move (agent_rebalance.go): ask until this replica asks
 	// the agent to move; giveUp until its new connection is up and its
 	// record names it (then the move goes on as above).
@@ -136,11 +138,19 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 		case <-reannounce: // the store lost the records: rewrite now (gates lifted)
 			reannounce = d.reannounced()
 			if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, streamSession(tracker), streamLabels(tracker), streamCapabilities(tracker)); err != nil {
-				return errSessionReplaced // directory.ErrSuperseded
+				if gaveUp == nil {
+					return errSessionReplaced // directory.ErrSuperseded
+				}
+				mv, settle, refresh, reannounce = d.resumeMove(agentID, gaveUp)
+				gaveUp = nil
 			}
 		case <-refresh:
 			if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, streamSession(tracker), streamLabels(tracker), streamCapabilities(tracker)); err != nil {
-				return errSessionReplaced // directory.ErrSuperseded
+				if gaveUp == nil {
+					return errSessionReplaced // directory.ErrSuperseded
+				}
+				mv, settle, refresh, reannounce = d.resumeMove(agentID, gaveUp)
+				gaveUp = nil
 			}
 		case <-stopping:
 			stopping = nil
@@ -192,7 +202,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			mv.giveUp()
 			d.tcpMovingAway(agentID, false)
 			d.stays.Store(agentID, time.Now()) // its sessions are not asked again (stayFor)
-			mv = nil
+			gaveUp, mv = mv.stream, nil
 			refresh = refreshEvery
 			if refreshEvery != nil {
 				reannounce = d.reannounced()
@@ -208,10 +218,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			}
 		case <-settle:
 			settle, stopNow = nil, nil // the agent closes the stream; the forced stop bounds it
-			if err := mv.done(); err != nil {
-				return err
-			}
-			d.Logger.Info("agent moved to another replica: closing its old stream here", "AgentID", agentID)
+			mv.done()
 		}
 	}
 }

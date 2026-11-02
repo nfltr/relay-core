@@ -48,7 +48,10 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Error: Missing %s header", session.AgentIDKey), http.StatusBadRequest)
 		return
 	}
-	dispatcherURL, err := ing.dispatcherURL(r.Context(), agentID)
+	dispatcherURL, release, err := ing.dispatcherURL(r.Context(), agentID)
+	if release != nil {
+		defer release()
+	}
 	// Always advertise the relay pod that handled this request so
 	// cross-pod routing failures are debuggable from a curl response.
 	// In a multi-pod setup the same agent may route to a different
@@ -108,9 +111,11 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 			metrics.RecordAgentHTTPRequest("link")
 			meter := ing.core.Dispatcher.OpenMeter(metrics.PathHTTPLink, agentID)
 			defer meter.End()
+			release() // its session on the agent link: no message on the topic
 			ing.link.ServeHTTP(metrics.CountHTTP(w, r, metrics.PathHTTPLink, meter, time.Now()), r)
 			return
 		}
+		r = r.WithContext(withRouteLease(r.Context(), release))
 		metrics.RecordAgentHTTPRequest("grpc")
 		stripHopByHopHeaders(r.Header)
 		meter := ing.core.Dispatcher.OpenMeter(metrics.PathHTTPGRPC, agentID)
@@ -134,26 +139,44 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-// dispatcherURL is where agentID's request goes: loopbackURL when the agent
-// is connected here, else the replica holding it, named by its pod IP and
-// replica link port (the peer reverse proxies' link dialer carries it).
-func (ing *Ingress) dispatcherURL(ctx context.Context, agentID string) (*url.URL, error) {
+// dispatcherURL is where agentID's request goes: loopbackURL when this
+// replica routes to the agent, with the route lease release ends (once the
+// request's first message is on the agent's topic: session.RouteHere),
+// else the replica holding it, named by its pod IP and replica link port
+// (the peer reverse proxies' link dialer carries it).
+func (ing *Ingress) dispatcherURL(ctx context.Context, agentID string) (u *url.URL, release func(), err error) {
 	logger := logging.With(ing.logger, "AgentID", agentID)
-	if ing.core.Dispatcher.IsAgentConnected(agentID) {
+	if release, ok := ing.core.Dispatcher.RouteHere(agentID); ok {
 		// agent is connected to current pod: served in process (dispatch)
 		logger.Debug("agent is connected, serving in process", "agent_id", agentID)
-		return ing.loopbackURL, nil
+		return ing.loopbackURL, release, nil
 	}
 	podIP, err := ing.core.DispatcherIPInventory.GetIP(ctx, agentID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dispatcherURL, err := url.Parse(fmt.Sprintf("http://%s:%s", podIP, ing.peerLinkPort))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	logger.Debug("dispatcher URL resolved", "url", dispatcherURL.String())
-	return dispatcherURL, nil
+	return dispatcherURL, nil, nil
+}
+
+// routeLeaseKey carries a request's route lease from dispatch to the
+// proxy, which ends it once the request's first message is published.
+type routeLeaseKey struct{}
+
+func withRouteLease(ctx context.Context, release func()) context.Context {
+	return context.WithValue(ctx, routeLeaseKey{}, release)
+}
+
+// routeLease is the request's route lease's release; a no-op without one.
+func routeLease(ctx context.Context) func() {
+	if release, ok := ctx.Value(routeLeaseKey{}).(func()); ok {
+		return release
+	}
+	return func() {}
 }
 
 // hopByHopHeaders are the headers httputil.ReverseProxy removes from a

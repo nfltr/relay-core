@@ -195,7 +195,7 @@ type Dispatcher struct {
 	// agents and refuses new agent sessions (agent_rebalance.go).
 	overShare atomic.Bool
 	// movedAway: agents whose moved session here no longer routes but
-	// still ends (its settle, MOVE_DONE) and holds its subscription
+	// still ends (its route leases, MOVE_DONE) and holds its subscription
 	// (agent_rebalance.go refusesAgents).
 	movedAway sync.Map // agent id -> *HTTPStream
 	// stays: agents whose rebalancing move reached no other replica, left

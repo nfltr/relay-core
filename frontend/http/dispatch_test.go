@@ -251,7 +251,7 @@ func TestGetDispatcherURL_AgentConnected(t *testing.T) {
 	defer ticker.Stop()
 	d.Agents.Store("agentID-1", session.NewHTTPStream("agentID-1", mock, nil, nil, ticker))
 
-	dispatcherURL, err := ing.dispatcherURL(context.Background(), "agentID-1")
+	dispatcherURL, _, err := ing.dispatcherURL(context.Background(), "agentID-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestGetDispatcherURL_AgentNotConnected(t *testing.T) {
 	})
 	ing.core.Dispatcher = d
 
-	_, err := ing.dispatcherURL(context.Background(), "nonexistent")
+	_, _, err := ing.dispatcherURL(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for non-connected agent")
 	}
@@ -305,7 +305,7 @@ func TestGetDispatcherURL_SameEnv(t *testing.T) {
 	})
 	ing.core.Dispatcher = d
 
-	dispatcherURL, err := ing.dispatcherURL(context.Background(), "agentID-1")
+	dispatcherURL, _, err := ing.dispatcherURL(context.Background(), "agentID-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestRPCServer_getDispatcherURL_SameEnv(t *testing.T) {
 	_ = inv.SetIP(ctx, "agentID-remote", time.Minute)
 	viper.Reset()
 
-	dispatcherURL, err := ing.dispatcherURL(ctx, "agentID-remote")
+	dispatcherURL, _, err := ing.dispatcherURL(ctx, "agentID-remote")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

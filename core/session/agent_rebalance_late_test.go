@@ -17,7 +17,7 @@ import (
 
 // TestConnectWhileTheMovedSessionStillEndsIsUnavailable: once a replica
 // stops routing to an agent's moved session it still holds that session
-// (its settle, then MOVE_DONE) and its subscription; a connection of the
+// (its route leases, then MOVE_DONE) and its subscription; a connection of the
 // same agent landing there in that window is refused as Unavailable, which
 // clients try again, not with the broker's "subscription already exists"
 // (TestRebalanceAfterScaleUp, Linux runner at 30cad49: a second move landed
@@ -28,6 +28,8 @@ func TestConnectWhileTheMovedSessionStillEndsIsUnavailable(t *testing.T) {
 	f.route(a)
 	f.connect("agent-x")
 	f.route(b)
+	release, _ := a.RouteHere("agent-x") // a routed request holds the moved session (MOVE_DONE)
+	defer release()
 	if !a.moveAgent("agent-x") {
 		t.Fatal("agent-x was not asked to move")
 	}

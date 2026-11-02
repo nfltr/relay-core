@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -186,7 +187,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 			d.Logger.Info("agent advertised capabilities", "agent_id", agentID, "capabilities", agentStream.capabilities)
 		}
 		if advertisesMove(stream.Context()) {
-			agentStream.moved, agentStream.rebalance = make(chan struct{}), make(chan struct{})
+			agentStream.moved, agentStream.rebalance, agentStream.moveDone = make(chan struct{}), make(chan struct{}), make(chan struct{})
 		}
 		// E2EE: read TLS certificate fingerprint from agent metadata.
 		if vals := md.Get("x-tls-fingerprint"); len(vals) > 0 && vals[0] != "" {
@@ -301,10 +302,22 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 	var bookkept time.Time
 	var bookkeeping atomic.Bool
 	incomingMessages := consumer.Chan()
+	moveDone := stream.moveDone
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-moveDone: // agent_move.go: after every request the channel holds
+			moveDone = nil
+			for range len(incomingMessages) {
+				if err := d.relayRequest(stream, <-incomingMessages, logger); err != nil {
+					return err
+				}
+			}
+			if err := stream.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_DONE}); err != nil {
+				return err
+			}
+			logger.Info("agent moved to another replica: told it no request follows on its old stream")
 		case <-heartbeatTicker.C:
 			if stream.OutboundDataSentWithin(interval) {
 				logger.Debug("skipping heartbeat to agentID agent: outbound data recently sent")
@@ -327,39 +340,48 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 			if !ok {
 				return errors.New("broker consumer channel closed")
 			}
-			logger.Debug("received message from broker")
-			now := time.Now()
-			request, err := broker.DecodeBrokerMessage(message, &pb.HTTPProxyRequest{})
-			if err != nil {
-				metrics.RegisterBrokerMessageDecodeError()
-				// Nack so the message can be redelivered
+			if err := d.relayRequest(stream, message, logger); err != nil {
 				return err
 			}
-			trackRequest(stream, request.Request)
-			logger2 := logging.With(logger, "transaction_id", request.Request.TransactionId)
-			logger2.Debug("unmarshalling message took", "duration", time.Since(now))
-			logger2.Debug("time since message has left proxy server", "duration", now.Sub(time.UnixMilli(request.Timestamps.RequestAtHttpServer)))
-			metrics.IncrDequeuedRequests()
-			request.Timestamps.RequestAtGrpcServer = now.UnixMilli()
-			err = stream.Send(request)
-			if err != nil {
-				logger2.Error("sending request to agent", "error", err)
-				return fmt.Errorf("send failed: %w", err)
-			}
-			stream.bytesSent.Add(int64(len(request.Request.Payload)))
-			stream.requestCount.Add(1)
-
-			// Ack only after successful decode and send
-			ackErr := message.Ack()
-			if ackErr != nil {
-				metrics.RegisterBrokerAckFailure()
-				return fmt.Errorf("acking failed: %s: %w", message, ackErr)
-			}
-
-			logger2.Debug("handed to agent stream")
-			metrics.RegisterRequestsSentToAgents()
 		}
 	}
+}
+
+// relayRequest sends one message of the agent's topic on its stream and
+// acks it.
+func (d *Dispatcher) relayRequest(stream *HTTPStream, message broker.Message, logger *slog.Logger) error {
+	logger.Debug("received message from broker")
+	now := time.Now()
+	request, err := broker.DecodeBrokerMessage(message, &pb.HTTPProxyRequest{})
+	if err != nil {
+		metrics.RegisterBrokerMessageDecodeError()
+		// Nack so the message can be redelivered
+		return err
+	}
+	trackRequest(stream, request.Request)
+	logger2 := logging.With(logger, "transaction_id", request.Request.TransactionId)
+	logger2.Debug("unmarshalling message took", "duration", time.Since(now))
+	logger2.Debug("time since message has left proxy server", "duration", now.Sub(time.UnixMilli(request.Timestamps.RequestAtHttpServer)))
+	metrics.IncrDequeuedRequests()
+	request.Timestamps.RequestAtGrpcServer = now.UnixMilli()
+	err = stream.Send(request)
+	if err != nil {
+		logger2.Error("sending request to agent", "error", err)
+		return fmt.Errorf("send failed: %w", err)
+	}
+	stream.bytesSent.Add(int64(len(request.Request.Payload)))
+	stream.requestCount.Add(1)
+
+	// Ack only after successful decode and send
+	ackErr := message.Ack()
+	if ackErr != nil {
+		metrics.RegisterBrokerAckFailure()
+		return fmt.Errorf("acking failed: %s: %w", message, ackErr)
+	}
+
+	logger2.Debug("handed to agent stream")
+	metrics.RegisterRequestsSentToAgents()
+	return nil
 }
 
 // receive receives from grpc agent and

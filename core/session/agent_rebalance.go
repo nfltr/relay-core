@@ -168,6 +168,20 @@ func (m *agentMove) giveUp() {
 	m.stream.moving.Store(false)
 }
 
+// resumeMove goes on with a rebalancing move given up whose agent's new
+// session took the record after all (its renewal here was superseded: a
+// late MOVE_CONNECTED, spec/README.md finding 7): this replica stops
+// routing to the old stream, as after MOVE_CONNECTED, instead of ending it
+// with its requests. It returns the move, the route leases' channel, and
+// no renewal.
+func (d *Dispatcher) resumeMove(agentID string, s *HTTPStream) (*agentMove, <-chan struct{}, <-chan time.Time, <-chan struct{}) {
+	s.moving.Store(true)
+	d.tcpMovingAway(agentID, true)
+	mv := &agentMove{stream: s}
+	d.Logger.Info("rebalancing: the agent's new connection took its record after all; the move goes on", "AgentID", agentID)
+	return mv, d.stopRouting(mv), nil, nil
+}
+
 // tcpMovingAway flags the agent's TCP stream here (if any) as moving away
 // with a rebalancing move, or not once the move is given up.
 func (d *Dispatcher) tcpMovingAway(agentID string, on bool) {

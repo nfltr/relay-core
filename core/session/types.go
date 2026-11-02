@@ -124,6 +124,12 @@ type Stream[S, R proto.Message] struct {
 	// new connection; nil for one that does not.
 	moved     chan struct{}
 	movedOnce sync.Once
+	// leases: the requests the ingress picked this stream for whose first
+	// message is not yet on the consumer's channel (RouteHere); moveDone
+	// is closed once a move may send MOVE_DONE (relayRequestsToAgent
+	// sends it, after what its channel holds). agent_move.go.
+	leases   routeLeases
+	moveDone chan struct{}
 	// moving: asked to move; its record belongs to the new session, so
 	// inbound activity no longer renews it.
 	moving atomic.Bool

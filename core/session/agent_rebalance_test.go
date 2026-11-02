@@ -366,6 +366,39 @@ func TestRebalanceMoveGivenUpKeepsTheAgent(t *testing.T) {
 	}
 }
 
+// TestRebalanceMoveLateConnectedGoesOn: an agent whose new connection is
+// accepted after the move was given up (its own bound runs from its
+// receipt of MOVE_RECONNECT) has its record taken by the new session; the
+// old session's next renewal finds it superseded and goes on with the move
+// (routing stops, MOVE_DONE), instead of ending the session and failing
+// its requests (spec/README.md finding 7).
+func TestRebalanceMoveLateConnectedGoesOn(t *testing.T) {
+	d, s, sink, mc, inv, _ := movingSession(t)
+	d.moveBound = 100 * time.Millisecond
+	d.Config.HeartbeatRecvThreshold = 200 * time.Millisecond // a renewal every 100 ms
+	s.rebalance = make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- d.WatchAgentSession(t.Context(), "agent-1", s, inv, make(chan error)) }()
+	if got := d.rebalanceAgents(0, 2); got != 1 {
+		t.Fatalf("asked %d, want 1", got)
+	}
+	waitMove(t, "MOVE_RECONNECT", func() bool { return len(sink.steps()) == 1 })
+	waitMove(t, "the move given up", func() bool { return !s.moving.Load() })
+
+	mc.Mu.Lock()
+	mc.Data[directory.GetDispatcherCacheKey("agent-1")] = &directory.Value{PodIP: "10.0.0.2", Since: time.Now().UnixNano()}
+	mc.Mu.Unlock()
+	d.processHTTPInput(t.Context(), s, &pb.HTTPProxyResponse{Move: pb.Move_MOVE_CONNECTED}, time.Now()) //nolint:errcheck
+	select {
+	case err := <-done:
+		t.Fatalf("the relay ended the old session (%v): its requests failed", err)
+	case <-time.After(time.Second):
+	}
+	if steps := sink.steps(); len(steps) != 2 || steps[1] != pb.Move_MOVE_DONE || d.IsAgentConnected("agent-1") {
+		t.Fatalf("the move did not go on: steps %v, routed here %v", steps, d.IsAgentConnected("agent-1"))
+	}
+}
+
 // TestRebalanceLeavesYoungSessions: an agent that just arrived (by a
 // drain's or another replica's move) is not asked to move on before the
 // fleet's counts show it (kind soak 2026-10-21, rollout: agents moved twice

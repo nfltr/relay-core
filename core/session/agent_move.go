@@ -5,6 +5,7 @@ package session
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/nfltr/relay/proto/pb"
@@ -21,9 +22,14 @@ import (
 // record (the newest session wins). Once the agent says the new connection
 // is up (MOVE_CONNECTED) and the record names the newer session, this
 // replica stops routing to the old stream (requests resolve to the new
-// replica through the record), lets what it already queued reach the agent
-// (moveSettle), then sends MOVE_DONE; the agent closes the old stream once
-// it has answered every request it received there, and the session ends.
+// replica through the record), waits for the requests the ingress already
+// picked it for (their route leases, RouteHere), and its consumer sends
+// MOVE_DONE after every request it holds (spec/Move.tla): every request
+// the old stream carries precedes MOVE_DONE. The agent closes the old
+// stream once it has answered every request it received there, and the
+// session ends. A renewal of the record that finds the new session's after
+// a rebalancing move gave up, or a late MOVE_CONNECTED, goes on with the
+// move (spec/README.md finding 7).
 // An agent that does not report back within its moveBound is let go as before;
 // an agent that predates the move never gets MOVE_RECONNECT. Its TCP stream
 // (same agent, same flag) is not let go at all during a drain: the agent
@@ -32,10 +38,7 @@ import (
 // Only a replica with peers moves agents (the pod dialer): a single relay
 // has nowhere to send them. A leaving replica refuses new agent sessions,
 // so a reconnect cannot land on it.
-const (
-	moveSettle = 500 * time.Millisecond
-	moveCheck  = 50 * time.Millisecond
-)
+const moveCheck = 50 * time.Millisecond
 
 // defaultMoveBound is how long an agent asked to move has to report its new
 // connection before it is let go (Dispatcher.moveBound: tests shorten it
@@ -57,7 +60,61 @@ func (d *Dispatcher) Leaving() bool {
 type agentMove struct {
 	stream *HTTPStream
 	check  *time.Ticker // until the record names the new session
-	settle *time.Timer  // routing stopped; then MOVE_DONE
+}
+
+// routeLeases counts the requests the ingress picked a stream for whose
+// first message is not yet on the consumer's channel (spec/Move.tla
+// Pick, Publish). Once stopped it gives no new lease, and idle closes when
+// the last one ends.
+type routeLeases struct {
+	mu   sync.Mutex
+	off  bool
+	n    int
+	idle chan struct{}
+}
+
+func (r *routeLeases) take() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.off {
+		return false
+	}
+	r.n++
+	return true
+}
+
+func (r *routeLeases) give() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.n--; r.off && r.n == 0 {
+		close(r.idle)
+	}
+}
+
+// stop gives no new lease; the channel closes once none is held.
+func (r *routeLeases) stop() <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.off {
+		r.off, r.idle = true, make(chan struct{})
+		if r.n == 0 {
+			close(r.idle)
+		}
+	}
+	return r.idle
+}
+
+// RouteHere takes a route lease on agentID's HTTP session here: ok when the
+// agent is connected here and this replica still routes to it. release
+// (idempotent) ends the lease once the request's first message is
+// published to the agent's topic, or failed: until then a move does not
+// tell the agent that no request follows (MOVE_DONE).
+func (d *Dispatcher) RouteHere(agentID string) (release func(), ok bool) {
+	s, ok := d.Agents.Load(agentID)
+	if !ok || !s.leases.take() {
+		return nil, false
+	}
+	return sync.OnceFunc(s.leases.give), true
 }
 
 // moves reports a session this replica moves rather than lets go: an HTTP
@@ -102,26 +159,22 @@ func (d *Dispatcher) recordMoved(ctx context.Context, inv directory.IPInventory,
 }
 
 // stopRouting takes the old stream out of this replica's routing (requests
-// now resolve to the new replica) and returns the settle timer's channel.
-func (d *Dispatcher) stopRouting(m *agentMove) <-chan time.Time {
-	m.check.Stop()
+// now resolve to the new replica); the channel closes once no route lease
+// is held.
+func (d *Dispatcher) stopRouting(m *agentMove) <-chan struct{} {
+	m.stop()
 	d.Agents.CompareAndDelete(m.stream.ID, m.stream)
 	d.movedAway.Store(m.stream.ID, m.stream) // until its session ends (dispatcher_subscribe.go)
-	m.settle = time.NewTimer(moveSettle)
-	return m.settle.C
+	return m.stream.leases.stop()
 }
 
-// done tells the agent no new request follows on the old stream.
-func (m *agentMove) done() error {
-	return m.stream.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_DONE})
-}
+// done has the session's consumer tell the agent, after every request it
+// holds, that no new request follows on the old stream (MOVE_DONE).
+func (m *agentMove) done() { close(m.stream.moveDone) }
 
 func (m *agentMove) stop() {
 	if m.check != nil {
 		m.check.Stop()
-	}
-	if m.settle != nil {
-		m.settle.Stop()
 	}
 }
 

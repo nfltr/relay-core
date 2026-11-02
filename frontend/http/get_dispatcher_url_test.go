@@ -29,11 +29,11 @@ func newURLTestServer(t *testing.T, inv directory.IPInventory) *Ingress {
 // whatever else its record says: there is no other environment to forward to.
 func TestGetDispatcherURLNamesTheAgentsReplica(t *testing.T) {
 	s := newURLTestServer(t, &podInventory{IPInventory: directory.NewNoOpInventory(), podIP: "10.0.0.7"})
-	u, err := s.dispatcherURL(context.Background(), "acct.node")
+	u, _, err := s.dispatcherURL(context.Background(), "acct.node")
 	if err != nil || u == nil || u.Host != "10.0.0.7:7443" {
 		t.Fatalf("getDispatcherURL = %v, %v; want http://10.0.0.7:7443", u, err)
 	}
-	if _, err := newURLTestServer(t, &podInventory{IPInventory: directory.NewNoOpInventory(), podIP: "10.0.0.1%zz"}).dispatcherURL(context.Background(), "x"); err == nil {
+	if _, _, err := newURLTestServer(t, &podInventory{IPInventory: directory.NewNoOpInventory(), podIP: "10.0.0.1%zz"}).dispatcherURL(context.Background(), "x"); err == nil {
 		t.Fatal("an unparsable replica address resolved")
 	}
 }
@@ -45,7 +45,7 @@ func TestPoolLabelDoesNotRoute(t *testing.T) {
 	member := &session.HTTPStream{ID: "acct.web-1"}
 	member.SetLabels(map[string]string{"pool": "web"})
 	s.core.Dispatcher.Agents.Store("acct.web-1", member)
-	u, err := s.dispatcherURL(context.Background(), "web")
+	u, _, err := s.dispatcherURL(context.Background(), "web")
 	if err != nil || u == s.loopbackURL {
 		t.Fatalf("a request for the pool name web was served by its member: %v, %v", u, err)
 	}

@@ -258,8 +258,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// (TestProxyRequestBodyLimitEdge under -race).
 	maxMessageSize := appconfig.GRPCMaxMessageSizeBytes()
 	publishErrors := make(chan publishError)
+	leased := routeLease(r.Context()) // ended by the first publish (spec/Move.tla)
 	go func() {
 		defer close(publishErrors)
+		defer leased()
 		defer body.Close() //nolint:errcheck
 		beforeRequestPublish := time.Now()
 		defer func() {
@@ -366,7 +368,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			if err := p.publishRequest(rctx, agentID, msg); err != nil {
+			err := p.publishRequest(rctx, agentID, msg)
+			leased()
+			if err != nil {
 				select {
 				case <-rctx.Done():
 				case publishErrors <- publishError{
@@ -388,7 +392,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// chunks, so publish the original request as-is.
 		if index == 0 {
 			reqSize = proto.Size(agentReq)
-			if err := p.publishRequest(rctx, agentID, agentReq); err != nil {
+			err := p.publishRequest(rctx, agentID, agentReq)
+			leased()
+			if err != nil {
 				select {
 				case <-rctx.Done():
 				case publishErrors <- publishError{
