@@ -4,14 +4,14 @@
 
 # spec.sh check|nightly|liveness|mutants|simulate|traces|trace F: the TLA+ models of
 # spec/ (spec/README.md).
-#   check     TLC on spec/AgentLink.cfg and spec/Handoff.cfg: invariants;
+#   check     TLC on spec/AgentLink.cfg, spec/Handoff.cfg and spec/Move.cfg: invariants;
 #             spec/AgentLinkWrite.cfg: WriteReturns (CI).
 #   nightly   TLC on spec/AgentLinkLarge.cfg: AgentLink's invariants at
 #             larger sizes (nightly, weekly).
 #   mutants   each Mutant must be caught, and each documented race found
 #             (spec/README.md "Findings") (CI).
-#   liveness  TLC on spec/AgentLinkLive.cfg, AgentLinkBreak.cfg and
-#             HandoffLive.cfg (weekly).
+#   liveness  TLC on spec/AgentLinkLive.cfg, AgentLinkBreak.cfg,
+#             HandoffLive.cfg and MoveLive.cfg (weekly).
 #   simulate  random walks on two sessions with larger sizes (weekly).
 #   traces    the core/session tests in TRACE_TESTS run with -tags
 #             relaytrace; each stream's trace checked against spec/Trace.tla
@@ -109,6 +109,7 @@ check)
 	run AgentLink.cfg MCAgentLink.tla
 	run AgentLinkWrite.cfg MCAgentLink.tla
 	run Handoff.cfg Handoff.tla
+	run Move.cfg Move.tla
 	;;
 nightly)
 	run AgentLinkLarge.cfg MCAgentLink.tla
@@ -117,6 +118,7 @@ liveness)
 	run AgentLinkLive.cfg MCAgentLink.tla
 	run AgentLinkBreak.cfg MCAgentLink.tla
 	run HandoffLive.cfg Handoff.tla
+	run MoveLive.cfg Move.tla
 	;;
 mutants)
 	m='s/Mutant = "none"/Mutant = "'
@@ -134,6 +136,12 @@ mutants)
 	expect AgentLinkWrite.cfg MCAgentLink.tla inproc-enqueue-blocks -e "$m"'inproc-enqueue-blocks"/'
 	# A stream without the end acknowledgement (finding 2: an older agent or relay).
 	expect AgentLink.cfg MCAgentLink.tla race:clean-tail-lost -e 's/EndAck = TRUE/EndAck = FALSE/'
+	# Move.tla: the move's bugs, and the code's races before the design (findings 6, 7).
+	expect Move.cfg Move.tla done-ignores-leases -e "$m"'done-ignores-leases"/'
+	expect Move.cfg Move.tla done-overtakes -e "$m"'done-overtakes"/'
+	expect Move.cfg Move.tla close-early -e "$m"'close-early"/'
+	expect Move.cfg Move.tla race:settle-timer -e 's/Lease = TRUE/Lease = FALSE/'
+	expect Move.cfg Move.tla race:supersede-ends -e "$m"'supersede-ends"/'
 	exit $fail
 	;;
 simulate)

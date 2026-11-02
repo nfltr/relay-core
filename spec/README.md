@@ -211,6 +211,56 @@ wait is bounded; `HandoffLive.cfg`).
 Mutants: `attach-ended` (`PlacedOnLive`), `keep-conns` (`NoOrphanLink`),
 `wait-forever` (`Placed`).
 
+## Move.tla: moving an agent's HTTP session to another replica
+
+`Move.tla` models one make-before-break move (`pb.Move`) of an agent's
+ConnectHTTP session off replica A (a drain or a rebalance) to replica B,
+with the requests visitors send meanwhile. Sources: `agent_move.go`,
+`agent_rebalance.go`, `dispatcher_session_watch.go`
+(`WatchAgentSession`), `dispatcher_subscribe.go`
+(`relayRequestsToAgent`), `frontend/http` (`dispatch.go`
+`dispatcherURL`, `proxy.go`), and the agent's half in
+github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`,
+`run.go` `closeWhenAnswered`). The streams are FIFO queues; the agent
+link's sessions (TCP, HTTP on link) are not modelled: a rebalancing move
+skips an agent carrying TCP sessions (`moveAgent`), and the old
+connection closes once they ended (`waitIdle`).
+
+| action | Go |
+|---|---|
+| `Pick` | `dispatcherURL`: A while A's `Agents` holds the stream (with a route lease, `RouteHere`), else the record |
+| `Publish` | `Proxy.publishRequest` of a transaction's first message: on the consumer's channel, or `ErrNoConsumer` |
+| `Forward` | `relayRequestsToAgent`: the channel's next message onto the stream |
+| `Ask` | `startMove`: `MOVE_RECONNECT`, the record no longer renewed |
+| `GiveUp` | the rebalance's `moveBound` without `MOVE_CONNECTED` (`giveUp`) |
+| `StopRouting` | `recordMoved`, `stopRouting`; also after `GiveUp` (a late `MOVE_CONNECTED`) |
+| `Refresh` | the renewal after `GiveUp` finding B's record (`directory.ErrSuperseded`) |
+| `Done` | `MOVE_DONE` |
+| `RecvA` | `receiveFromHTTPAgent`; the agent's EOF ends the session (`failInflight`, `failQueued`) |
+| `RecvAgent`, `ConnectB`, `DialFails`, `Answer`, `CloseOld` | `processStream`, `moveConnect`, a handler's answer, `closeWhenAnswered` |
+
+Invariants (`Move.cfg`, `make spec`): `NoLoss` (the agent stays
+connected, so no request fails), `RunOnce` (no request runs on the agent
+without its answer reaching the visitor), `OneOwner` (once A stopped
+routing the record names B). Liveness (`MoveLive.cfg`, weak fairness on
+every step but the `GiveUp` timer): every request answered, and A's old
+session ends once the agent connected B.
+
+The design (`Lease = TRUE`): the ingress takes a route lease on the
+stream when it picks A, atomically with A still routing, and ends it
+once the transaction's first message is on the consumer's channel (or
+failed); `MOVE_DONE` is sent by `relayRequestsToAgent` itself, once A
+stopped routing, no lease is held and the channel is drained, so every
+transaction the old stream carries precedes it (a later message is a
+continuation: a body chunk, an ack, a cancel). A renewal superseded by
+B's record after a rebalance gave up goes on with the move instead of
+ending the session.
+
+Mutants (`make spec-mutants`): `race:settle-timer` (`Lease = FALSE`,
+finding 6), `race:supersede-ends` (finding 7), `done-ignores-leases`,
+`done-overtakes` (`MOVE_DONE` sent past the channel), `close-early` (the
+agent closes the old stream with requests unanswered).
+
 ## Trace validation
 
 With `-tags relaytrace` and `RELAYTRACE=<dir>`, each relay frame stream
@@ -390,6 +440,26 @@ acknowledgement, and `inproc-enqueue-blocks`).
    (typed, link's `CodeConnLost`). As designed (the agent then
    reconnects); the window is the relay's detection of the old stream's
    end (gRPC keepalive while the link is up). Severity: info.
+
+6. **`MOVE_DONE` could overtake a request** (model, `Move.tla`
+   `race:settle-timer`). `MOVE_DONE` went out from the watch goroutine
+   `moveSettle` (500 ms) after the routes stopped, past requests still on
+   the consumer's channel and past a request the ingress had picked A for
+   but not yet published (its first body chunk is read in between: a
+   slow upload). The agent closes the old stream once what it received
+   is answered; a request after `MOVE_DONE` then runs on the agent and
+   its visitor gets the 502 agent-gone (a retry runs it twice). Severity:
+   medium. Fixed by the design above.
+7. **A late `MOVE_CONNECTED` ended the old session with its requests**
+   (model, `race:supersede-ends`). A rebalance gives up after
+   `moveBound` (10 s); the agent's last try of its new connection may be
+   accepted later (its own bound is 8 s per move, from its receipt of
+   `MOVE_RECONNECT`). B's session then holds the record, A renews it
+   again, finds it superseded and ends the old session
+   (`errSessionReplaced`): every request in flight there failed 502.
+   Severity: low. Fixed: a superseded renewal of a session asked to move
+   goes on with the move.
+
 
 Checked and holding: per-session credit never goes negative or past a
 window and the receive loops never wait on one session (`NoHOL`): with
