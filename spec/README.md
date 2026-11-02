@@ -192,89 +192,174 @@ whole close in a config whose property needs the apps to finish.
 The relay's primary streams of one agent `1..MaxGen` (a reconnect is the
 next one) with their bind tokens; the agent link's connections bound with a
 token (`agentLink.Conns`, one per token suffices); the agent's lazy link
-(`lazyLink`: none, dialling, up, parked between primaries: `linkPark`);
-client sessions `Sess` placed by `handleLocalConn`/`agentLink.open` on the
-link or on the current primary's frame streams, and their ends.
+(`lazyLink`: none, dialling, up, parked between primaries: `linkPark`) and
+its adoption of a link the relay resumed; the agent's TCP path (the frame
+streams and link/TCP ride it, link/QUIC rides UDP); client sessions `Sess`
+placed by `handleLocalConn`/`agentLink.open` on the link or on a primary's
+frame streams, and their ends; what the relay counts as the agent carrying
+sessions (`carriesSessions`, which a rebalance asks before moving it).
 
 | action | Go |
 |---|---|
-| `Register(g)` | `RegisterStream`: `resumeToken` (a parked link's token), `bound`, `dialNow` |
+| `Register(g)` | `RegisterStream`: `resumeToken` (a parked link's token), `bound`, the header (`TCPBindHeader`), `dialNow` |
+| `Adopt`, `AdoptRefused` | relay `client/agent` `tcp.go` after `stream.Header()`: `lazyLink.adopt`; refused while dialling, or the park's TTL first: `drainNow` |
 | `Dial`, `Bind` | the agent's `lazyLink.open`/`run` on `AgentLinkDial`; `agentLink.verify`+`bind` |
-| `Adopt` | the agent's next primary takes the parked link the relay resumed (`lazyLink.adopt`) |
-| `PrimEnd(g)` | `unregister` -> `primaryEnded` (closes the token's connections unless resumed), `CloseAll`; agent `lazyLink.end` (park) |
-| `Silent` | a link connection dead past its liveness timeout: `agentLink.silent` ends the primary bound to its token |
-| `LinkDrop` | a link connection closes (park TTL, agent stop, network) |
-| `Arrive(s)`, `Place(s)`, `Wake(s)` | `handleLocalConn` -> `agentLink.open` (link, or wait `agentLinkDialWait` for a requested dial), else `attach` |
+| `AgentEnd(g)` | the agent's primary's context ends: `lazyLink.end` (park) |
+| `PrimEnd(g)` | `unregister` -> `primaryEnded` (closes the token's connections unless resumed), `CloseAll` |
+| `LinkDrop(t)` | a link connection closes (park TTL, agent stop, network) |
+| `Silent(t, tr)` | a link connection dead past its liveness: link/TCP `agentLinkObserver.ConnDown` -> `agentLink.silent` (ends the primary bound to the token); QUIC's idle timeout (`quicPeer`): `unbind` only |
+| `PathDown` | the agent's TCP path dies (the frame streams' heartbeats, `WatchAgentSession`, take over once no link vouches) |
+| `Arrive(s)`, `Place(s)`, `Wake(s)` | `handleLocalConn` -> `agentLink.open` (link, or wait `agentLinkDialWait` for a requested dial; `node.Open` failing falls back), else `attach` |
 | `End(s)` | a session's apps end it |
 
-### Invariants
+### Invariants and properties (`Handoff.cfg`, `make spec`, 43k states)
 
 - `PlacedOnLive`: a session is placed on frame streams only of a primary
   not ended (`attach`'s `addSession` refuses an ending stream:
   `TestOpenWokenByItsStreamsEndIsRefused`), and on the link only through a
-  connection bound with the token of an up primary.
+  connection bound with the token of an up primary; also after a failed
+  link open (finding 19).
 - `NoOrphanLink`: a relay link connection exists only for a token an up
   primary holds.
+- `CarriesExact`: the relay counts the agent as carrying sessions exactly
+  when one is open (finding 18): every primary here, its frame streams'
+  sessions and the link sessions of the token it holds, whichever primary
+  they opened through.
+- `SilenceOnDeadPath`: a link's silence ends a primary only when the
+  agent's TCP path is dead (finding 17).
 
 A session's end is one of `done` (its apps), `lost` (its primary ended
 under it), `cut` (its link connection closed) or `refused` (no stream);
 how its bytes end is AgentLink's and link's.
 
-Liveness: `Placed`: an arriving session is placed or refused (the dial
-wait is bounded; `HandoffLive.cfg`).
+Liveness (`HandoffLive.cfg`): `Placed`: an arriving session is placed or
+refused (the dial wait is bounded); `SilentEnds`: a primary whose link
+went silent ends (finding 16).
 
-Mutants: `attach-ended` (`PlacedOnLive`), `keep-conns` (`NoOrphanLink`),
-`wait-forever` (`Placed`).
+Mutants (`make spec-mutants`): `attach-ended` (`PlacedOnLive`),
+`keep-conns` (`NoOrphanLink`), `wait-forever` (`Placed`),
+`count-per-primary`, `carries-newest` (`CarriesExact`, finding 18: the
+code before), `quic-silent-ends` (`SilenceOnDeadPath`, finding 17: the
+code before). Witnesses, each violated: `WitnessLinkOpen`,
+`WitnessFallback` (`PlacedOnLive`), `WitnessResumed` (`NoOrphanLink`),
+`WitnessCarryOld` (`CarriesExact`: a link session outlives the primary it
+opened through), `WitnessSilent` (`SilenceOnDeadPath`). `COVERAGE=1`
+takes every action.
+
+One agent: `resumeToken` refusing another agent's token is not in the
+model (tokens are secrets; defence in depth); its guard is
+`TestResumeTokenRefusesAnotherAgent`.
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| A bind token is a 128-bit secret only its primary's agent holds | `newBindToken` (crypto/rand); the header goes only to that stream |
+| One agent process per agent id; a second is a takeover | `ConnectAgentTunnel` (relay-server `spec/Replicas.tla`) |
+| link/TCP and the frame streams share the agent's TCP path; link/QUIC rides UDP, a path that fails apart (UDP blocked, shorter NAT UDP timeouts) | RFC 9000 §10.1 (QUIC idle timeout), RFC 4787 REQ-5 (UDP mapping timeout) |
+| A dead peer is detected by link's ping liveness on link/TCP, QUIC's idle timeout on QUIC, heartbeats on the frame streams | link `Liveness`; quic-go `MaxIdleTimeout`; `HeartbeatRecvThreshold` |
+| `node.Open` can fail (GOAWAY drain, close, `agentLinkDialWait`); the caller then attaches | peerlink `Node.Open`; `agentLink.open` |
+
+### Code map (drift check)
+
+| file | what the spec models |
+|---|---|
+| `core/session/agent_link.go` | `resumeToken`, `verify`, `bind`, `unbind`, `silent`, `quicPeer`, `agentLinkObserver`, `open` (the link-session count), `primaryEnded`, `dialNow` |
+| `core/session/dispatcher_tcp_streams.go` | `RegisterStream`, `unregister`, `leaveRotationLocked`, `carriesSessions`, `carries`, `yield`, `sendLoop`'s silent and supersede cases |
+| `core/session/dispatcher_tcp.go` | `handleLocalConn`, `attach` |
+| `core/session/agent_rebalance.go` | `moveAgent`'s `carriesSessions` check |
+| relay `client/agent/agent_link.go`, `tcp.go` | `lazyLink` (`open`, `end`, `adopt`, `drainNow`), `linkPark`, the resume header |
 
 ## Move.tla: moving an agent's HTTP session to another replica
 
 `Move.tla` models one make-before-break move (`pb.Move`) of an agent's
 ConnectHTTP session off replica A (a drain or a rebalance) to replica B,
-with the requests visitors send meanwhile. Sources: `agent_move.go`,
+with the requests visitors send meanwhile, through A's own ingress or a
+peer replica's (over the replica link), the drain's bound, and the
+agent's TCP primary on A beside the HTTP session. Sources: `agent_move.go`,
 `agent_rebalance.go`, `dispatcher_session_watch.go`
 (`WatchAgentSession`), `dispatcher_subscribe.go`
-(`relayRequestsToAgent`), `frontend/http` (`dispatch.go`
-`dispatcherURL`, `proxy.go`), and the agent's half in
-github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`,
-`run.go` `closeWhenAnswered`). The streams are FIFO queues; the agent
-link's sessions (TCP, HTTP on link) are not modelled: a rebalancing move
-skips an agent carrying TCP sessions (`moveAgent`), and the old
-connection closes once they ended (`waitIdle`).
+(`relayRequestsToAgent`), `dispatcher_tcp_streams.go` (`sendLoop`'s
+supersede, `streamFor`), `frontend/http` (`dispatch.go` `dispatcherURL`,
+`frontend.go` `peer`, `proxy.go`), and the agent's half in
+github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
+`closeWhenAnswered`). The streams are FIFO queues.
 
 | action | Go |
 |---|---|
 | `Pick` | `dispatcherURL`: A while `RouteHere` gives a route lease, else the record |
+| `PickRemote`, `ArriveA` | a peer's `dispatcherURL` reading the record (A); the forward arriving at A: `Ingress.peer` takes `RouteHere` too, refused: 503 `Retry-After`, the request reached no agent (the visitor's retry is `new` again) |
 | `Publish` | `Proxy.publishRequest` of a transaction's first message (on the consumer's channel, or `ErrNoConsumer`), then the lease's release |
 | `Forward` | `relayRequestsToAgent`: the channel's next message onto the stream |
 | `Ask` | `startMove`: `MOVE_RECONNECT`, the record no longer renewed |
-| `GiveUp` | the rebalance's `moveBound` without `MOVE_CONNECTED` (`giveUp`) |
+| `GiveUp` | a rebalance's `moveBound` (`giveUp`), also after `MOVE_CONNECTED` while the record check has not seen B's record; none in a drain |
 | `StopRouting` | `recordMoved`, `stopRouting` |
 | `Refresh` | the renewal after `GiveUp` finding B's record (`directory.ErrSuperseded`): `resumeMove` |
 | `Done` | `routeLeases` idle, then `relayRequestsToAgent`'s `moveDone`: the channel drained, `MOVE_DONE` |
+| `StartDrain`, `DrainBound` | `stopping`; `stopNow` (`moveBound` from `MOVE_RECONNECT`, disarmed once A stopped routing): the agent let go (`errServerRestarting`) |
 | `RecvA` | `receiveFromHTTPAgent`; the agent's EOF ends the session (`failInflight`, `failQueued`) |
+| `TCPSupersede`, `PlaceTCP` | `sendLoop`'s superseded renewal of the agent's TCP primary (`yield` when `movingAway`); `streamFor` placing a TCP session |
 | `RecvAgent`, `ConnectB`, `DialFails`, `Answer`, `CloseOld` | `processStream`, `moveConnect`, a handler's answer, `closeWhenAnswered` |
 
-Invariants (`Move.cfg`, `make spec`): `NoLoss` (the agent stays
-connected, so no request fails), `RunOnce` (no request runs on the agent
-without its answer reaching the visitor), `OneOwner` (once A stopped
-routing the record names B). Liveness (`MoveLive.cfg`, weak fairness on
-every step but the `GiveUp` timer): every request answered, and A's old
-session ends once the agent connected B.
+Invariants (`Move.cfg`, `make spec`, 11k states): `NoLoss` (no request
+fails, unless a drain let the agent go before its new connection took the
+record: `lg`, the documented bounded loss), `RunOnce` (no request runs on
+the agent without its answer reaching the visitor; the same bound),
+`OneOwner` (once A stopped routing the record names B),
+`NoTCPAfterMove` (no TCP session is placed on A's TCP primary once it
+found the agent's record moved). Liveness (`MoveLive.cfg`, no drain, weak
+fairness on every step but the `GiveUp` timer and a peer's pick): every
+request answered, and A's old session ends once the agent connected B.
+`COVERAGE=1` takes every action.
 
 The design (`Lease = TRUE`): the ingress takes a route lease on the
-stream when it picks A, atomically with A still routing, and ends it
-once the transaction's first message is on the consumer's channel (or
-failed); `MOVE_DONE` is sent by `relayRequestsToAgent` itself, once A
-stopped routing, no lease is held and the channel is drained, so every
+stream when it picks A, atomically with A still routing, and so does a
+request a peer forwarded when it arrives at A; the lease ends once the
+transaction's first message is on the consumer's channel (or failed);
+`MOVE_DONE` is sent by `relayRequestsToAgent` itself, once A stopped
+routing, no lease is held and the channel is drained, so every
 transaction the old stream carries precedes it (a later message is a
 continuation: a body chunk, an ack, a cancel). A renewal superseded by
 B's record after a rebalance gave up goes on with the move instead of
-ending the session.
+ending the session. A drain's bound covers only the move's first half
+(until A stops routing); the settle and the agent's close run under the
+relay's shutdown. A TCP primary whose renewal finds the agent moved leaves
+the rotation (its open sessions run on).
 
 Mutants (`make spec-mutants`): `race:settle-timer` (`Lease = FALSE`,
 finding 6), `race:supersede-ends` (finding 7), `done-ignores-leases`,
 `done-overtakes` (`MOVE_DONE` sent past the channel), `close-early` (the
-agent closes the old stream with requests unanswered).
+agent closes the old stream with requests unanswered), `peer-no-lease`
+(finding 20), `drain-bound-after-stop` (finding 21),
+`tcp-stays-in-rotation` (finding 22). Witnesses, each violated:
+`WitnessHeld` (requests held as A stops routing), `WitnessLetGo` (the
+bounded loss is reachable), `WitnessRemote` (a peer's forward in flight
+after A stopped routing), `WitnessOwner`, `WitnessTCP` (a TCP session on
+A after the record moved: the window before the renewal finds it, which
+the agent's `waitIdle` bounds).
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| The in-memory broker's send returns once the message is on the consumer's channel | `broker/broker.go` contract |
+| The directory fences records by Seq; the newest session wins; a read may be stale by one write | relay-server `spec/Replicas.tla` |
+| A peer replica routes by the record it read; its forward can arrive any time later | `dispatcherURL`, the replica link (relay-server `core/replicas`) |
+| B's session may fail after taking the record: the agent reconnects elsewhere; requests answer 503 meanwhile (not loss) | finding MV-5 (review) |
+| HTTP requests on the agent link do not ride the topic: MOVE_DONE does not order them; they end with the old connection (park TTL 10 s) | `dispatch.go` (link branch releases the lease), relay `client/agent/agent_link.go` |
+| A rebalancing move skips an agent the relay counts as carrying TCP sessions (`carriesSessions`, exact by `Handoff.tla` `CarriesExact`); sessions placed after that check are bounded by the agent's `waitIdle` (30 s) | `moveAgent`; relay `client/agent/move.go` |
+
+### Code map (drift check)
+
+| file | what the spec models |
+|---|---|
+| `core/session/agent_move.go` | `routeLeases`, `RouteHere`, `startMove`, `recordMoved`, `stopRouting`, `resumeMove` |
+| `core/session/dispatcher_session_watch.go` | `WatchAgentSession`: `stopping`, `stopNow`, `ask`, `giveUp`, `moved`, `check`, `settle` |
+| `core/session/agent_rebalance.go` | `moveAgent`, `stays` |
+| `core/session/dispatcher_subscribe.go` | `relayRequestsToAgent`, `moveDone` |
+| `core/session/dispatcher_tcp_streams.go` | `sendLoop`'s superseded renewal (`movingAway`, `yield`), `streamFor` |
+| `frontend/http/dispatch.go`, `frontend.go`, `proxy.go` | `dispatcherURL`, `peer`, `routeLease`, the first publish |
+| relay `client/agent/move.go`, `connect.go`, `run.go` | `moveConnect`, `waitIdle`, `closeWhenAnswered` |
 
 ## Presence.tla: the presence feed across replicas
 
@@ -619,6 +704,71 @@ acknowledgement, and `inproc-enqueue-blocks`).
     both for a client's error and for a normal `inProcConn.Close`, so the
     agent cannot tell them apart without a frame flag (relay proto,
     `client/agent`). The model keeps `AbortTyped` to the relay side.
+
+Findings 16-22 come from an independent review of `Handoff.tla` and
+`Move.tla` against the code (2026-11-02, lane RCREVIEW).
+
+16. **`Silent` and `Adopt` were in the README, not in `Handoff.tla`**
+    (spec drift; low). Silence was only a `LinkDrop`, nothing obliged its
+    primary to end, and the agent's adoption of a resumed link was atomic
+    with `Register`. Now `Silent(t, tr)` (liveness `SilentEnds`) and
+    `Register` / `Adopt` / `AdoptRefused` apart, so a refused adopt (a dial
+    of the new primary out, or the park's TTL first) is explored: it cuts
+    the parked link's sessions, which the invariants allow.
+17. **A QUIC link's idle timeout ended the agent's TCP primary** (code;
+    low-medium; TLC, `quic-silent-ends`). `quicPeer` called
+    `agentLink.silent` on QUIC's idle timeout, ending the gRPC primary and
+    its frame-stream sessions (`lost`) though only the UDP path had died.
+    **Fixed**: a silent QUIC connection only unbinds; once no link vouches
+    for the agent, its frame streams' heartbeats judge the TCP path again
+    (`sendLoop`, `WatchAgentSession`). `SilenceOnDeadPath`; guard
+    `TestAgentLinkQUICSilenceKeepsPrimary`.
+18. **`carriesSessions` missed link sessions after a resume and sessions
+    on an older primary** (code; medium; TLC, `count-per-primary`,
+    `carries-newest`). A link session was counted on the primary it opened
+    through; a resume hands the link (and its sessions) to the next
+    primary, and the old one's end took the count with it. And only the
+    newest primary was looked at. A rebalance then moved an agent carrying
+    TCP sessions, which its agent cuts 30 s later (the kind soak's
+    `ConnLost`). **Fixed**: the link-session count belongs to the bind
+    token (a resumed primary shares its predecessor's), counted by the
+    primary the token is bound to; `carriesSessions` looks at every
+    primary of the agent here. `CarriesExact`; guards
+    `TestCarriesSessionsAfterResume`, `TestCarriesSessionsOnOlderPrimary`.
+19. **A failed link open's fallback onto the frame streams was not
+    modelled** (spec weaker; low). `OnLinkOr`: `node.Open` may fail and
+    the session attaches; `PlacedOnLive` holds (`WitnessFallback`).
+20. **Requests a peer replica forwarded skipped the route lease** (code;
+    medium; TLC, `peer-no-lease`). `Ingress.Mount`'s `Peer` was the proxy
+    itself: a forward whose ingress read the record before it moved
+    published to A's topic with no lease and no "A still routes" check;
+    after `MOVE_DONE` the agent ran it after `CloseSend` and the visitor got
+    a 502 (a retry runs it twice: `RunOnce`). Finding 6 was open for
+    cross-replica traffic. **Fixed**: `Ingress.peer` takes `RouteHere`;
+    refused, it answers 503 `Retry-After` (`ERROR_REASON_AGENT_OFFLINE`)
+    before any message is published. Guard
+    `TestPeerForwardAfterMoveIsRefusedRetryable`.
+21. **A drain's 10 s move bound ran past `stopRouting`** (code;
+    medium-low; TLC, `drain-bound-after-stop`). `stopNow` was armed at
+    `MOVE_RECONNECT` and cleared only in `settle`: a slow lease drain (a
+    slow upload holds its lease until its first chunk is read) ended the
+    session with requests held although the agent was connected to both
+    replicas; a drain starting after a rebalancing move's `MOVE_DONE` armed
+    it again. **Fixed**: once A stopped routing the bound is disarmed and a
+    later `stopping` leaves it so; the relay's shutdown bounds the rest.
+    `NoLoss` with the bounded let-go (`lg`); guard
+    `TestDrainBoundEndsOnceRoutingStopped`.
+22. **A moved agent's TCP primary stayed in rotation** (code; medium;
+    TLC, `tcp-stays-in-rotation`). On a superseded renewal with
+    `movingAway`, `sendLoop` went on without `yield`: `streamFor` kept
+    placing new TCP sessions on a stream the agent closes after
+    `waitIdle`. **Fixed**: it leaves the rotation (its open sessions run
+    on, as a takeover's). `NoTCPAfterMove`; guard
+    `TestMovedTCPPrimaryLeavesRotation`.
+
+The spec's `GiveUp` required no `MOVE_CONNECTED`; the code gives up on
+the timer regardless (review MV-3). Dropping the guard keeps every
+invariant (TLC): `Refresh` resumes the move when B's record is found.
 
 Checked by review and holding for the feed itself: a revision only grows
 within a process; a cursor of another epoch (a resync, another process)

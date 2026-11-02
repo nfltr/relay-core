@@ -138,6 +138,15 @@ mutants)
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'
 	expect Handoff.cfg Handoff.tla keep-conns -e "$m"'keep-conns"/'
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'
+	# Handoff.tla: carriesSessions (HO-3), QUIC silence (HO-2); witnesses.
+	for b in count-per-primary carries-newest quic-silent-ends; do
+		expect Handoff.cfg Handoff.tla "$b" -e "$m$b\"/"
+	done
+	expect Handoff.cfg Handoff.tla witness:link-open -e 's/^    PlacedOnLive$/    WitnessLinkOpen/'
+	expect Handoff.cfg Handoff.tla witness:fallback -e 's/^    PlacedOnLive$/    WitnessFallback/'
+	expect Handoff.cfg Handoff.tla witness:resumed -e 's/^    NoOrphanLink$/    WitnessResumed/'
+	expect Handoff.cfg Handoff.tla witness:carry-old -e 's/^    CarriesExact$/    WitnessCarryOld/'
+	expect Handoff.cfg Handoff.tla witness:silent -e 's/^    SilenceOnDeadPath$/    WitnessSilent/'
 	# The code's races (spec/README.md "Findings").
 	expect AgentLink.cfg MCAgentLink.tla inproc-closewrite -e "$m"'inproc-closewrite"/'
 	expect AgentLinkWrite.cfg MCAgentLink.tla inproc-enqueue-blocks -e "$m"'inproc-enqueue-blocks"/'
@@ -149,6 +158,15 @@ mutants)
 	expect Move.cfg Move.tla close-early -e "$m"'close-early"/'
 	expect Move.cfg Move.tla race:settle-timer -e 's/Lease = TRUE/Lease = FALSE/'
 	expect Move.cfg Move.tla race:supersede-ends -e "$m"'supersede-ends"/'
+	# Findings MV-1 (peer forwards), MV-2 (the drain's bound), MV-4 (TCP rotation); witnesses.
+	for b in peer-no-lease drain-bound-after-stop tcp-stays-in-rotation; do
+		expect Move.cfg Move.tla "$b" -e "$m$b\"/"
+	done
+	expect Move.cfg Move.tla witness:held -e 's/^    NoLoss$/    WitnessHeld/'
+	expect Move.cfg Move.tla witness:let-go -e 's/^    NoLoss$/    WitnessLetGo/'
+	expect Move.cfg Move.tla witness:remote -e 's/^    RunOnce$/    WitnessRemote/'
+	expect Move.cfg Move.tla witness:owner -e 's/^    OneOwner$/    WitnessOwner/'
+	expect Move.cfg Move.tla witness:tcp -e 's/^    NoTCPAfterMove$/    WitnessTCP/'
 	# Presence.tla: the bugs the design prevents (findings 8-11, 13) and
 	# the open race of a crashed replica's records (finding 12).
 	for b in unfenced-label-write partial-list renew-race drop-no-resync renew-resurrects publish-before-write resync-early; do
