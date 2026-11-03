@@ -682,16 +682,23 @@ already closed (its park), a `Silent` logged after its connection's
 unbind, and an `End` of a session the model already lost, cut or refused
 are taken as they are; a step that names no action fails the trace.
 `make spec-traces` runs the agent-link tests in `HANDOFF_TESTS` and checks
-every Handoff trace (12 traces, 7-177 lines, each a few seconds), after
+every Handoff trace (14 traces, 7-177 lines, each a few seconds), after
 checking that each `spec/testdata/reject-handoff-*.ndjson` is rejected:
 `attach-ended` (a session on an ended primary's frame streams:
 `PlacedOnLive`), `keep-conns` (a link connection bound for a primary that
 ended: `NoOrphanLink`), `carries-stale` (`carriesSessions` false with a
 link session open: `CarriesExact`), `quic-silent` (a QUIC silence ending
 the primary: `SilenceOnDeadPath`). `COVERAGE=1` lists the trace module's
-actions no trace takes: the resume path (`UAdopt`, `UAdoptRefused`: no
-test here reconnects a real agent while its link stays up; the agent's
-side is covered in github.com/nfltr/relay `agent_link_park_test.go`), a
+actions no trace takes. The resume (`UAdopt`) is
+`TestAgentLinkResumedByTheNextPrimary`'s: the real agent's primary ends on
+its side while the relay's goes on (a test seam holds the relay's stream:
+its path broke towards the agent only), the next primary resumes the link
+by its token and the session open on it goes on; its `refused` case has
+the relay notice first (finding 5: a new token, the parked link's session
+ends, a new one works). Not taken: `UAdoptRefused` (the relay resumed but
+the agent cannot adopt: its park's TTL passed or a dial of its own is out;
+the agent's side is covered in github.com/nfltr/relay
+`agent_link_park_test.go`), a
 second or refused connection's bind (`UBind`), a wait skipped
 (`USkipWait`), a silence logged after its unbind (`TSilentAfterDrop`), a
 `LinkDrop` of a connection the agent closed (`TLinkDropGone`) and
