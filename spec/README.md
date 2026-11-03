@@ -26,7 +26,8 @@ would need a release of that module).
 Out of scope, each covered elsewhere: the bytes of a session on the agent
 link or on a data connection (link's own `spec/Link.tla`: a data
 connection is a link v2 connection, `dataplane.Conn`); the replicas and
-the directory (relay-server `spec/Replicas.tla`); revocation (relay-server
+the directory across replicas (relay-server `spec/Replicas.tla`; the
+records' own semantics are `Directory.tla` here); revocation (relay-server
 `spec/Revocation.tla`); `client/handoff`, which hands a gRPC-only loop's
 frames over without per-session state (no session state machine).
 
@@ -551,6 +552,68 @@ every action but those only a mutant or a larger config enables
 | `PutSession`, `DeleteSession` | `core/directory/session.go` |
 | the bus, the gateway, `ListAgents`, `handleMyAgents`, the bus's context, `noteReplicas`, `resyncBus`, the watcher | relay-server `redisbus`, `presence.go`, `my_agents.go`, `server_run.go`, `inventory_epoch.go`, `presence_resync.go`; `relay:client/presenceclient` |
 
+## Directory.tla: an agent's session records in the directory
+
+`Directory.tla` models the records of `core/directory/session.go` as one
+agent's sessions on two pods see them: `ClaimSession` (the key's next Seq
+from its own counter, `seqKey`, above the record's; the record written),
+`PutSession` with renew (`Renew`: yield with `ErrSuperseded` to a newer
+session's record on another pod, write nothing under a newer one on its
+own pod, yield when there is no record but the counter is past its Seq,
+else write), `DeleteSession` (`End`: delete the record only while it
+names this pod and this session), a record's TTL passing (`Expire`) and,
+once, the store restarting empty (`StoreLoss`: records and counters gone).
+Both record keys (the dispatcher's, the streamer's) are in it, so finding
+34 is. Every store call is atomic: the get-then-set and get-then-delete
+windows are relay-server `Replicas.tla`'s (its finding 1b); the replicas,
+the epoch and the re-announce are too.
+
+Invariants (`Directory.cfg`, `make spec`, 186,958 states (50,146
+distinct), depth 12, 1 s): `SupersededByNewer` (a session yields only to
+a newer session of its own record), `NoResurrect` (until the store loses
+its counters, a record never names a session older than another claimed
+one of its key), `DeleteOwn` (a record goes only with its own session's
+end, its TTL or the store), `NoPingPong` (of two live sessions of a key,
+one yields to the other: no two renewals overwriting each other). Each
+has a witness TLC must violate (`WitnessSuperseded`,
+`WitnessResurrectSetup`, `WitnessEndKeeps`, `WitnessTie`). Mutants
+(`make spec-mutants`), each caught: `renew-resurrects` (finding 13),
+`shared-counter` (34), `seq-only` (36: the code before its fix),
+`seq-tie` (relay-server finding R7, the Seq compared alone) and
+`delete-any`. `COVERAGE=1` takes every action and every branch of
+`Renew` and `End`.
+
+Model-based test: `scripts/spec.sh walks` writes 60 random walks of
+`Directory.cfg` (`-simulate`, depth 12, seed 1; the walk is written by the
+config-only invariant `WalkDump` through `TLCExt!Trace` and
+`ndJsonSerialize`) to `spec/testdata/directory-walks.ndjson`, one state a
+line; core/directory `TestDirectoryModelWalks` replays each against the
+real store (`MemoryCache` behind the dispatcher's and the streamer's
+inventories, each step on the pod the walk names) and compares the
+records (pod, Seq, start time), the Seq counters and every session's Seq
+and state after every step. It fails unless the walks take every action
+and supersede a session; `TestDirectoryModelWalksCatchPlantedBugs`
+replays them against a store with finding 34's bug (one counter) and
+finding 13's (a renewal blind to the counter) and must diverge. The
+replay found finding 36. Regenerate the walks when the spec changes.
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| Each store call (GET, SET, DEL, INCRBY) is atomic and linearizable; the two-call windows of `PutSession` and `DeleteSession` are out of the model (relay-server `Replicas.tla` finding 1b) | Redis docs, "Transactions" (single commands are atomic); `MemoryCache` (one mutex) |
+| A key expires at its TTL after its last write; a counter (`seqTTL`, 30 days) outlives every record | Redis `EXPIRE`; `MemoryCache.liveLocked` |
+| A store that restarts empty loses records and counters together (`StoreLoss`, once) | Redis without persistence; relay-server finding R7 |
+| Start times (`Since`) of an agent's sessions are distinct; their order only breaks a Seq tie, so a skewed clock picks which of two tied sessions yields, never whether one does | `Session.newer` |
+| Every session has a Seq (no older relay's record): the Seq-less paths (`DeleteIPs`, ordering by `Since` alone) are not modelled | `ClaimSession` |
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `ClaimSession`, `nextSeq`, `PutSession` (renew), `DeleteSession`, `Session.newer`, `seqKey` | `core/directory/session.go` |
+| `MemoryCache` (`Get`, `Set`, `Del`, `Incr`, expiry): the store the walks run on | `core/directory/memory.go` |
+
 ## Trace validation
 
 With `-tags relaytrace` and `RELAYTRACE=<dir>`, each relay frame stream
@@ -735,6 +798,7 @@ relay-server's.
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 205,995 (47,884) | | 2-4 s |
 | `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5) | 135,307 (29,460) | | 3 s before MV-5; 2 min 34 s at load 170 (2026-11-03) |
 | `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription, 1 failed write | 607,118 (100,778) | | 15 s at load 14, 83 s at load 100 (2026-11-03; 4 s before failed writes; same-replica replacement adds no distinct state) |
+| `Directory.cfg` (CI) | `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong`, 2 pods, 2 record keys, 3 claims, a store loss | 186,958 (50,146) | 12 | 1 s (2026-11-03, load 3) |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
 | `HandoffLive.cfg` | `Placed` | | | 7 s |
@@ -1224,3 +1288,14 @@ relay link connection never outlives every primary holding its token.
     (bounded by the stream's life; an agent can only hurt its own
     stream). Fixed: only the first half close of a session is acked.
     Guard: `TestTCPTunnelEndAckRepeatedHalfCloseAcksOnce`.
+36. **An older session's end could delete a newer session's record**
+    (code, found by `TestDirectoryModelWalks` replaying a `Directory.tla`
+    walk; model `seq-only`, invariant `DeleteOwn`). `DeleteSession`
+    compared the record's pod and Seq with the ending session's; a store
+    that restarted empty gives the agent's next session on the same pod
+    the Seq of a session still ending there, so that end deleted the new
+    session's record, and the agent was unlisted on every other replica
+    until the new session's next renewal wrote it back. Severity: low (a
+    store loss, the same pod and the same Seq; healed at the next
+    renewal). Fixed: the start time (`Since`) must match too. Guard:
+    `TestDeleteSessionAfterAStoreLossKeepsTheNewerSessionsRecord`.

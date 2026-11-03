@@ -137,8 +137,10 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 }
 
 // DeleteSession removes the agent's record when it names this pod's
-// session s (its Seq; s or the record without one: this pod): another
-// session's record, here or on another pod, is kept.
+// session s (its Seq and start time: a store that restarted empty can give
+// a later session here the same Seq, spec/README.md finding 36; s or the
+// record without a Seq: this pod): another session's record, here or on
+// another pod, is kept.
 func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Session) error {
 	if s.Seq == 0 {
 		return d.DeleteIPs(ctx, agentID)
@@ -155,7 +157,7 @@ func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Sessi
 	}
 	// A record without a Seq here (a renewal by SetIP: the relay's own
 	// agent) is deleted by its pod, as DeleteIPs does.
-	if v == nil || v.PodIP != GetPodIP() || (v.Seq != 0 && v.Seq != s.Seq) {
+	if v == nil || v.PodIP != GetPodIP() || (v.Seq != 0 && (v.Seq != s.Seq || !recordSession(v).Since.Equal(s.Since))) {
 		return nil // gone, or another session's
 	}
 	if _, err := d.inventory.SRem(ctx, d.activeAgentSetKey(), agentID); err != nil {

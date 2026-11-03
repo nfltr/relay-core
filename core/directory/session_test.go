@@ -249,3 +249,25 @@ func TestRenewalAfterTheOtherRecordsClaimWritesItBack(t *testing.T) {
 		t.Fatal("the dispatcher record was not written back")
 	}
 }
+
+// Directory.tla seq-only (DeleteOwn): a store that restarted empty gave the
+// agent's next session on this pod the Seq of a session still ending here;
+// that older session's end must not delete the newer one's record, which
+// names the same pod and Seq but another start time.
+func TestDeleteSessionAfterAStoreLossKeepsTheNewerSessionsRecord(t *testing.T) {
+	viper.Set("pod_ip.env_var", "POD_IP")
+	t.Cleanup(viper.Reset)
+	t.Setenv("POD_IP", "10.0.0.1")
+	key := GetStreamerCacheKey("agent-1")
+	t0 := time.Date(2026, 10, 10, 1, 0, 0, 0, time.UTC)
+	mc := newMockCache()
+	newer := &Value{PodIP: "10.0.0.1", Seq: 1, Since: t0.Add(time.Minute).UnixNano()}
+	mc.store[key] = newer
+	inv, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
+	if err := inv.(*ipInventory).DeleteSession(context.Background(), "agent-1", Session{Since: t0, Seq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if mc.store[key] != newer {
+		t.Fatal("the older session's end deleted the newer session's record")
+	}
+}

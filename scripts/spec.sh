@@ -2,11 +2,11 @@
 # Copyright 2026 nfltr
 # SPDX-License-Identifier: Apache-2.0
 
-# spec.sh check|nightly|liveness|mutants|simulate|traces|trace F: the TLA+ models of
+# spec.sh check|nightly|liveness|mutants|simulate|traces|walks|trace F: the TLA+ models of
 # spec/ (spec/README.md).
 #   check     TLC on spec/AgentLink.cfg (Refines left out), AgentLinkIface.cfg
-#             (Refines on fewer bytes), spec/Handoff.cfg, spec/Move.cfg and
-#             spec/Presence.cfg: invariants;
+#             (Refines on fewer bytes), spec/Handoff.cfg, spec/Move.cfg,
+#             spec/Presence.cfg and spec/Directory.cfg: invariants;
 #             spec/AgentLinkWrite.cfg: WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
@@ -23,6 +23,9 @@
 #             spec/TraceHandoff.tla, each deployment's presence
 #             (presence-*.ndjson) against spec/TracePresence.tla; with
 #             COVERAGE=1 the steps no trace took (weekly).
+#   walks     random walks of spec/Directory.cfg into
+#             spec/testdata/directory-walks.ndjson (core/directory
+#             TestDirectoryModelWalks replays them against the store).
 #   trace F   one recorded trace (its kind by its name).
 # TLC_WORKERS (default 4) caps TLC's threads; COVERAGE=1 adds -coverage 1;
 # MUTANTS=<regex> narrows mutants to those whose "CFG NAME" it matches.
@@ -243,6 +246,7 @@ check)
 	run Handoff.cfg Handoff.tla
 	run Move.cfg Move.tla
 	run Presence.cfg Presence.tla
+	run Directory.cfg Directory.tla
 	;;
 nightly)
 	run AgentLink.cfg MCAgentLink.tla
@@ -320,6 +324,14 @@ mutants)
 	for b in subscriber-stops outbox-stops publish-drop; do
 		expect PresenceLive.cfg Presence.tla "live:$b" -e "$m$b\"/" -e 's/MaxFail = 1/MaxFail = 0/' -e 's/Crash = TRUE/Crash = FALSE/'
 	done
+	# Directory.tla: the session records' bugs (findings 13, 34, 35, R7); witnesses.
+	for b in renew-resurrects shared-counter seq-only seq-tie delete-any; do
+		expect Directory.cfg Directory.tla "dir:$b" -e "$m$b\"/"
+	done
+	expect Directory.cfg Directory.tla witness:dir-superseded -e 's/^    SupersededByNewer$/    WitnessSuperseded/'
+	expect Directory.cfg Directory.tla witness:dir-resurrect -e 's/^    NoResurrect$/    WitnessResurrectSetup/'
+	expect Directory.cfg Directory.tla witness:dir-end-keeps -e 's/^    DeleteOwn$/    WitnessEndKeeps/'
+	expect Directory.cfg Directory.tla witness:dir-tie -e 's/^    NoPingPong$/    WitnessTie/'
 	expect Presence.cfg Presence.tla no-crash-resync -e "$m"'no-crash-resync"/' -e 's/Crash = FALSE/Crash = TRUE/'
 	exit $fail
 	;;
@@ -390,11 +402,29 @@ traces)
 	fi
 	exit $st
 	;;
+walks)
+	# Random walks of spec/Directory.cfg (-simulate) into
+	# spec/testdata/directory-walks.ndjson, one state a line, each walk from
+	# its Init line; core/directory TestDirectoryModelWalks replays them
+	# against the real store. Fixed seed: the same walks until the spec changes.
+	mkdir -p "$work/walks"
+	sed -e "s/WalkDepth = 0/WalkDepth = ${WALK_DEPTH:-12}/" -e "s#WalkDir = \"\"#WalkDir = \"$work/walks\"#" \
+		-e 's/^    NoPingPong$/    NoPingPong\n    WalkDump/' spec/Directory.cfg >"$work/Walk.cfg"
+	TLC_WORKERS=1 tlc "$work/Walk.cfg" Directory.tla -simulate num="${WALK_NUM:-60}" -depth "${WALK_DEPTH:-12}" -seed "${WALK_SEED:-1}" >"$work/walk.out" 2>&1 || {
+		tail -40 "$work/walk.out"
+		exit 1
+	}
+	# Drop TLC's _action and the model's w and lost: the replay reads act, rec, ctr and sess.
+	for n in $(ls "$work/walks" | sort -n); do cat "$work/walks/$n"; done |
+		sed -E -e 's/^\{"_action":\{"name":"[A-Za-z]+","location":\{[^}]*\}(,"context":\{[^}]*\},"parameters":\[[^]]*\])?\},/{/' \
+			-e 's/,"w":\{[^}]*\}//' -e 's/,"lost":(true|false)//' >spec/testdata/directory-walks.ndjson
+	echo "$(ls "$work/walks" | wc -l | tr -d ' ') walks, $(wc -l <spec/testdata/directory-walks.ndjson | tr -d ' ') states: spec/testdata/directory-walks.ndjson"
+	;;
 trace)
 	check_trace "$2" && echo accepted || { grep -E 'Error|unknown event' "$2.out" | head -5; echo rejected; exit 1; }
 	;;
 *)
-	echo "usage: spec.sh check|nightly|liveness|mutants|simulate|traces|trace FILE" >&2
+	echo "usage: spec.sh check|nightly|liveness|mutants|simulate|traces|walks|trace FILE" >&2
 	exit 2
 	;;
 esac
