@@ -1036,10 +1036,11 @@ acknowledgement, and `inproc-enqueue-blocks`).
     it except as an opaque number on calls it receives (older agents skip
     it). Guards: `TestUpdateAgentLabelsFromAReplacedConnection`,
     `TestDispatcher_dispatchAgentToAgent_StampsAuthenticatedSourceAgentID`,
-    relay-server `TestServeUpdateLabels*`. Open: `Presence.tla` has one
-    stream per replica (review r2 F9), so no mutant guards this yet; the
-    model needs same-replica replacement with an update bound to the old
-    session (with the Presence trace work).
+    relay-server `TestServeUpdateLabels*`. Open: `Presence.tla` has
+    same-replica replacement (F9) but takes `Update` atomically on the
+    current stream, so no mutant guards this yet; the model needs an
+    update request received on the old session and applied after
+    `Connect` (mutant: applied by agent, not session).
 15. **A lost or aborted session reached the client as a clean end** (code,
     Linux runner flake of
     `TestTCPTunnelEndAckStreamLossResetsHalfClosedClient/endpoint`, and
@@ -1292,7 +1293,7 @@ relay link connection never outlives every primary holding its token.
     takes the agent's labels and E2EE peer facts from
     `/api/v1/my/agents`, as `hubInventory` does. The model gained
     same-replica replacement (F9, mutant `release-by-agent`); finding 14
-    stays open for the relay proto change.
+    is fixed in code (the relay proto's `source_session`), its mutant open.
 29. **HTTP-tunnel and TCP-only agents never moved the feed** (review r2
     F4, code: these agents are the model's `Connect` and `End`, which
     their code did not take). `myAgents` lists them (the TCP agent through

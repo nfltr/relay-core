@@ -383,7 +383,9 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		err := writeBatch(bufs)
 		clear(bufs)
 		if err != nil {
-			as.send(&pb.TCPData{SessionId: sessionID, Close: true})
+			// The client's connection failed: an abort, so the agent resets
+			// its target rather than ending it with a FIN (finding 15).
+			as.send(&pb.TCPData{SessionId: sessionID, Close: true, Abort: true})
 			sess.markClosed()
 			return nil
 		}
@@ -408,7 +410,9 @@ func (d *TCPDispatcher) pumpToAgent(conn net.Conn, as *tcpAgentStream, sessionID
 				return
 			}
 			if err != nil {
-				as.send(&pb.TCPData{SessionId: sessionID, Close: true})
+				// A read error (a reset): an abort, never a FIN at the
+				// agent's target (finding 15).
+				as.send(&pb.TCPData{SessionId: sessionID, Close: true, Abort: true})
 				sess.markClosed()
 				return
 			}

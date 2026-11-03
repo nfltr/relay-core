@@ -39,7 +39,7 @@ func TestUpdateAgentLabelsConnectLabelsWin(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			d, stream := labelsTestDispatcher(t, connect, map[string]string{"flavor": "codex", "host": "a", "old": "value"})
-			got, ok := d.UpdateAgentLabels("worker-1", map[string]string{"flavor": "cursor", " os ": " linux ", "": "orphan", "empty": " "}, tc.patch)
+			got, ok := d.UpdateAgentLabels("worker-1", serialOf(d, "worker-1"), map[string]string{"flavor": "cursor", " os ": " linux ", "": "orphan", "empty": " "}, tc.patch)
 			if !ok || !maps.Equal(got, tc.want) || !maps.Equal(stream.Labels(), tc.want) {
 				t.Fatalf("UpdateAgentLabels = %v, %v; stream %v; want %v", got, ok, stream.Labels(), tc.want)
 			}
@@ -52,7 +52,7 @@ func TestUpdateAgentLabelsPublishesPresence(t *testing.T) {
 	t.Parallel()
 	d, _ := labelsTestDispatcher(t, nil, nil)
 	base := d.Presence.Watch(t.Context(), "", 0, nil).GetCursor()
-	if _, ok := d.UpdateAgentLabels("worker-1", map[string]string{"k": "v"}, false); !ok {
+	if _, ok := d.UpdateAgentLabels("worker-1", serialOf(d, "worker-1"), map[string]string{"k": "v"}, false); !ok {
 		t.Fatal("UpdateAgentLabels: agent not found")
 	}
 	evs := d.Presence.Watch(t.Context(), base, 0, nil).GetEvents()
@@ -66,7 +66,7 @@ func TestUpdateAgentLabelsUnknownAgent(t *testing.T) {
 	t.Parallel()
 	d, stream := labelsTestDispatcher(t, nil, map[string]string{"k": "v"})
 	for _, id := range []string{"ghost-worker", "   "} {
-		if got, ok := d.UpdateAgentLabels(id, map[string]string{"a": "b"}, false); ok || got != nil {
+		if got, ok := d.UpdateAgentLabels(id, serialOf(d, id), map[string]string{"a": "b"}, false); ok || got != nil {
 			t.Errorf("UpdateAgentLabels(%q) = %v, %v; want nil, false", id, got, ok)
 		}
 		if _, ok := d.Upstreams.Load(id); ok {
@@ -75,5 +75,32 @@ func TestUpdateAgentLabelsUnknownAgent(t *testing.T) {
 	}
 	if !maps.Equal(stream.Labels(), map[string]string{"k": "v"}) {
 		t.Errorf("labels mutated: %v", stream.Labels())
+	}
+}
+
+// serialOf is the A2A source session of agent id's connection here (0:
+// none), as the relay stamps it on the agent's calls.
+func serialOf(d *Dispatcher, id string) uint64 {
+	if s, ok := d.Upstreams.Load(id); ok {
+		if g, ok := s.(*GRPCStream); ok {
+			return g.serial
+		}
+	}
+	return 0
+}
+
+// An update sent by a connection that a newer connection of the agent
+// replaced applies to nothing: the newer connection keeps its labels
+// (spec/README.md finding 14).
+func TestUpdateAgentLabelsFromAReplacedConnection(t *testing.T) {
+	t.Parallel()
+	d, stream := labelsTestDispatcher(t, nil, map[string]string{"k": "v"})
+	old := stream.serial
+	stream.serial = old + 2 // the agent reconnected: a newer connection here
+	if got, ok := d.UpdateAgentLabels("worker-1", old, map[string]string{"k": "stale"}, false); ok || got != nil {
+		t.Fatalf("an update from the replaced connection = %v, %v; want refused", got, ok)
+	}
+	if stream.Labels()["k"] != "v" {
+		t.Fatalf("labels = %v, want the newer connection's", stream.Labels())
 	}
 }

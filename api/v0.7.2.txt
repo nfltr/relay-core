@@ -1,3 +1,5 @@
+Incompatible changes:
+- ./core/session.(*Dispatcher).UpdateAgentLabels: changed from func(string, map[string]string, bool) (map[string]string, bool) to func(string, uint64, map[string]string, bool) (map[string]string, bool)
 Compatible changes:
 - ./core/session.(*Dispatcher).RouteHere: added
 - ./core/session.Dispatcher.ServicesGo: added

@@ -362,7 +362,7 @@ func (a *tcpAgentStream) resetSession(id string, sess *tcpSession) {
 			break
 		}
 	}
-	go a.send(&pb.TCPData{SessionId: id, Close: true}) // the stream's sender may be busy
+	go a.send(&pb.TCPData{SessionId: id, Close: true, Abort: true}) // the stream's sender may be busy
 	if sess.abort != nil {
 		sess.abort()
 	}

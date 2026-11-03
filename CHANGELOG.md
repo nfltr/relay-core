@@ -294,6 +294,13 @@ changes listed (from the first tag on).
 
 ### Changed
 
+- `(*session.Dispatcher).UpdateAgentLabels(agentID, session, labels,
+  patch)`: takes the calling connection's number (`rpcclient.SourceSession`
+  of the update's stream, the relay's `RoutingInfo.source_session`) and
+  refuses an update from a connection the agent's current one here
+  replaced (spec/README.md finding 14). Migration: pass
+  `rpcclient.SourceSession(stream)`.
+
 - `metrics.CountConn`, `metrics.CountHTTP` and `metrics.RecordChainEnded`
   take the session's `*metrics.Meter` (nil: none, as before); migration:
   pass `nil`, or `OpenMeter`'s meter. `metrics.A2AResponse(first, began)`

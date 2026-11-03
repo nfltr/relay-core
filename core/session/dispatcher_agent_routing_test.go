@@ -903,7 +903,7 @@ func TestDispatcher_dispatchAgentToAgent_StampsAuthenticatedSourceAgentID(t *tes
 	d.dispatchAgentToAgent(ctx, sourceStream, &pb.TunnelFrame{
 		Payload:       []byte("task.resume"),
 		TransactionId: "txn-stamp-source",
-		Routing:       &pb.RoutingInfo{AgentId: "host-a.X-claude-code-1", TargetAgentId: "nfltr-relay-orchestrator"},
+		Routing:       &pb.RoutingInfo{AgentId: "host-a.X-claude-code-1", TargetAgentId: "nfltr-relay-orchestrator", SourceSession: 7},
 		Eom:           true,
 	})
 
@@ -911,6 +911,11 @@ func TestDispatcher_dispatchAgentToAgent_StampsAuthenticatedSourceAgentID(t *tes
 	case got := <-targetStreamer.sendCh:
 		if id := got.GetRouting().GetAgentId(); id != scoped {
 			t.Fatalf("target saw source agent id %q, want authenticated %q", id, scoped)
+		}
+		// The relay numbers the calling connection; a claimed number is
+		// replaced (finding 14).
+		if n := got.GetRouting().GetSourceSession(); n != sourceStream.serial || n == 0 {
+			t.Fatalf("target saw source session %d, want the connection's %d", n, sourceStream.serial)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout waiting for forwarded frame")

@@ -54,7 +54,7 @@ func TestPresenceLabelUpdateKeepsTheSession(t *testing.T) {
 	key := directory.GetStreamerCacheKey("agent-1")
 	t.Run("current session", func(t *testing.T) {
 		d, _, mc := recordsTestDispatcher(t, 3, &directory.Value{PodIP: "10.0.0.1", Seq: 3, Credential: "cred", Account: "acct"}, nil)
-		if _, ok := d.UpdateAgentLabels("agent-1", map[string]string{"k": "v"}, true); !ok {
+		if _, ok := d.UpdateAgentLabels("agent-1", serialOf(d, "agent-1"), map[string]string{"k": "v"}, true); !ok {
 			t.Fatal("update refused")
 		}
 		got := mc.Data[key]
@@ -65,7 +65,7 @@ func TestPresenceLabelUpdateKeepsTheSession(t *testing.T) {
 	t.Run("superseded session", func(t *testing.T) {
 		newer := &directory.Value{PodIP: "10.0.0.2", Seq: 4, Credential: "cred", Account: "acct"}
 		d, _, mc := recordsTestDispatcher(t, 3, newer, nil)
-		if _, ok := d.UpdateAgentLabels("agent-1", map[string]string{"k": "v"}, true); ok {
+		if _, ok := d.UpdateAgentLabels("agent-1", serialOf(d, "agent-1"), map[string]string{"k": "v"}, true); ok {
 			t.Fatal("a superseded session's update was accepted")
 		}
 		if mc.Data[key] != newer {
@@ -105,7 +105,7 @@ func TestPresenceRenewalNeverWritesReplacedLabels(t *testing.T) {
 	<-gc.held // the renewal is writing the labels it read
 	updated := make(chan struct{})
 	go func() {
-		d.UpdateAgentLabels("agent-1", map[string]string{"k": "new"}, true)
+		d.UpdateAgentLabels("agent-1", serialOf(d, "agent-1"), map[string]string{"k": "new"}, true)
 		close(updated)
 	}()
 	select { // the update has written (the bug), or waits on the lock
@@ -152,7 +152,7 @@ func TestPresenceRecordRewriteIsPublished(t *testing.T) {
 	t.Run("failed label update", func(t *testing.T) {
 		d, stream, mc := recordsTestDispatcher(t, 3, current(), nil)
 		setCacheErr(mc, errors.New("store down"))
-		if _, ok := d.UpdateAgentLabels("agent-1", map[string]string{"k": "v"}, true); !ok {
+		if _, ok := d.UpdateAgentLabels("agent-1", serialOf(d, "agent-1"), map[string]string{"k": "v"}, true); !ok {
 			t.Fatal("update refused")
 		}
 		if !d.RecordWriteFailed.Load() {

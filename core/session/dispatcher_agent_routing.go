@@ -93,6 +93,9 @@ func (d *Dispatcher) dispatchAgentToAgent(ctx context.Context, sourceStream *GRP
 	// value: rpcclient stamps its raw --name, and targets key recovery and
 	// reply routing on SourceAgentID(). Mirrors processGRPCInput's override.
 	msg.Routing.AgentId = sourceStream.ID
+	// The relay numbers the calling connection, so a call its newer
+	// connection replaced applies to nothing (UpdateAgentLabels, finding 14).
+	msg.Routing.SourceSession = sourceStream.serial
 
 	session, loaded := d.a2aSessions.Load(txnID)
 	if loaded && session.source != sourceStream {

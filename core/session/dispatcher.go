@@ -573,14 +573,18 @@ func (d *Dispatcher) forgetAgent(agentID string) {
 // update replaces the previous update's labels, or with patch merges into
 // them; the labels the agent connected with always stay as advertised (an
 // update can neither change nor drop them). It returns the full set now
-// advertised, or ok=false for an agent not connected here.
-func (d *Dispatcher) UpdateAgentLabels(agentID string, labels map[string]string, patch bool) (map[string]string, bool) {
+// advertised, or ok=false for an agent not connected here, or an update
+// sent by a connection of the agent that a newer one replaced.
+func (d *Dispatcher) UpdateAgentLabels(agentID string, session uint64, labels map[string]string, patch bool) (map[string]string, bool) {
 	stream, ok := d.Upstreams.Load(strings.TrimSpace(agentID))
 	if !ok {
 		return nil, false
 	}
 	grpc, ok := stream.(*GRPCStream)
-	if !ok {
+	if !ok || grpc.serial != session {
+		// session: the connection that sent the update (its A2A call's
+		// RoutingInfo.source_session); a newer connection that replaced
+		// it keeps its own labels (spec/README.md finding 14).
 		return nil, false
 	}
 	// The update renews the stream's own session record with the new

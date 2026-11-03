@@ -78,7 +78,7 @@ func (p *presReplicas) connect(d *Dispatcher) *GRPCStream {
 
 func (p *presReplicas) update(d *Dispatcher) {
 	p.on(d)
-	if _, ok := d.UpdateAgentLabels(presAgent, map[string]string{"k": "v"}, true); !ok {
+	if _, ok := d.UpdateAgentLabels(presAgent, serialOf(d, presAgent), map[string]string{"k": "v"}, true); !ok {
 		p.t.Fatal("update refused")
 	}
 }

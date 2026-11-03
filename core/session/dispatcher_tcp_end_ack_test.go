@@ -283,3 +283,19 @@ func TestTCPTunnelEndAckRepeatedHalfCloseAcksOnce(t *testing.T) {
 		t.Fatalf("%d goroutines after 1000 repeated half closes, want at most one ack's", n)
 	}
 }
+
+// A client whose connection resets ends its session with the relay's
+// abort (TCPData.abort), never a plain close: the agent then resets its
+// target instead of a FIN (spec/README.md finding 15, AbortTyped, mutant
+// relay-abort-as-eof).
+func TestTCPTunnelClientResetAbortsAgentSession(t *testing.T) {
+	a := NewTCPAgentStream()
+	a.endAck = true
+	c, sid := endpointSessionHalf(t, a, false)
+	_ = c.(*net.TCPConn).SetLinger(0)
+	_ = c.Close() // an RST
+	f := nextFrame(t, a, "close", (*pb.TCPData).GetClose)
+	if f.GetSessionId() != sid || f.GetHalf() || !f.GetAbort() {
+		t.Fatalf("the relay's close after its client's reset: %v, want a whole close with abort", f)
+	}
+}

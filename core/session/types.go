@@ -5,6 +5,8 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -105,8 +107,13 @@ type Stream[S, R proto.Message] struct {
 	a2aEnded sync.Map
 	// Per-agent stats; connectedAt, credential and account also name the
 	// session in its inventory record (Session).
-	connectedAt            time.Time
-	seq                    int64
+	connectedAt time.Time
+	seq         int64
+	// serial names this connection in the A2A calls it makes
+	// (pb.RoutingInfo.source_session): random, never 0, so a later
+	// connection of the agent, here or on another replica, has another
+	// (finding 14).
+	serial                 uint64
 	credential             string
 	account                string
 	bytesSent              atomic.Int64
@@ -178,6 +185,7 @@ func NewGRPCStream(agentID string, stream Streamer, ctx context.Context, heartbe
 		heartbeatsRecvThresholdTicker: heartbeatsRecvThresholdTicker,
 		connectedAt:                   time.Now(),
 		client:                        streamClient(ctx),
+		serial:                        newSerial(),
 	}
 }
 
@@ -321,4 +329,12 @@ func (a *Stream[S, R]) BytesRecv() int64 {
 // RequestCount returns the total requests proxied through this agent.
 func (a *Stream[S, R]) RequestCount() int64 {
 	return a.requestCount.Load()
+}
+
+// newSerial numbers one agent connection: odd, so never the zero an older
+// relay or a missing stamp leaves in RoutingInfo.source_session.
+func newSerial() uint64 {
+	var b [8]byte
+	_, _ = rand.Read(b[:]) // never fails since Go 1.24
+	return binary.LittleEndian.Uint64(b[:]) | 1
 }
