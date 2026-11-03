@@ -471,7 +471,17 @@ payload it could not hand over without a resync. Witnesses, each violated, so `N
 `WitnessStale` (a watcher's snapshot stale, owed a wake),
 `WitnessRemoteUpdate` (a label update made on the other replica reaches
 the watcher's snapshot); `WitnessSuperseded` (a stream superseded, so
-`SupersededByNewer` is not vacuous). `PresenceLive.cfg` (`make spec-liveness`, 57 s) checks `Woken`
+`SupersededByNewer` is not vacuous); `WitnessReplaced` (an action
+property: a stream replaced by a newer session on its own replica).
+`Connect` on a replica that has the agent's stream replaces it (F9): the
+old stream's teardown releases by its own session and publishes no down
+while a session of the agent is listed here (finding 28). The order of
+the old teardown's steps against the new connect changes only the
+events' contents (an up folded into a down), never whether a wake is
+owed, so the model keeps one stream per replica and the contents are
+the consumer's (finding 28, F6). Finding 14 (an update in flight from
+the replaced connection) needs the update to name its session, a relay
+proto change (lane W5-RELAY). `PresenceLive.cfg` (`make spec-liveness`, 57 s) checks `Woken`
 under weak fairness on the feed's steps (`Publish`, `Deliver`,
 `Resubscribe`, `Wake`, `Cursor`, `Snap`): a stale watcher is woken, or
 the listing comes back to its snapshot. Mutants (`make spec-mutants`),
@@ -481,7 +491,10 @@ each caught: `unfenced-label-write` (finding 8), `partial-list` (9),
 `resync-early` (the resync before the subscription is back),
 `resync-ignored` (the feed ignoring the bus's resync signal: the bug
 a0154c2 fixed), `silent-rewrite`, `no-late-down` (27),
-`shared-counter` (34);
+`shared-counter` (34), `release-by-agent` (an agent replacing its
+stream on the same replica, review r2 F9: the old stream's teardown
+released the agent's record whatever session it named, the code before
+2a1cf33; the new session's renewal wrote it back unannounced);
 on `PresenceLive.cfg` (`Woken`): `subscriber-stops` and `outbox-stops`
 (the subscriber or the outbox gone while the replica drains and serves:
 the safety config cannot see them, finding 26) and `publish-drop`;
@@ -650,7 +663,7 @@ rebalancing move gave up, a drain's `stopNow` asks the agent again
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 205,995 (47,884) | | 2-4 s |
 | `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain (findings 31, 32) | 69,096 (16,515) | | 3 s |
-| `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription, 1 failed write | 604,624 (100,778) | | 15 s at load 14 (2026-11-03; 4 s before failed writes) |
+| `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription, 1 failed write | 607,118 (100,778) | | 15 s at load 14, 83 s at load 100 (2026-11-03; 4 s before failed writes; same-replica replacement adds no distinct state) |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
 | `HandoffLive.cfg` | `Placed` | | | 7 s |
@@ -1088,13 +1101,19 @@ relay link connection never outlives every primary holding its token.
     (`hubArrivals`, `awaitLaunched`) missed the arrival until its
     deadline. Severity: medium. Fixed: no down while a session of the
     agent is listed here (`publishDeparture`). Guard:
-    `TestPresenceReplacedSessionPublishesNoDown`. Open (F6): the feed's
-    contract is a wake, but nfltr's `hubArrivals` applies `up` contents
-    (labels, E2EE peer facts), and an older session's up delayed in one
-    replica's outbox can reach a peer after a newer one's from another;
-    next: nfltr re-lists on an up (or the event carries the session Seq,
-    a relay proto change), and the model gains same-replica replacement
-    with finding 14 (F9).
+    `TestPresenceReplacedSessionPublishesNoDown`. F6, decided (lane
+    W5-RCORE, owner's delegation): the feed's contract stays a wake
+    (`Presence.tla`'s `NoSilentStale`); an event's contents are a hint a
+    consumer may not apply as the agent's state, since an older session's
+    up delayed in one replica's outbox can reach a peer after a newer
+    one's from another. Recommended over carrying the session Seq in the
+    event (a relay proto change every consumer would then have to order
+    by) because the listing already orders sessions. Follow-up in nfltr:
+    `hubArrivals` (`handlers_hub_tools.go`) treats an up as a wake and
+    takes the agent's labels and E2EE peer facts from
+    `/api/v1/my/agents`, as `hubInventory` does. The model gained
+    same-replica replacement (F9, mutant `release-by-agent`); finding 14
+    stays open for the relay proto change.
 29. **HTTP-tunnel and TCP-only agents never moved the feed** (review r2
     F4, code: these agents are the model's `Connect` and `End`, which
     their code did not take). `myAgents` lists them (the TCP agent through

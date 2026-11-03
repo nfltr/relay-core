@@ -142,13 +142,27 @@ Resubscribe(q) ==
 
 \* ConnectAgentTunnel on r: claimAgentRecord (the next Seq: the newest
 \* session holds the record), then the stream is listed and up published.
+\* A stream of the agent already here is replaced (review r2 F9: the
+\* agent reconnected before the relay saw its old connection end): the
+\* new one is stored over it, and the old one's teardown releases the
+\* record by its own session (no match: the record is the new one's) and
+\* publishes no down while a session of the agent is listed here
+\* (finding 28). Its renewals and updates are fenced by its session, so
+\* nothing of it is pending. Mutant release-by-agent (the code before
+\* 2a1cf33): the old teardown deleted the agent's record whatever session
+\* it named; the new session's next renewal wrote it back unannounced.
 Connect(r) ==
-    /\ live[r] /\ ~st[r].on /\ seqs < MaxSeq
+    /\ live[r] /\ seqs < MaxSeq
     /\ seqs' = seqs + 1 /\ top' = seqs + 1
     /\ st' = [st EXCEPT ![r] = [on |-> TRUE, seq |-> seqs + 1, lab |-> "l0"]]
-    /\ rec' = [on |-> TRUE, pod |-> r, seq |-> seqs + 1, lab |-> "l0"]
+    /\ rec' = IF Mutant = "release-by-agent" /\ st[r].on
+              THEN [on |-> FALSE, pod |-> "-", seq |-> 0, lab |-> "-"]
+              ELSE [on |-> TRUE, pod |-> r, seq |-> seqs + 1, lab |-> "l0"]
     /\ pub' = [pub EXCEPT ![r] = TRUE]
-    /\ UNCHANGED <<live, upds, recv, feedv, watchv>>
+    /\ rd' = [rd EXCEPT ![r] = "-"] /\ pw' = [pw EXCEPT ![r] = "-"]
+    /\ stale' = [stale EXCEPT ![r] = FALSE]
+    /\ UNCHANGED <<live, upds, late, fails, gone, feedv, watchv>>
+
 
 \* Mutant shared-counter (finding 34, the code before): a claim of the
 \* agent's other record (its ConnectTCP stream's streamer record beside
@@ -395,6 +409,10 @@ WitnessRemoteUpdate == ~\E r \in W : ~st[r].on /\ view[r].on /\ view[r].lab = "l
 \* superseded (finding 13: by a newer session that has ended).
 SupersededByNewer == \A r \in R : st[r].on /\ Superseded(r) => top > st[r].seq
 WitnessSuperseded == ~\E r \in R : st[r].on /\ Superseded(r)
+
+\* Witness (an action property): a stream replaced by a newer session on
+\* its own replica (Connect over it, review r2 F9).
+WitnessReplaced == [][~\E r \in R : st[r].on /\ st'[r].on /\ st'[r].seq # st[r].seq]_vars
 
 \* The wake is paid (PresenceLive.cfg): a stale watcher is woken, or the
 \* listing comes back to its snapshot (or its replica is gone: its client

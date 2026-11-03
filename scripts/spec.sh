@@ -274,13 +274,14 @@ mutants)
 	expect Move.cfg Move.tla witness:remote -e 's/^    RunOnce$/    WitnessRemote/'
 	expect Move.cfg Move.tla witness:owner -e 's/^    OneOwner$/    WitnessOwner/'
 	expect Move.cfg Move.tla witness:tcp -e 's/^    NoTCPAfterMove$/    WitnessTCP/'
-	# Presence.tla: the bugs the design prevents (findings 8-13, 24-29, 34).
-	for b in unfenced-label-write partial-list partial-my-agents renew-race drop-no-resync renew-resurrects publish-before-write resync-early resync-ignored publish-drop silent-rewrite no-late-down shared-counter; do
+	# Presence.tla: the bugs the design prevents (findings 8-13, 24-29, 34; release-by-agent: 2a1cf33).
+	for b in unfenced-label-write partial-list partial-my-agents renew-race drop-no-resync renew-resurrects publish-before-write resync-early resync-ignored publish-drop silent-rewrite no-late-down shared-counter release-by-agent; do
 		expect Presence.cfg Presence.tla "$b" -e "$m$b\"/"
 	done
 	expect Presence.cfg Presence.tla witness:stale -e 's/^    NoSilentStale$/    WitnessStale/'
 	expect Presence.cfg Presence.tla witness:remote-update -e 's/^    NoSilentStale$/    WitnessRemoteUpdate/'
 	expect Presence.cfg Presence.tla witness:superseded -e 's/^    SupersededByNewer$/    WitnessSuperseded/'
+	expect Presence.cfg Presence.tla witness:replaced -e 's/^SPECIFICATION Spec$/SPECIFICATION Spec PROPERTY WitnessReplaced/'
 	# The wake is paid only if the feed's steps go on (finding 26); no
 	# failed writes, to keep these quick.
 	for b in subscriber-stops outbox-stops publish-drop; do
