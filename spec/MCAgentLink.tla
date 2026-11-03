@@ -10,22 +10,24 @@ MCWin1 == [p \in {"r", "a"} |-> 1]
 MCWinW == [p \in {"r", "a"} |-> IF p = "r" THEN 1 ELSE 2]  \* AgentLinkWrite.cfg: the relay's writes
 
 -----------------------------------------------------------------------------
-(* The refinement mapping. The relay's whole close is a Close (the agent's  *)
-(* target reads EOF: finding 15, open); the agent's is an abort (the        *)
-(* relay's reader reads a reset). Bytes a send that held credit queues      *)
+(* The refinement mapping. The relay's whole close is a Close for an        *)
+(* inProcConn (the agent's target reads EOF) and an abort for a client's    *)
+(* session (RelayAbort: the target is reset, finding 15); the agent's is    *)
+(* an abort (the relay's reader reads a reset). Bytes a send that held      *)
+(* credit queues                                                           *)
 (* after this side's close are not written in the interface's terms: the    *)
 (* peer takes the close first (FIFO) and drops them.                        *)
 WEnd(p, s) == CASE wfin[p][s] = "half" -> "fin"
-                [] wfin[p][s] = "whole" /\ p = "r" -> "close"
+                [] wfin[p][s] = "whole" /\ p = "r" /\ WholeT(p, s) = "whole" -> "close"
                 [] wfin[p][s] = "whole" -> "reset"
                 [] OTHER -> ""
 
-\* p sent a FIN: its half close, or the relay's whole close. The agent's
+\* p sent a FIN: its half close, or the relay's whole close (not an abort). The agent's
 \* whole close after its half close keeps the FIN (on its way or taken).
 HalfOnWay(p, s) == \E i \in DOMAIN ch[p] : ch[p][i].t = "half" /\ ch[p][i].s = s
 Fin(p, s) ==
     \/ wfin[p][s] = "half"
-    \/ wfin[p][s] = "whole" /\ (p = "r" \/ rfin[Peer(p)][s] = "half" \/ HalfOnWay(p, s))
+    \/ wfin[p][s] = "whole" /\ ((p = "r" /\ WholeT(p, s) = "whole") \/ rfin[Peer(p)][s] = "half" \/ HalfOnWay(p, s))
 
 LS == INSTANCE LinkSession WITH
     Sides <- P,

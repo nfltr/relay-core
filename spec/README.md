@@ -131,14 +131,16 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
    only once its own was acknowledged); a stream without it (an older
    agent or relay) is `EndAck = FALSE`, where it fails
    (`race:clean-tail-lost`).
-7. `AbortTyped` (`EndAck`): the agent's whole close before its half close
-   (an abort) reaches the relay's reader as a reset, never an EOF
-   (finding 15).
+7. `AbortTyped`: the agent's whole close before its half close (an
+   abort) reaches the relay's reader as a reset, never an EOF (`EndAck`);
+   the relay's abort of a client's session (`RelayAbort`: TCPData.abort)
+   reaches the agent's target as one (finding 15).
 
 Witnesses (`make spec-mutants`, each must be violated, so the invariants
 above guard reachable states): `WitnessAbort` (an agent abort reaches the
-relay), `WitnessHeldEof` (an app that half-closed first gets a released
-EOF).
+relay), `WitnessRelayAbort` (a relay abort reaches the agent,
+`AgentLinkAbort.cfg`), `WitnessHeldEof` (an app that half-closed first
+gets a released EOF).
 
 ### Liveness (weak fairness on every step that is not an app's)
 
@@ -182,6 +184,9 @@ whole close in a config whose property needs the apps to finish.
   close is not acked yet (`NoSilentLoss`; finding 2's hold, review AL-2).
 - `abort-as-eof`: the agent's abort reaches the relay's reader as an EOF
   (`AbortTyped`; finding 15).
+- `relay-abort-as-eof`: the relay's abort of a client's session reaches
+  the agent's target as a FIN (`AbortTyped` on `AgentLinkAbort.cfg`, and
+  link's interface alone; finding 15).
 - `no-credit` runs with 3 bytes (one past the window).
 - a stream without the end acknowledgement (finding 2: an older agent or
   relay): `race:clean-tail-lost` (`EndAck = FALSE`, `NoSilentLoss`).
@@ -213,11 +218,13 @@ once it closed: a send that held credit before a whole close queues its
 frame after it, and the peer, which takes the close first, drops it),
 `d` the bytes received (`rcv`), `c` those read (`rcv - q`), `rend` the
 reader's end (`why`), `shut` this side's whole close; the relay's whole
-close is a Close (the agent's target reads EOF: finding 15, open) and the
-agent's an abort (the relay's reader reads a reset); a stream has no
+close is a Close for an inProcConn (the agent's target reads EOF) and an
+abort for a client's session (`RelayAbort`: the target is reset, finding
+15), and the agent's an abort (the relay's reader reads a reset); a
+stream has no
 GOAWAY (`ga` FALSE: its end is `Break`). `make spec-mutants` checks that
-`fin-overtakes`, `grant-early`, `lose-as-eof`, `abort-as-eof` and
-`inproc-closewrite` each fail the interface alone (`interface:<mutant>`,
+`fin-overtakes`, `grant-early`, `lose-as-eof`, `abort-as-eof`,
+`relay-abort-as-eof` and `inproc-closewrite` each fail the interface alone (`interface:<mutant>`,
 every AgentLink invariant left out).
 
 Frame streams give one guarantee link's interface does not: a session
@@ -884,8 +891,8 @@ acknowledgement, and `inproc-enqueue-blocks`).
      before the session ends (relay `closeWrite` does not `markClosed`,
      agent `pump` waits on `halfEnd.done` before closing the target). A
      whole close needs no ack; the agent's reaches the relay's reader as
-     a reset (finding 15), the relay's reaches the agent's target as a
-     FIN (open, finding 15).
+     a reset, the relay's abort reaches the agent's target as one
+     (finding 15).
    - Failure: a stream that ends while a side waits for its ack ends the
      session with a reset at that app, never a clean end: relay `lose`
      counts a session whose own half close was not acked as lost (the
@@ -1014,12 +1021,25 @@ acknowledgement, and `inproc-enqueue-blocks`).
     agent's Seq counter is past its session's is superseded
     (`PutSession`). Guard: `TestRenewalAfterANewerSessionEndedIsSuperseded`.
 14. **An update in flight from a replaced connection applies to its
-    replacement** (review, open). `serveUpdateLabels` names the agent
-    (`SourceAgentID`), not the session: a request received on a stream
-    a newer connection of the agent on the same replica replaced is
-    applied to the newer one's labels. Severity: low (a window of one
-    request). Next: the source session on the agent-to-agent call (relay
-    proto and `rpcclient`, a release of github.com/nfltr/relay).
+    replacement** (review; fixed in code, lane W5-RELAY, 2026-11-03).
+    `serveUpdateLabels` named the agent (`SourceAgentID`), not the
+    session: a request received on a stream a newer connection of the
+    agent on the same replica replaced was applied to the newer one's
+    labels. Severity: low (a window of one request). Fix: the relay
+    stamps each A2A frame with the calling connection's number
+    (`RoutingInfo.source_session`, field 5, github.com/nfltr/relay proto;
+    `Stream.serial`, random and never 0, replacing any value the agent
+    sent); `rpcclient.SourceSession` reads it; `UpdateAgentLabels` takes
+    it and refuses an update whose connection is not the agent's current
+    one here. Version plan: relay-core and relay-server ship in one binary,
+    so the field is written and read by one process; an agent never sees
+    it except as an opaque number on calls it receives (older agents skip
+    it). Guards: `TestUpdateAgentLabelsFromAReplacedConnection`,
+    `TestDispatcher_dispatchAgentToAgent_StampsAuthenticatedSourceAgentID`,
+    relay-server `TestServeUpdateLabels*`. Open: `Presence.tla` has one
+    stream per replica (review r2 F9), so no mutant guards this yet; the
+    model needs same-replica replacement with an update bound to the old
+    session (with the Presence trace work).
 15. **A lost or aborted session reached the client as a clean end** (code,
     Linux runner flake of
     `TestTCPTunnelEndAckStreamLossResetsHalfClosedClient/endpoint`, and
@@ -1045,11 +1065,27 @@ acknowledgement, and `inproc-enqueue-blocks`).
     `Eof` and `spec/testdata/reject-eof-after-loss.ndjson`. Guards:
     `TestTCPTunnelEndAckStreamLossResetsHalfClosedClient` (deterministic
     now: the test's connection resets late), `TestTCPTunnelEndAckAgentAbortResetsClient`.
-    **Open**: the relay's whole close reaches the agent's target as a FIN
-    (agent `closeFrame`, github.com/nfltr/relay): the relay sends whole
-    both for a client's error and for a normal `inProcConn.Close`, so the
-    agent cannot tell them apart without a frame flag (relay proto,
-    `client/agent`). The model keeps `AbortTyped` to the relay side.
+    (c) **Fixed** (lane W5-RELAY, 2026-11-03): the relay's whole close
+    reached the agent's target as a FIN, both for a client's failure and
+    for a normal `inProcConn.Close`, which the agent could not tell apart.
+    Wire: `TCPData.abort` (field 11, github.com/nfltr/relay proto): a
+    whole close that says the session failed; on a link leg it is link's
+    reset (`SendReset`, CLOSE code 2), which `dataplane.Conn.Recv` reads
+    back as `abort`. The relay sets it when the client's connection fails
+    to read or write (`handleLocalConn`, `pumpToAgent`) and on a stall
+    reset (`resetSession`); `inProcConn.Close` stays a close. The agent
+    (`closeFrame`) resets its target after what is queued (an RST, also
+    after an earlier half close), and sets it on its own aborts. Version
+    plan: no negotiation; a peer that does not know the field closes with
+    a FIN as before (protobuf skips an unknown field; an older link peer
+    without the reset feature gets a plain close), so old and new agents
+    and relays mix freely and a new pair gets the reset. Model:
+    `RelayAbort`, `WholeT`, `AbortTyped` both sides, `AgentLinkAbort.cfg`
+    (in `make spec`; 110,149 distinct states with `Refines`), mutant
+    `relay-abort-as-eof`, witness `WitnessRelayAbort`. Guards: relay
+    `TestTCPTunnelRelayAbortResetsTarget` (client/agent),
+    `TestFramesRoundTripV2` (dataplane), relay-core
+    `TestTCPTunnelClientResetAbortsAgentSession`.
 
 Findings 16-22 come from an independent review of `Handoff.tla` and
 `Move.tla` against the code (2026-11-02, lane RCREVIEW).

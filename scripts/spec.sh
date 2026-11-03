@@ -105,6 +105,7 @@ CONSTANTS
     Aborts = TRUE
     EndAck = $endack
     OutCap = 1000000
+    RelayAbort = TRUE
     Mutant = "none"
 INIT TraceInit
 NEXT TraceNext
@@ -242,6 +243,7 @@ check)
 	sed '/^PROPERTY Refines/d' spec/AgentLink.cfg >"$work/AgentLink.cfg"
 	run "$work/AgentLink.cfg" MCAgentLink.tla
 	run AgentLinkIface.cfg MCAgentLink.tla
+	run AgentLinkAbort.cfg MCAgentLink.tla
 	run AgentLinkWrite.cfg MCAgentLink.tla
 	run Handoff.cfg Handoff.tla
 	run Move.cfg Move.tla
@@ -270,6 +272,9 @@ mutants)
 	expect AgentLink.cfg MCAgentLink.tla lose-unacked-clean -e "$m"'lose-unacked-clean"/'
 	expect AgentLink.cfg MCAgentLink.tla no-hold -e "$m"'no-hold"/'
 	expect AgentLink.cfg MCAgentLink.tla abort-as-eof -e "$m"'abort-as-eof"/'
+	expect AgentLinkAbort.cfg MCAgentLink.tla relay-abort-as-eof -e "$m"'relay-abort-as-eof"/'
+	expect AgentLinkAbort.cfg MCAgentLink.tla interface:relay-abort-as-eof -e "$m"'relay-abort-as-eof"/' -e '/^INVARIANTS/,$d'
+	expect AgentLinkAbort.cfg MCAgentLink.tla witness:relay-abort -e 's/    AbortTyped/    WitnessRelayAbort/'
 	# Witnesses: the states the invariants above guard are reached.
 	# The same bugs break link's session interface alone (Refines, every
 	# invariant of AgentLink left out).

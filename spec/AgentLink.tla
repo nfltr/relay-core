@@ -17,6 +17,7 @@ CONSTANTS
     Aborts,    \* the apps may close a session whole (a write or read error)
     EndAck,    \* a side ends cleanly only once the peer acknowledged its half close (finding 2, dataplane.EndAckHeader; FALSE: an older agent or relay)
     OutCap,    \* frames the relay's outbox (SendCh) holds
+    RelayAbort, \* the relay's whole close of a client's session (not an inProcConn's Close) carries TCPData.abort and the agent resets its target (finding 15; FALSE: an older relay or agent: a FIN)
     Mutant     \* "none" or a bug put back (spec/README.md "Mutants")
 
 P == {"r", "a"}
@@ -125,6 +126,12 @@ CloseWrite(p, s) ==
           ELSE Put(p, Frame("half", s, 0, wr[p][s]))
     /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, apend, closing, err>>
 
+\* The frame of p's whole close of s: the relay's for a client's session
+\* (handleLocalConn: the client's connection failed to read or write; a
+\* stall reset) is an abort (TCPData.abort, finding 15); an inProcConn's
+\* Close is a close.
+WholeT(p, s) == IF p = "r" /\ s \notin InProc /\ RelayAbort THEN "abort" ELSE "whole"
+
 \* A whole close: a write error, a read error, sessionConn.Close. Its
 \* queue takes nothing more (markClosed); Finish forgets the session. A
 \* send already holding credit still goes. An inProcConn's Close
@@ -135,7 +142,7 @@ Abort(p, s) ==
     /\ p = "r" /\ s \in InProc => closing[s] /\ (Mutant # "inproc-enqueue-blocks" \/ pend[p][s] = 0)
     /\ wfin' = [wfin EXCEPT ![p][s] = "whole"]
     /\ finAt' = [finAt EXCEPT ![p][s] = IF wfin[p][s] = "" THEN wr[p][s] ELSE @]  \* the first close's
-    /\ Put(p, Frame("whole", s, 0, wr[p][s]))
+    /\ Put(p, Frame(WholeT(p, s), s, 0, wr[p][s]))
     /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, apend, waits, closing, err>>
 
 \* inProcConn.Close is called (it marks the session closed first).
@@ -215,8 +222,10 @@ RecvWin(p, f) ==
 \* not preceded by the peer's half close is the peer's abort (the agent's
 \* target read error, a stall reset, a refused open): with EndAck the
 \* relay's reader gets a reset, never a clean end (finding 15,
-\* abort-as-eof). The relay's own whole close may be inProcConn.Close, a
-\* normal close: the agent's reader gets EOF (finding 15, open). After
+\* abort-as-eof). The relay's own whole close is an inProcConn's Close, a
+\* normal close: the agent's reader gets EOF; or its client's connection
+\* failed: an abort (TCPData.abort), and the agent resets its target
+\* (finding 15, relay-abort-as-eof). After
 \* this side's whole close the session takes nothing (its queue is closed,
 \* the agent forgot it).
 Release(p, s) ==
@@ -225,10 +234,11 @@ Release(p, s) ==
 
 RecvClose(p, f) ==
     IF st[p][f.s] = "open" /\ rfin[p][f.s] = "" /\ wfin[p][f.s] # "whole"
-       THEN /\ rfin' = [rfin EXCEPT ![p][f.s] = f.t]
-            /\ IF f.t = "whole"
+       THEN /\ rfin' = [rfin EXCEPT ![p][f.s] = IF f.t = "abort" THEN "whole" ELSE f.t]
+            /\ IF f.t \in {"whole", "abort"}
                   THEN /\ why' = [why EXCEPT ![p][f.s] = IF @ # "" THEN @
-                                    ELSE IF p = "r" /\ EndAck /\ Mutant # "abort-as-eof" THEN "reset" ELSE "eof"]
+                                    ELSE IF p = "r" /\ EndAck /\ Mutant # "abort-as-eof" THEN "reset"
+                                    ELSE IF f.t = "abort" /\ Mutant # "relay-abort-as-eof" THEN "reset" ELSE "eof"]
                        /\ UNCHANGED clean
                ELSE IF ~EndAck \/ wfin[p][f.s] = "" \/ acked[p][f.s] \/ Mutant = "no-hold"
                   THEN Release(p, f.s)
@@ -296,7 +306,7 @@ Stall(p) ==
          /\ q' = [q EXCEPT ![p][s] = 0]
          /\ wfin' = [wfin EXCEPT ![p][s] = "whole"]
          /\ finAt' = [finAt EXCEPT ![p][s] = wr[p][s]]
-         /\ ch' = [ch EXCEPT ![Peer(p)] = Tail(@), ![p] = Append(@, Frame("whole", s, 0, wr[p][s]))]
+         /\ ch' = [ch EXCEPT ![Peer(p)] = Tail(@), ![p] = Append(@, Frame(WholeT(p, s), s, 0, wr[p][s]))]
     /\ UNCHANGED <<alive, down, cr, pend, gpend, rcv, wr, rfin, clean, acked, apend, waits, closing, err>>
 
 \* The stream fails: what was on the way is lost.
@@ -408,13 +418,18 @@ NoSilentLoss ==
     \A p \in P, s \in Sess : clean[p][s] /\ ~alive =>
         rcv[Peer(p)][s] = finAt[p][s] /\ rfin[Peer(p)][s] # ""
 
-\* The agent's abort reaches the relay's reader as a reset (finding 15).
-AbortTyped == EndAck => \A s \in Sess : rfin["r"][s] = "whole" => why["r"][s] # "eof"
+\* The agent's abort reaches the relay's reader as a reset; the relay's
+\* abort of a client's session reaches the agent's target as one (finding
+\* 15).
+AbortTyped ==
+    /\ EndAck => \A s \in Sess : rfin["r"][s] = "whole" => why["r"][s] # "eof"
+    /\ RelayAbort => \A s \in Sess \ InProc : rfin["a"][s] = "whole" => why["a"][s] # "eof"
 
 \* Witnesses (make spec-mutants: TLC must violate each, so the invariants
 \* above are not vacuous): the agent's abort reaches the relay; an app
 \* that half-closed first gets a released EOF (a clean end).
 WitnessAbort == EndAck => \A s \in Sess : rfin["r"][s] # "whole"
+WitnessRelayAbort == RelayAbort => \A s \in Sess \ InProc : rfin["a"][s] # "whole"
 WitnessHeldEof == \A p \in P, s \in Sess : ~(waits[p][s] /\ why[p][s] = "eof")
 
 (* Liveness. *)
