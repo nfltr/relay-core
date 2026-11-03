@@ -20,8 +20,9 @@
 #             relaytrace; each stream's trace checked against spec/Trace.tla,
 #             each move's (move-*.ndjson) against spec/TraceMove.tla, each
 #             agent's agent-link handoff (handoff-*.ndjson) against
-#             spec/TraceHandoff.tla; with COVERAGE=1 the steps no trace
-#             took (weekly).
+#             spec/TraceHandoff.tla, each deployment's presence
+#             (presence-*.ndjson) against spec/TracePresence.tla; with
+#             COVERAGE=1 the steps no trace took (weekly).
 #   trace F   one recorded trace (its kind by its name).
 # TLC_WORKERS (default 4) caps TLC's threads; COVERAGE=1 adds -coverage 1;
 # MUTANTS=<regex> narrows mutants to those whose "CFG NAME" it matches.
@@ -171,9 +172,36 @@ CFG
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
 }
 
+# ptrace FILE: TLC on one recorded presence trace (spec/TracePresence.tla); 0 when accepted.
+ptrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    R <- TraceR
+    W <- TraceW
+    MaxSeq <- TraceMaxSeq
+    MaxUpd <- TraceMaxUpd
+    MaxResync <- TraceMaxResync
+    MaxFail <- TraceMaxFail
+    Crash = FALSE
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TraceNotDone
+    TypeOK
+    NoSilentStale
+    SupersededByNewer
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TracePresence.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
 # check_trace FILE: the checker for FILE's kind.
 check_trace() {
 	case $(basename "$1") in
+	presence-* | reject-presence-*) ptrace "$1" ;;
 	move-* | reject-move-*) trace_move "$1" ;;
 	handoff-* | reject-handoff-*) htrace "$1" ;;
 	*) trace "$1" ;;
@@ -307,8 +335,9 @@ simulate)
 traces)
 	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions)$'}
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown)$'}
-	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces"
-	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests" ./core/session/ >"$work/test.out" 2>&1 || {
+	ptests=${PRESENCE_TESTS:-'^(TestPresenceAcrossReplicas|TestPresenceAcrossReplicasFailedWrites)$'}
+	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/ptraces"
+	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests" ./core/session/ >"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
 		exit 1
 	}
@@ -316,6 +345,7 @@ traces)
 		case $(basename "$t") in
 		move-*) mv "$t" "$work/mtraces/" ;;
 		handoff-*) mv "$t" "$work/htraces/" ;;
+		presence-*) mv "$t" "$work/ptraces/" ;;
 		*) mv "$t" "$work/traces/" ;;
 		esac
 	done
@@ -348,6 +378,16 @@ traces)
 	fi
 	echo "== Handoff (spec/TraceHandoff.tla)"
 	checktraces "$work/htraces" htrace || st=1
+	echo "== Presence (spec/TracePresence.tla)"
+	checktraces "$work/ptraces" ptrace || st=1
+	if [ -n "${COVERAGE:-}" ]; then
+		# Presence.tla's steps no presence trace took: test gaps.
+		cat "$work"/ptraces/presence-*.ndjson 2>/dev/null |
+			sed -E 's/^\{"ev":"([A-Za-z]+)","r":"[^"]*","ok":(true|false).*$/\1 \2/' | sort -u >"$work/ptaken"
+		for a in Connect Publish Deliver Renew Superseded 'Update true' 'Update false' 'End true' 'End false' LateDown Resync Wake Cursor Snap; do
+			grep -q "^$a" "$work/ptaken" || echo "presence step never taken: $a"
+		done
+	fi
 	exit $st
 	;;
 trace)

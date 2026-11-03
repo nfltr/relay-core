@@ -515,7 +515,8 @@ the safety config cannot see them, finding 26) and `publish-drop`;
 (`make spec-nightly`) checks the design with a crash. `COVERAGE=1` takes
 every action but those only a mutant or a larger config enables
 (`PublishFail`, `RenewWrite`, `UpdateWrite`; `CrashR`, `Sweep` in
-`PresenceLarge.cfg`).
+`PresenceLarge.cfg`). Trace validation (`make spec-traces`,
+`TracePresence.tla`): see "Presence traces".
 
 ### Environment assumptions
 
@@ -546,6 +547,7 @@ every action but those only a mutant or a larger config enables
 | `ConnectTCP`'s Connect and End (`claimAgentRecord`, `departed`) | `core/session/dispatcher_tcp.go` |
 | the reannounce case (`rewriteRecord`) | `core/session/dispatcher_session_watch.go` |
 | `disconnectAgent` (the reaper's End) | `core/session/dispatcher_stale_agents.go` |
+| the presence trace recorder (`TracePresence.tla`) | `core/session/trace_presence_on.go` |
 | `PutSession`, `DeleteSession` | `core/directory/session.go` |
 | the bus, the gateway, `ListAgents`, `handleMyAgents`, the bus's context, `noteReplicas`, `resyncBus`, the watcher | relay-server `redisbus`, `presence.go`, `my_agents.go`, `server_run.go`, `inventory_epoch.go`, `presence_resync.go`; `relay:client/presenceclient` |
 
@@ -679,6 +681,50 @@ rebalancing move gave up, a drain's `stopNow` asks the agent again
 (`startMove` with `mv` nil): `Ask` from `gaveUp` while draining (finding
 25); no test takes it yet.
 
+### Presence traces (`TracePresence.tla`)
+
+With the same tag and `RELAYTRACE`, the replicas of an in-process test
+deployment joined to one trace (`tracePresenceStart`,
+`tracePresenceJoin`: `trace_presence_on.go`) write one agent's steps of
+`Presence.tla` to `<dir>/presence-<agent>-<n>.ndjson`, one file for every
+replica, each line under `traceMu` inside the lock that orders its
+change (the feed's `Mu`, the stream's record lock), so one process gives
+a total order and no vector clock is needed: `Connect`
+(`notifyUpstreamRegistered`, its labels), `Renew` (a renewal that wrote
+the record), `Update` (`ok`: its write landed, else `UpdateFail`),
+`Superseded` (a renewal or update refused for a newer session: the model's
+`Superseded(r)` must hold), `End` (`departed`; `ok`: the release landed,
+else `EndFail`), `LateDown`, `Publish` and `Deliver` (the feed's revision
+of a local or a peer's change), `Resync` (the bus's empty payload), and
+the watcher's `Wake` (`Watch` answered the agent's events or reset),
+`Cursor` and `Snap` (its listing: on, labels; the listing is
+relay-server's `myAgents`, so the test that plays the watcher records
+it). Labels are mapped by the trace module: the first `Connect`'s set is
+`l0`, any other `l1`. A local change's `Publish` is logged at the feed's
+revision; the outbox's send to the peers follows unlogged (the model's
+`Publish` is both), so a resync on a peer between the two would reject a
+correct trace (no test does that). Not logged: the bus's `Drop` (TLC takes
+it only before a `Resync`) and a record's `Expire` (only before a
+`LateDown`); crashes, `Lose`, the epoch's `Sweep` and HTTP-tunnel and
+TCP-only sessions are not recorded. A step naming no action fails the
+trace. `make spec-traces` runs `PRESENCE_TESTS`
+(`TestPresenceAcrossReplicas`: connect on b, an update there, a renewal,
+the bus's resync, a newer session on a superseding b's, both ends;
+`TestPresenceAcrossReplicasFailedWrites`: an update and a release whose
+writes fail, the renewal that publishes, the down after the TTL) and
+checks each trace (2 traces, 30-33 lines, under a second each), after
+checking that each `spec/testdata/reject-presence-*.ndjson` is rejected:
+`partial-list` (a re-list that left out the other replica's agent:
+`NoSilentStale`, findings 9 and 24), `superseded-own` (a session ended as
+superseded with no newer one: `SupersededByNewer`, finding 34),
+`unknown-step` (a step that is no action). `TypeOK` has no fixture: the
+trace module maps every label set into `Lab` and takes the replicas from
+the trace. `COVERAGE=1` lists the presence steps no trace took (none
+today). Open: a multi-process trace of relay-server's `relaytest`
+replicas (vector clocks merged with CommunityModules `VectorClocks`), and
+a recorder for the real bus's `Drop` and the epoch's `Sweep`, are
+relay-server's.
+
 ## Measurements (2026-11-02, M-series Mac, load 10-19, `taskpolicy -b`)
 
 | config | what | states (distinct) | depth | time |
@@ -696,6 +742,7 @@ rebalancing move gave up, a drain's `stopNow` asks the agent again
 | `PresenceLarge.cfg` (`make spec-nightly`) | `NoSilentStale`, as `Presence.cfg` with a crash | 1,438,047 (244,286) | | 26 s (2026-11-03) |
 | `make spec-mutants` | 9 mutants, each caught (on the CI config) | | 5-11 | 14 s |
 | `make spec-traces` | 16 AgentLink, 64 Move, 12 Handoff traces, all accepted; 14 reject fixtures rejected | | | 6 min 38 s (load 15-35) |
+| `make spec-traces`, presence only (2026-11-03) | 2 Presence traces accepted; 3 reject fixtures rejected | | | under 10 s at load 120-140 |
 
 `COVERAGE=1 scripts/spec.sh check` takes every action of both models
 except `Stall`: with credit (`Credit = TRUE`) no queue fills, so the stall

@@ -149,6 +149,14 @@ func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context,
 	}
 	labels, caps := streamLabels(tracker), streamCapabilities(tracker)
 	err := renewAgentRecord(ctx, inv, agentID, s, labels, caps, recvThreshold)
+	if traceOn && inv == d.StreamerIPInventory {
+		switch {
+		case err == nil:
+			tracePresRecord(d, agentID, "Renew", true, labels)
+		case errors.Is(err, directory.ErrSuperseded):
+			tracePresRecord(d, agentID, "Superseded", true, nil)
+		}
+	}
 	stale := streamRecordStale(tracker) // under the record lock
 	if err == nil && stale != nil && *stale {
 		// The other replicas listed what the failed write or the lost
@@ -210,10 +218,19 @@ func (d *Dispatcher) rewriteRecord(ctx context.Context, agentID string, inv dire
 // until its TTL, whose expiry publishes nothing: a second down once the TTL
 // passed wakes their watchers to re-list it gone (spec/README.md finding 27).
 func (d *Dispatcher) departed(agentID string, s directory.Session, stream Streamer) {
-	if err := releaseAgentRecord(context.Background(), d.StreamerIPInventory, agentID, s); err != nil {
+	err := releaseAgentRecord(context.Background(), d.StreamerIPInventory, agentID, s)
+	if traceOn {
+		tracePresRecord(d, agentID, "End", err == nil, nil)
+	}
+	if err != nil {
 		d.Logger.Error("failed to delete agentID dispatcher addr from cache", "AgentID", agentID, "error", err)
 		if ttl := d.Config.HeartbeatRecvThreshold; ttl > 0 {
-			time.AfterFunc(ttl+time.Second, func() { d.publishDeparture(agentID, stream) })
+			time.AfterFunc(ttl+time.Second, func() {
+				if traceOn {
+					tracePresRecord(d, agentID, "LateDown", true, nil)
+				}
+				d.publishDeparture(agentID, stream)
+			})
 		}
 	} else {
 		d.Logger.Debug("deleted agentID dispatcher addr from cache", "AgentID", agentID)

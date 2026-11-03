@@ -601,7 +601,13 @@ func (d *Dispatcher) UpdateAgentLabels(agentID string, labels map[string]string,
 	maps.Copy(next, grpc.connectLabels)
 	err := renewAgentRecord(context.Background(), d.StreamerIPInventory, agentID, grpc.Session(), next, grpc.Capabilities(), d.Config.HeartbeatRecvThreshold)
 	if errors.Is(err, directory.ErrSuperseded) {
+		if traceOn {
+			tracePresRecord(d, agentID, "Superseded", true, nil)
+		}
 		return nil, false
+	}
+	if traceOn {
+		tracePresRecord(d, agentID, "Update", err == nil, next)
 	}
 	if err != nil {
 		// Published below while the record keeps the old labels: the next

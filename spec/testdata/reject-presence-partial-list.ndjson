@@ -1,0 +1,6 @@
+{"ev":"Connect","r":"b","ok":true,"lab":"host=h,","on":false}
+{"ev":"Publish","r":"b","ok":false,"lab":"","on":false}
+{"ev":"Deliver","r":"a","ok":false,"lab":"","on":false}
+{"ev":"Wake","r":"a","ok":false,"lab":"","on":false}
+{"ev":"Cursor","r":"a","ok":false,"lab":"","on":false}
+{"ev":"Snap","r":"a","ok":false,"lab":"","on":false}

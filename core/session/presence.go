@@ -49,6 +49,7 @@ type presenceFeed struct {
 	recent  []*presencev1.PresenceEvent // revisions rev-len(recent)+1 .. rev
 	changed chan struct{}
 	Fanout  func(ev *presencev1.PresenceEvent)
+	tr      tracePres // the trace's replica (trace_presence_on.go); no room without it
 }
 
 func (f *presenceFeed) initLocked() {
@@ -71,6 +72,9 @@ func (f *presenceFeed) resync() {
 	f.recent = nil
 	close(f.changed)
 	f.changed = make(chan struct{})
+	if traceOn {
+		tracePresResync(f)
+	}
 	f.Mu.Unlock()
 	presenceEvents.WithLabelValues("resync", "peer").Inc()
 }
@@ -83,6 +87,9 @@ func (f *presenceFeed) cursorLocked() string {
 func (f *presenceFeed) Cursor() string {
 	f.Mu.Lock()
 	defer f.Mu.Unlock()
+	if traceOn {
+		tracePresCursor(f)
+	}
 	return f.cursorLocked()
 }
 
@@ -135,6 +142,9 @@ func (f *presenceFeed) bump(ev *presencev1.PresenceEvent, origin string) {
 	f.recent = append(f.recent, ev)
 	close(f.changed)
 	f.changed = make(chan struct{})
+	if traceOn {
+		tracePresBump(f, ev, origin)
+	}
 	f.Mu.Unlock()
 	presenceEvents.WithLabelValues(presenceChangeName(ev), origin).Inc()
 }
@@ -187,6 +197,9 @@ func (f *presenceFeed) Watch(ctx context.Context, cursor string, maxWait time.Du
 	since, ok := f.parseCursorLocked(cursor)
 	if !ok {
 		defer f.Mu.Unlock()
+		if traceOn {
+			tracePresWake(f, nil, true)
+		}
 		return &presencev1.WatchResponse{Cursor: f.cursorLocked(), Reset_: true}
 	}
 	epoch := f.epoch
@@ -201,11 +214,17 @@ func (f *presenceFeed) Watch(ctx context.Context, cursor string, maxWait time.Du
 		f.Mu.Lock()
 		if f.epoch != epoch { // resync
 			defer f.Mu.Unlock()
+			if traceOn {
+				tracePresWake(f, nil, true)
+			}
 			return &presencev1.WatchResponse{Cursor: f.cursorLocked(), Reset_: true}
 		}
 		events, reset := f.sinceLocked(since, visible)
 		current, changed := f.cursorLocked(), f.changed
 		since = f.rev
+		if traceOn && (len(events) > 0 || reset) {
+			tracePresWake(f, events, reset)
+		}
 		f.Mu.Unlock()
 		if len(events) > 0 || reset || timeout == nil {
 			return &presencev1.WatchResponse{Cursor: current, Events: events, Reset_: reset}
@@ -269,6 +288,9 @@ func (d *Dispatcher) notifyUpstreamRegistered(agentID string) {
 			}
 			if caps != nil {
 				c = caps.Capabilities()
+			}
+			if traceOn {
+				tracePresRecord(d, agentID, "Connect", true, l)
 			}
 			d.Presence.up(agentID, l, c)
 		}
