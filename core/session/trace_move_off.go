@@ -10,9 +10,11 @@ package session
 
 type traceMove struct{}
 
-func traceMoveStep(_ *HTTPStream, _ moveEvent, change func() bool) bool { return change() }
-func traceForward(_ *HTTPStream, _ string, send func() error) error     { return send() }
-func traceAnswer(_ *HTTPStream, _ string, deliver func())               { deliver() }
-func traceMoveEOF(*HTTPStream)                                          {}
-func traceMoveEnd(*HTTPStream)                                          {}
-func (d *Dispatcher) traceRouteHere(string) (func(), bool)              { return nil, false }
+func traceMoveStep(_ *HTTPStream, _ moveEvent, change func() bool) bool    { return change() }
+func traceForward(_ *HTTPStream, _ string, send func() error) error        { return send() }
+func traceAnswer(_ *HTTPStream, _ string, deliver func())                  { deliver() }
+func traceMoveEOF(*HTTPStream)                                             {}
+func traceMoveEnd(*HTTPStream)                                             {}
+func traceTCPMoving(*Dispatcher, string, *tcpAgentStream, bool)            {}
+func traceTCPStep(_ *tcpAgentStream, _, _ string, change func() bool) bool { return change() }
+func (d *Dispatcher) traceRouteHere(string) (func(), bool)                 { return nil, false }

@@ -132,13 +132,19 @@ func (d *Dispatcher) sessionOf(agentID string) *HTTPStream {
 // traceRouteHere is RouteHere recording Pick (ok: the lease taken) and the
 // lease's end (Release: after its Publish, or Unlease without one).
 func (d *Dispatcher) traceRouteHere(agentID string) (func(), bool) {
+	return d.traceRoute(agentID, "Pick")
+}
+
+// traceRoute is traceRouteHere recording ev: Pick, or ArriveA for a
+// request a peer replica forwarded (tracehook.RoutePeer).
+func (d *Dispatcher) traceRoute(agentID, ev string) (func(), bool) {
 	traceMu.Lock()
 	defer traceMu.Unlock()
 	s := d.sessionOf(agentID)
 	_, routed := d.Agents.Load(agentID)
 	ok := routed && s.leases.take()
 	if t := moveTrace(s); t != nil {
-		t.log(moveEvent{Ev: "Pick", OK: ok})
+		t.log(moveEvent{Ev: ev, OK: ok})
 	}
 	if !ok {
 		return nil, false
@@ -171,6 +177,38 @@ func (d *Dispatcher) tracePublish(agentID, txn string, publish func() error) err
 	return err
 }
 
+// tcpMoving maps the agent's TCP primary here to its HTTP session that
+// moves (tcpMovingAway): the TCP steps of Move.tla go to that session's
+// trace. Under traceMu.
+var tcpMoving = map[*tcpAgentStream]*HTTPStream{}
+
+// traceTCPMoving: as is flagged moving away with agentID's HTTP session
+// here (on), or not.
+func traceTCPMoving(d *Dispatcher, agentID string, as *tcpAgentStream, on bool) {
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	if on {
+		tcpMoving[as] = d.sessionOf(agentID)
+	} else {
+		delete(tcpMoving, as)
+	}
+}
+
+// traceTCPStep runs change (it takes as.Mu, which orders both steps)
+// under traceMu, the lock order of traceFinish, and when it reports the
+// step taken records ev (TCPSupersede: as left the rotation, the agent
+// moved; PlaceTCP: session sid placed on as) in the trace of as's moving
+// HTTP session.
+func traceTCPStep(as *tcpAgentStream, ev, sid string, change func() bool) bool {
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	ok := change()
+	if t := moveTrace(tcpMoving[as]); ok && t != nil {
+		t.log(moveEvent{Ev: ev, R: sid, OK: true})
+	}
+	return ok
+}
+
 // traceMoveEOF: the agent closed the stream. After MOVE_DONE that is the
 // move's close (RecvA EOF); before it the agent left, which the model does
 // not have: the trace ends there.
@@ -197,6 +235,12 @@ func traceMoveEnd(s *HTTPStream) {
 }
 
 func init() {
+	tracehook.RoutePeer = func(d any, agentID string, route func(string) (func(), bool)) (func(), bool) {
+		if d, ok := d.(*Dispatcher); ok && d != nil {
+			return d.traceRoute(agentID, "ArriveA")
+		}
+		return route(agentID)
+	}
 	tracehook.Publish = func(d any, agentID, txn string, publish func() error) error {
 		if d, ok := d.(*Dispatcher); ok && d != nil {
 			return d.tracePublish(agentID, txn, publish)

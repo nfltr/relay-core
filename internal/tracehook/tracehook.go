@@ -10,3 +10,10 @@ package tracehook
 // (spec/Move.tla Publish), for the dispatcher d (a *session.Dispatcher);
 // core/session's move recorder sets it to record the step.
 var Publish = func(_ any, _, _ string, publish func() error) error { return publish() }
+
+// RoutePeer runs route (session.Dispatcher.RouteHere) for a request a peer
+// replica forwarded to agentID (spec/Move.tla ArriveA, not Pick), for the
+// dispatcher d; core/session's move recorder sets it to record the step.
+var RoutePeer = func(_ any, agentID string, route func(string) (func(), bool)) (func(), bool) {
+	return route(agentID)
+}

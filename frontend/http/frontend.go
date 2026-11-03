@@ -20,6 +20,7 @@ import (
 	"github.com/nfltr/relay-core/core/frontend"
 	"github.com/nfltr/relay-core/core/relaystatus"
 	"github.com/nfltr/relay-core/core/session"
+	"github.com/nfltr/relay-core/internal/tracehook"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc/codes"
@@ -105,7 +106,7 @@ func New(ctx context.Context, h frontend.Host) *Ingress {
 // run it after MOVE_DONE with its answer lost (spec/README.md finding 20,
 // Move.tla ArriveA).
 func (ing *Ingress) peer(w http.ResponseWriter, r *http.Request) {
-	release, ok := ing.core.Dispatcher.RouteHere(r.Header.Get(session.AgentIDKey))
+	release, ok := tracehook.RoutePeer(ing.core.Dispatcher, r.Header.Get(session.AgentIDKey), ing.core.Dispatcher.RouteHere)
 	if !ok {
 		w.Header().Set("Retry-After", "1")
 		relaystatus.WriteHTTP(w, http.StatusServiceUnavailable, codes.Unavailable, relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE, agentOfflineMessage)

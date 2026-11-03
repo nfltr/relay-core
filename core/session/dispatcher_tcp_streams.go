@@ -185,6 +185,13 @@ func (a *tcpAgentStream) enqueueUnless(f *pb.TCPData, stop <-chan struct{}) bool
 // addSession adds a session unless the stream takes no more (retired or
 // ended); the caller then picks another stream (TCPDispatcher.attach).
 func (a *tcpAgentStream) addSession(id string, s *tcpSession) bool {
+	if traceOn {
+		return traceTCPStep(a, "PlaceTCP", id, func() bool { return a.addSessionNow(id, s) })
+	}
+	return a.addSessionNow(id, s)
+}
+
+func (a *tcpAgentStream) addSessionNow(id string, s *tcpSession) bool {
 	a.Mu.Lock()
 	defer a.Mu.Unlock()
 	if a.ending {
@@ -604,9 +611,12 @@ func (d *TCPDispatcher) yield(agentID string, as *tcpAgentStream) bool {
 	d.Mu.Lock()
 	d.leaveRotationLocked(agentID, as)
 	d.Mu.Unlock()
-	as.Mu.Lock()
-	as.ending = true // a session placed meanwhile picks another stream (attach)
-	as.Mu.Unlock()
+	traceTCPStep(as, "TCPSupersede", "", func() bool {
+		as.Mu.Lock()
+		as.ending = true // a session placed meanwhile picks another stream (attach)
+		as.Mu.Unlock()
+		return true
+	})
 	return d.carries(agentID, as)
 }
 

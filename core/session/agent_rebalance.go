@@ -194,5 +194,8 @@ func (d *Dispatcher) tcpMovingAway(agentID string, on bool) {
 	t.Mu.RUnlock()
 	if as != nil {
 		as.movingAway.Store(on)
+		if traceOn {
+			traceTCPMoving(d, agentID, as, on)
+		}
 	}
 }

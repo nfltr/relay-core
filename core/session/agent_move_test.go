@@ -146,6 +146,13 @@ func TestAgentMovesBeforeTheReplicaLetsItGo(t *testing.T) {
 	if !ok {
 		t.Fatal("no route lease on a session that routes")
 	}
+	// A peer replica's forward (frontend/http peer) takes a lease too; its
+	// visitor goes away before the first chunk (Move.tla ArriveA, Unlease).
+	if peerRelease, ok := tracehook.RoutePeer(d, "agent-1", d.RouteHere); !ok {
+		t.Fatal("no route lease for a peer's forward on a session that routes")
+	} else {
+		peerRelease()
+	}
 	received := make(chan error, 1)
 	done := make(chan error, 1)
 	go func() { done <- d.WatchAgentSession(t.Context(), "agent-1", s, inv, received) }()
@@ -164,6 +171,9 @@ func TestAgentMovesBeforeTheReplicaLetsItGo(t *testing.T) {
 	waitMove(t, "routing stopped", func() bool { return !d.IsAgentConnected("agent-1") })
 	if _, ok := d.RouteHere("agent-1"); ok {
 		t.Fatal("a route lease on a session that no longer routes")
+	}
+	if _, ok := tracehook.RoutePeer(d, "agent-1", d.RouteHere); ok {
+		t.Fatal("a route lease for a peer's forward on a session that no longer routes")
 	}
 	time.Sleep(time.Second) // the old settle timer was 500 ms
 	if steps := sink.steps(); len(steps) != 1 {
@@ -319,6 +329,46 @@ func TestDrainBoundEndsOnceRoutingStopped(t *testing.T) {
 	waitMove(t, "MOVE_DONE", func() bool { return len(sink.steps()) == 2 && sink.steps()[1] == pb.Move_MOVE_DONE })
 	answer(t, d, s, "txn-slow")
 	received <- nil // the agent answered and closed the stream
+	if err := <-done; err != nil {
+		t.Fatalf("session ended with %v", err)
+	}
+}
+
+// TestMovedAgentsTCPStreamTakesNoNewSessions: an agent that moves keeps
+// its TCP primary here until its sessions end, but once the stream found
+// the move (its renewal superseded: yield) it leaves the rotation and takes
+// no new session; one placed before runs on (spec/README.md finding 22,
+// Move.tla PlaceTCP, TCPSupersede).
+func TestMovedAgentsTCPStreamTakesNoNewSessions(t *testing.T) {
+	d, s, sink, mc, inv, drain := movingSession(t)
+	td := NewTCPDispatcher(slog.New(slog.DiscardHandler), nil, nil)
+	d.TCPDispatcher = td
+	as := NewTCPAgentStream()
+	td.Mu.Lock()
+	td.Streams["agent-1"], td.All["agent-1"] = as, []*tcpAgentStream{as}
+	td.Mu.Unlock()
+	d.tcpMovingAway("agent-1", true)
+	if !as.addSession("t0", newTCPSession()) {
+		t.Fatal("no session placed on the agent's TCP stream before the move")
+	}
+	received := make(chan error, 1)
+	done := make(chan error, 1)
+	go func() { done <- d.WatchAgentSession(t.Context(), "agent-1", s, inv, received) }()
+	drain()
+	waitMove(t, "MOVE_RECONNECT", func() bool { return len(sink.steps()) == 1 })
+	mc.Mu.Lock()
+	mc.Data[directory.GetDispatcherCacheKey("agent-1")] = &directory.Value{PodIP: "10.0.0.2", Since: time.Now().UnixNano()}
+	mc.Mu.Unlock()
+	d.processHTTPInput(t.Context(), s, &pb.HTTPProxyResponse{Move: pb.Move_MOVE_CONNECTED}, time.Now()) //nolint:errcheck
+	waitMove(t, "routing stopped", func() bool { return !d.IsAgentConnected("agent-1") })
+	if !td.yield("agent-1", as) { // its renewal found the agent's new record
+		t.Fatal("the moved stream's open session was not kept")
+	}
+	if as.addSession("t1", newTCPSession()) || td.agentStream("agent-1") != nil {
+		t.Fatal("a new TCP session placed on the moved agent's old stream")
+	}
+	waitMove(t, "MOVE_DONE", func() bool { return len(sink.steps()) == 2 && sink.steps()[1] == pb.Move_MOVE_DONE })
+	received <- nil // the agent closed the stream
 	if err := <-done; err != nil {
 		t.Fatalf("session ended with %v", err)
 	}
