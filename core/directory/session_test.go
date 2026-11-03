@@ -42,6 +42,13 @@ func TestPutSessionRenewOrdersBySeqNotClock(t *testing.T) {
 			&Value{PodIP: "10.0.0.2", Since: t0.Add(-time.Minute).UnixNano(), Credential: "o"}, nil},
 		{"a session without seq orders by its clock", Session{Since: t0, Credential: "o"},
 			&Value{PodIP: "10.0.0.2", Since: t0.Add(-time.Minute).UnixNano(), Seq: 9, Credential: "o"}, nil},
+		// Finding R7 (relay-server spec/README.md, Replicas.tla seq-tie): a
+		// store that restarted empty gave a new claim the Seq of a session
+		// still live elsewhere; the later start wins, or neither yields.
+		{"equal Seqs after a store loss: the later session holds", Session{Since: t0, Seq: 1, Credential: "o"},
+			&Value{PodIP: "10.0.0.2", Since: t0.Add(time.Second).UnixNano(), Seq: 1, Credential: "o"}, ErrSuperseded},
+		{"equal Seqs after a store loss: the earlier session yields", Session{Since: t0, Seq: 1, Credential: "o"},
+			&Value{PodIP: "10.0.0.2", Since: t0.Add(-time.Second).UnixNano(), Seq: 1, Credential: "o"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := newMockCache()

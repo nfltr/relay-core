@@ -32,6 +32,9 @@ import (
 // noticed) takes the record back and the new session yields at its next
 // renewal; the agent then reconnects and its next claim, above the stale
 // record's Seq, wins.
+// One that takes the same Seq as the stale session's is ordered by their
+// start times, so one of them yields (relay-server spec/README.md finding
+// R7).
 
 // ErrSuperseded is returned by a renewal when a newer session of the agent
 // on another pod holds its record, or held it and has ended.
@@ -199,9 +202,11 @@ func (d *ipInventory) nextSeq(ctx context.Context, agentID string) (int64, error
 }
 
 // newer reports whether a is a later session of the agent than b: by their
-// Seqs when both have one, else by their start times.
+// Seqs when both have one, an equal Seq (a store that restarted empty gave
+// it twice: relay-server spec/README.md finding R7) or none by their start
+// times.
 func (a Session) newer(b Session) bool {
-	if a.Seq != 0 && b.Seq != 0 {
+	if a.Seq != 0 && b.Seq != 0 && a.Seq != b.Seq {
 		return a.Seq > b.Seq
 	}
 	return a.Since.After(b.Since)

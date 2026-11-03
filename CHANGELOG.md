@@ -86,6 +86,13 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- Two sessions of an agent with the same Seq (a store that restarted
+  empty gave a new claim the Seq of a session still live elsewhere) are
+  ordered by their start times, so one yields; before, neither did and
+  each renewal took the record back from the other until one stream ended
+  (relay-server `spec/README.md` finding R7, `Replicas.tla` mutant
+  `seq-tie`).
+
 - An agent's dispatcher record (`ConnectHTTP`, `ConnectAgentTunnel`) and
   streamer record (`ConnectTCP`) take their session Seq from counters of
   their own (`nfltr:agent-session-seq:<record key>`). With one counter per
