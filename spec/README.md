@@ -1123,3 +1123,13 @@ relay link connection never outlives every primary holding its token.
     has no finding 13 check). Fixed: the counter is the record's own
     (`seqKey` of the record key). Guard:
     `TestRenewalAfterTheOtherRecordsClaimWritesItBack`.
+35. **A repeated half close started an ack goroutine each** (code, lane
+    ENDACKRC's low, lane W5-RCORE; not in the model: its agent half-closes
+    a session once, so TLA+ has no state to add). With the end
+    acknowledgement the relay acks the agent's half close from a goroutine
+    (a receive loop never waits for its outbox); an agent that repeated
+    the frame while it kept its stream open but stopped reading left one
+    goroutine per repeat waiting until the stream ended. Severity: low
+    (bounded by the stream's life; an agent can only hurt its own
+    stream). Fixed: only the first half close of a session is acked.
+    Guard: `TestTCPTunnelEndAckRepeatedHalfCloseAcksOnce`.

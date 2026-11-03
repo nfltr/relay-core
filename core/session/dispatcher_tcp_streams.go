@@ -256,7 +256,10 @@ func (a *tcpAgentStream) Dispatch(frame *pb.TCPData, stall time.Duration) bool {
 	}
 	if frame.GetClose() {
 		if frame.GetHalf() {
-			if a.endAck && !sess.isClosed() { // its queue took every byte before (FIFO)
+			// Its queue took every byte before (FIFO). Acked once: a
+			// repeat started another goroutine waiting for an outbox the
+			// agent may never drain (TestTCPTunnelEndAckRepeatedHalfCloseAcksOnce).
+			if a.endAck && !sess.isClosed() && !sess.peerHalf.Load() {
 				go a.enqueue(dataplane.EndAckFrame(id)) // a receive loop never waits for its outbox
 			}
 			if !a.peerClosedWrite(sess) {

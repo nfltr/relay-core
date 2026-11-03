@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
@@ -263,4 +264,22 @@ func TestTCPTunnelEndAckAgentAbortResetsClient(t *testing.T) {
 			t.Fatalf("the client's read: %v, want EOF", err)
 		}
 	})
+}
+
+// TestTCPTunnelEndAckRepeatedHalfCloseAcksOnce: an agent that repeats a
+// session's half close while it keeps its stream open but stops reading
+// gets one ack: before, each repeat started a goroutine waiting for the
+// outbox until the stream ended (lane ENDACKRC, low).
+func TestTCPTunnelEndAckRepeatedHalfCloseAcksOnce(t *testing.T) {
+	a := NewTCPAgentStream()
+	a.endAck = true
+	inProcSession(t, a)
+	t.Cleanup(a.CloseAll)
+	before := runtime.NumGoroutine()
+	for range 1000 {
+		a.Dispatch(&pb.TCPData{SessionId: "s", Close: true, Half: true}, 0)
+	}
+	if n := runtime.NumGoroutine() - before; n > 10 {
+		t.Fatalf("%d goroutines after 1000 repeated half closes, want at most one ack's", n)
+	}
 }
