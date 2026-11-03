@@ -400,7 +400,7 @@ func (d *TCPDispatcher) resumeToken(agentID, token string) string {
 // are too (no session opens on them any more; the agent reconnects).
 // Until the agent's new primary registers, an open gets the typed offline
 // refusal, not a session on a dead leg. A QUIC link's silence only
-// unbinds it (quicPeer; spec/README.md findings 17, 26).
+// unbinds it (quicPeer; spec/README.md findings 17, 33).
 func (l *agentLink) silent(token string) {
 	const transport = dataplane.AgentLinkTCP
 	l.d.Mu.RLock()

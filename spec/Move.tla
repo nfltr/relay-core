@@ -135,7 +135,7 @@ ServeB(r) ==
 
 \* startMove: MOVE_RECONNECT; A stops renewing the record.
 \* After a rebalancing move gave up, a drain asks again (its stopNow:
-\* startMove with the move given up; finding 26).
+\* startMove with the move given up; finding 32).
 Ask ==
     /\ \/ rel = "routing"
        \/ rel = "gaveUp" /\ drn

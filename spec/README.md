@@ -245,7 +245,7 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
 | `Dial`, `Bind` | the agent's `lazyLink.open`/`run` on `AgentLinkDial`; `agentLink.verify`+`bind` |
 | `AgentEnd(g)` | the agent's primary's context ends: `lazyLink.end` (park) |
 | `PrimEnd(g)` | `unregister` -> `primaryEnded` (closes the token's connections unless resumed), `CloseAll` |
-| `LinkDrop(t)` | a link connection closes (park TTL, agent stop, network); the agent's up link redials it (its peerlink Node, `linkBackoff`: finding 24) |
+| `LinkDrop(t)` | a link connection closes (park TTL, agent stop, network); the agent's up link redials it (its peerlink Node, `linkBackoff`: finding 30) |
 | `Silent(t, tr)` | a link connection dead past its liveness: link/TCP `agentLinkObserver.ConnDown` -> `agentLink.silent` (ends the primary bound to the token); QUIC's idle timeout (`quicPeer`): `unbind` only |
 | `PathDown` | the agent's TCP path dies (the frame streams' heartbeats, `WatchAgentSession`, take over once no link vouches) |
 | `Arrive(s)`, `Place(s)`, `Wake(s)` | `handleLocalConn` -> `agentLink.open` (link, or wait `agentLinkDialWait` for a requested dial; `node.Open` failing falls back), else `attach` |
@@ -462,14 +462,16 @@ write that failed, or a record the store lost, once a later renewal
 lands; a release that failed, again once its record's TTL passed); a
 renewal finding no record while the agent's Seq counter is past its
 session's is superseded (it does not write back a record a newer session
-left); a list whose directory read fails answers Unavailable, not the
+left), and that counter is the record's own, so only a newer session of
+this record moves it (finding 34: `SupersededByNewer`); a list whose directory read fails answers Unavailable, not the
 local agents only, on either list (presence `ListAgents` and
 `/api/v1/my/agents`); a publish that fails stays pending and is sent
 again (`PublishFail` is a stutter in the design); the bus never drops a
 payload it could not hand over without a resync. Witnesses, each violated, so `NoSilentStale` is not vacuous:
 `WitnessStale` (a watcher's snapshot stale, owed a wake),
 `WitnessRemoteUpdate` (a label update made on the other replica reaches
-the watcher's snapshot). `PresenceLive.cfg` (`make spec-liveness`, 57 s) checks `Woken`
+the watcher's snapshot); `WitnessSuperseded` (a stream superseded, so
+`SupersededByNewer` is not vacuous). `PresenceLive.cfg` (`make spec-liveness`, 57 s) checks `Woken`
 under weak fairness on the feed's steps (`Publish`, `Deliver`,
 `Resubscribe`, `Wake`, `Cursor`, `Snap`): a stale watcher is woken, or
 the listing comes back to its snapshot. Mutants (`make spec-mutants`),
@@ -478,7 +480,8 @@ each caught: `unfenced-label-write` (finding 8), `partial-list` (9),
 `renew-resurrects` (13), `publish-drop` (25), `publish-before-write`,
 `resync-early` (the resync before the subscription is back),
 `resync-ignored` (the feed ignoring the bus's resync signal: the bug
-a0154c2 fixed), `silent-rewrite`, `no-late-down` (27);
+a0154c2 fixed), `silent-rewrite`, `no-late-down` (27),
+`shared-counter` (34);
 on `PresenceLive.cfg` (`Woken`): `subscriber-stops` and `outbox-stops`
 (the subscriber or the outbox gone while the replica drains and serves:
 the safety config cannot see them, finding 26) and `publish-drop`;
@@ -499,6 +502,7 @@ every action but those only a mutant or a larger config enables
 | A directory write may fail (`MaxFail`); the store may lose a live session's record; relay-server's epoch tick (every 5 s) then has every session here rewrite its record (`Lose` sets `stale` at once: the 5 s gap is unmodelled) | relay-server `inventory_epoch.go`, `Replicas.tla` |
 | A record expires at its TTL after its last write: a timer one TTL after a failed release fires after it (`LateDown` waits for `Expire`) | Redis `EXPIRE`; `departed` |
 | The newest session (by Seq) holds the record; an older one is superseded at its next renewal | `Move.tla`, relay-server `Replicas.tla` |
+| The Seq counter is the record's own: the dispatcher record (`ConnectAgentTunnel`, `ConnectHTTP`) and the streamer record (`ConnectTCP`) count apart (finding 34) | `core/directory/session.go` `seqKey` |
 | A replica crash takes its streams with no teardown; a graceful stop runs the teardowns with the outbox and the subscriber still bound (until the composition's `After`, finding 26), so it is a sequence of `End`s | `CrashR`; compose `Composition.Run`, relay-server `Composition` |
 | A crashed replica's marker expires within 30 s (`inventoryEpochTTL`); its records within their TTL of its last renewal, so a resync one TTL after another replica sees the marker gone follows them (`Sweep` waits for `Expire`); a replica starting resyncs once a TTL after its first look | relay-server `inventory_epoch.go` |
 | The watcher's cursor, its long-poll and its re-list reach one replica (another one answers reset: a re-list, safe since the write precedes the publish) | presence.proto; review F10 |
@@ -644,8 +648,8 @@ rebalancing move gave up, a drain's `stopNow` asks the agent again
 | `AgentLink.cfg` (CI) | invariants, 1 session, window 2, 2 bytes, 1 a frame, in-process relay end, `EndAck` (2026-11-02, after findings 1-2) | 2,905,774 (601,711) | | 28 s |
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
-| `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 24) | 205,995 (47,884) | | 2-4 s |
-| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain (findings 25, 26) | 69,096 (16,515) | | 3 s |
+| `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 205,995 (47,884) | | 2-4 s |
+| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain (findings 31, 32) | 69,096 (16,515) | | 3 s |
 | `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription, 1 failed write | 604,624 (100,778) | | 15 s at load 14 (2026-11-03; 4 s before failed writes) |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
@@ -974,7 +978,7 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     mutants `no-sync` (the code before) and `no-hold`; guard link
     `TestJoinCleanEndOnlyOnceThePeerReadTheFIN`. In effect here once
     relay-core and relay's client require that link version (promote-chain).
-24. **The agent's link redials a dropped connection itself** (spec
+30. **The agent's link redials a dropped connection itself** (spec
     weaker than the code; low; found by a trace,
     `TestAgentLinkUpForThePrimarysLife`). The model had a dropped link
     connection end the agent's lazy link (`DropBody`), so a `Bind` needed
@@ -983,7 +987,7 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     binds it with no request out. **Fixed in the spec**: `LinkDrop` may
     leave the lazy link dialling again (`DropAs`); every invariant,
     mutant and witness holds as before.
-25. **Move.tla had no lease ending without a publish** (spec weaker
+31. **Move.tla had no lease ending without a publish** (spec weaker
     than the code; medium for the model's liveness; found by the move
     traces). A route lease also ends when the visitor goes away before
     the first message, or when the request takes the agent link
@@ -991,14 +995,14 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     forever while the code sends it. **Fixed in the spec**: `Unlease`
     (the request ends `gone`, reaching no agent here); `AllAnswered`
     counts `gone` as done.
-26. **Move.tla had no second ask after a rebalancing move gave up**
+32. **Move.tla had no second ask after a rebalancing move gave up**
     (spec missing a code path; low; found by reading the trace
     recorder's gaps). A drain starting after `giveUp` arms `stopNow` with
     no move, and `startMove` asks the agent again; the model allowed
     `Ask` only from `routing`. **Fixed in the spec**: `Ask` from `gaveUp`
     while draining; every invariant, mutant and witness holds. No test
     takes the path yet.
-27. **A test ended a primary for a QUIC link's silence** (test; low;
+33. **A test ended a primary for a QUIC link's silence** (test; low;
     found by a Handoff trace, `TestAgentLinkSilentEndsPrimary/quic`
     rejected: `SilenceOnDeadPath`). Production calls `agentLink.silent`
     only from link/TCP's observer, but `silent` took a transport and the
@@ -1103,3 +1107,19 @@ relay link connection never outlives every primary holding its token.
     another session of the agent is listed here. Guard:
     `TestPresenceHTTPAndTCPAgentsPublish`. Open: an HTTP agent whose
     release failed publishes no second down.
+34. **A live session was superseded by its own agent's other record**
+    (code, found by relay-server's `TestAgentLinkSurvivesReconnect`
+    failing 3-5 in 10 against relay-core main, lane RSFOLLOW; model
+    `shared-counter`, invariant `SupersededByNewer`). An agent's
+    `ConnectHTTP` or `ConnectAgentTunnel` session writes the dispatcher
+    record and its `ConnectTCP` session the streamer record, but both took
+    their Seq from one counter per agent. Finding 13's check (no record
+    and the counter past this session's Seq: superseded) then read the
+    other record's claim as a newer session: once the HTTP session's
+    record lapsed (a renewal later than the TTL, the store losing it), its
+    next renewal ended the agent's live session instead of writing the
+    record back, and opens were refused offline until the agent
+    reconnected. Severity: high on relay-core main (unreleased; v0.7.2
+    has no finding 13 check). Fixed: the counter is the record's own
+    (`seqKey` of the record key). Guard:
+    `TestRenewalAfterTheOtherRecordsClaimWritesItBack`.

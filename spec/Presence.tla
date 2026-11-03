@@ -31,7 +31,8 @@ None == [on |-> FALSE, lab |-> "-"]
 VARIABLES
     live,   \* replica -> up
     st,     \* replica -> the agent's stream there: [on, seq, lab]
-    seqs,   \* sessions opened (the store's Seq counter)
+    seqs,   \* the store's Seq counter of the agent's record
+    top,    \* the newest session claimed on the record (finding 34)
     upds,   \* label updates sent
     rec,    \* the directory record: [on, pod, seq, lab]; seq 0: written without a session
     rd,     \* replica -> labels a renewal read, not yet written ("-": none)
@@ -52,7 +53,7 @@ VARIABLES
     gone    \* the replicas whose feed resyncs once a crashed replica's
             \* records expired (finding 12)
 
-vars == <<live, st, seqs, upds, rec, rd, pw, pub, due, bus, sub, rs, wpc, view, stale, late, fails, gone>>
+vars == <<live, st, seqs, top, upds, rec, rd, pw, pub, due, bus, sub, rs, wpc, view, stale, late, fails, gone>>
 recv == <<rd, pw, stale, late, fails, gone>>
 feedv == <<due, bus, sub, rs>>
 watchv == <<wpc, view>>
@@ -66,7 +67,7 @@ Listing(r) == IF st[r].on THEN Local(r)
 Init ==
     /\ live = [r \in R |-> TRUE]
     /\ st = [r \in R |-> [on |-> FALSE, seq |-> 0, lab |-> "-"]]
-    /\ seqs = 0 /\ upds = 0
+    /\ seqs = 0 /\ top = 0 /\ upds = 0
     /\ rec = [on |-> FALSE, pod |-> "-", seq |-> 0, lab |-> "-"]
     /\ rd = [r \in R |-> "-"] /\ pw = [r \in R |-> "-"]
     /\ pub = [r \in R |-> FALSE]
@@ -88,7 +89,7 @@ Publish(r) ==
     /\ pub' = [pub EXCEPT ![r] = FALSE]
     /\ due' = [due EXCEPT ![r] = TRUE]
     /\ bus' = [q \in R |-> IF q # r /\ live[q] /\ sub[q] = "up" THEN bus[q] + 1 ELSE bus[q]]
-    /\ UNCHANGED <<live, st, seqs, upds, rec, recv, sub, rs, watchv>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, recv, sub, rs, watchv>>
 
 \* PUBLISH fails on the publisher only (a timeout under load, its own
 \* connection reset or partitioned while the peers keep theirs): no peer
@@ -101,13 +102,13 @@ PublishFail(r) ==
     /\ Mutant = "publish-drop" /\ pub[r] /\ live[r]
     /\ pub' = [pub EXCEPT ![r] = FALSE]
     /\ due' = [due EXCEPT ![r] = TRUE]
-    /\ UNCHANGED <<live, st, seqs, upds, rec, recv, bus, sub, rs, watchv>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, recv, bus, sub, rs, watchv>>
 
 \* a peer's change: appended under a local revision (BindBus).
 Deliver(q) ==
     /\ bus[q] > 0 /\ live[q] /\ Mutant # "subscriber-stops"
     /\ bus' = [bus EXCEPT ![q] = @ - 1] /\ due' = [due EXCEPT ![q] = TRUE]
-    /\ UNCHANGED <<live, st, seqs, upds, rec, recv, pub, sub, rs, watchv>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, recv, pub, sub, rs, watchv>>
 
 \* Redis drops a subscriber's messages with its subscription (a slow
 \* subscriber's output buffer, a restart): all in flight are lost. The
@@ -119,7 +120,7 @@ Drop(q) ==
        THEN /\ bus[q] > 0 /\ bus' = [bus EXCEPT ![q] = @ - 1] /\ UNCHANGED sub
        ELSE /\ bus' = [bus EXCEPT ![q] = 0] /\ sub' = [sub EXCEPT ![q] = "broken"]
     /\ rs' = rs + 1
-    /\ UNCHANGED <<live, st, seqs, upds, rec, recv, pub, due, watchv>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, recv, pub, due, watchv>>
 
 \* The resubscription: the subscribe confirmation is the resync (an empty
 \* payload, redisbus Resync), in order before any later message: a new
@@ -135,7 +136,7 @@ Resubscribe(q) ==
           /\ sub' = [sub EXCEPT ![q] = "signalled"] /\ due' = [due EXCEPT ![q] = TRUE]
        \/ /\ sub[q] = "signalled"
           /\ sub' = [sub EXCEPT ![q] = "up"] /\ UNCHANGED due
-    /\ UNCHANGED <<live, st, seqs, upds, rec, recv, pub, bus, rs, watchv>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, recv, pub, bus, rs, watchv>>
 
 (* ---------------- the agent's sessions ----------------------------------- *)
 
@@ -143,11 +144,20 @@ Resubscribe(q) ==
 \* session holds the record), then the stream is listed and up published.
 Connect(r) ==
     /\ live[r] /\ ~st[r].on /\ seqs < MaxSeq
-    /\ seqs' = seqs + 1
+    /\ seqs' = seqs + 1 /\ top' = seqs + 1
     /\ st' = [st EXCEPT ![r] = [on |-> TRUE, seq |-> seqs + 1, lab |-> "l0"]]
     /\ rec' = [on |-> TRUE, pod |-> r, seq |-> seqs + 1, lab |-> "l0"]
     /\ pub' = [pub EXCEPT ![r] = TRUE]
     /\ UNCHANGED <<live, upds, recv, feedv, watchv>>
+
+\* Mutant shared-counter (finding 34, the code before): a claim of the
+\* agent's other record (its ConnectTCP stream's streamer record beside
+\* the AgentTunnel's or Subscribe's dispatcher record) took the next Seq
+\* from the same counter. The design: a counter per record.
+OtherClaim ==
+    /\ Mutant = "shared-counter" /\ seqs < MaxSeq
+    /\ seqs' = seqs + 1
+    /\ UNCHANGED <<live, st, top, upds, rec, recv, pub, feedv, watchv>>
 
 \* The stream on r ends (closed, reaped, or its renewal found a newer
 \* session): releaseAgentRecord removes the record only when it names this
@@ -160,7 +170,7 @@ End(r) ==
        /\ rd' = [rd EXCEPT ![r] = "-"] /\ pw' = [pw EXCEPT ![r] = "-"]
        /\ pub' = [pub EXCEPT ![r] = TRUE]
        /\ stale' = [stale EXCEPT ![r] = FALSE]
-       /\ UNCHANGED <<live, seqs, upds, late, fails, feedv, watchv, gone>>
+       /\ UNCHANGED <<live, seqs, top, upds, late, fails, feedv, watchv, gone>>
 
 \* The release fails (finding 27): the record stays, naming an ended
 \* session, until its TTL; every replica lists the agent meanwhile. The
@@ -175,7 +185,7 @@ EndFail(r) ==
     /\ pub' = [pub EXCEPT ![r] = TRUE]
     /\ stale' = [stale EXCEPT ![r] = FALSE]
     /\ late' = [late EXCEPT ![r] = Mutant # "no-late-down"]
-    /\ UNCHANGED <<live, seqs, upds, rec, feedv, watchv, gone>>
+    /\ UNCHANGED <<live, seqs, top, upds, rec, feedv, watchv, gone>>
 
 \* A record naming no stream of a live replica (a failed release's) is
 \* gone once its TTL passed.
@@ -184,7 +194,7 @@ Leftover == rec.on /\ rec.pod \in R /\ (~st[rec.pod].on \/ st[rec.pod].seq # rec
 LateDown(r) ==
     /\ late[r] /\ live[r] /\ ~(Leftover /\ rec.pod = r)
     /\ late' = [late EXCEPT ![r] = FALSE] /\ pub' = [pub EXCEPT ![r] = TRUE]
-    /\ UNCHANGED <<live, st, seqs, upds, rec, rd, pw, stale, fails, feedv, watchv, gone>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, rd, pw, stale, fails, feedv, watchv, gone>>
 
 \* The store loses a live session's record (Redis restarted empty, or the
 \* renewals failed past its TTL): the replica's epoch tick (5 s) sees the
@@ -196,7 +206,7 @@ Lose ==
        /\ fails' = fails + 1
        /\ rec' = [on |-> FALSE, pod |-> "-", seq |-> 0, lab |-> "-"]
        /\ stale' = [stale EXCEPT ![p] = TRUE]
-       /\ UNCHANGED <<live, st, seqs, upds, rd, pw, late, pub, feedv, watchv, gone>>
+       /\ UNCHANGED <<live, st, seqs, top, upds, rd, pw, late, pub, feedv, watchv, gone>>
 
 \* renewAgentRecord's check: a newer session on another pod holds the
 \* record, or (the design) no record is there and the store's Seq counter
@@ -222,14 +232,14 @@ Renew(r) ==
             /\ stale' = [stale EXCEPT ![r] = FALSE]
             /\ pub' = [pub EXCEPT ![r] = pub[r] \/ (stale[r] /\ Mutant # "silent-rewrite")]
             /\ UNCHANGED rd
-    /\ UNCHANGED <<live, st, seqs, upds, pw, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, pw, late, fails, feedv, watchv, gone>>
 
 RenewWrite(r) ==
     /\ live[r] /\ st[r].on /\ rd[r] # "-"
     /\ rd' = [rd EXCEPT ![r] = "-"]
     /\ rec' = IF Superseded(r) THEN rec
               ELSE [on |-> TRUE, pod |-> r, seq |-> st[r].seq, lab |-> rd[r]]
-    /\ UNCHANGED <<live, st, seqs, upds, pw, pub, stale, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, pw, pub, stale, late, fails, feedv, watchv, gone>>
 
 \* The renewal finding a newer session elsewhere ends the stream (End).
 Supersede(r) == live[r] /\ st[r].on /\ Superseded(r) /\ End(r)
@@ -255,7 +265,7 @@ Update(r, l) ==
               /\ rec' = [on |-> TRUE, pod |-> r, seq |-> st[r].seq, lab |-> l]
               /\ st' = [st EXCEPT ![r].lab = l] /\ pub' = [pub EXCEPT ![r] = TRUE]
               /\ UNCHANGED pw
-    /\ UNCHANGED <<live, seqs, rd, stale, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED <<live, seqs, top, rd, stale, late, fails, feedv, watchv, gone>>
 
 \* The update's write fails (finding 27): the stream's labels change and
 \* are published (this replica lists them), the record keeps the old ones
@@ -265,13 +275,13 @@ UpdateFail(r, l) ==
     /\ upds' = upds + 1 /\ fails' = fails + 1
     /\ st' = [st EXCEPT ![r].lab = l] /\ pub' = [pub EXCEPT ![r] = TRUE]
     /\ stale' = [stale EXCEPT ![r] = TRUE]
-    /\ UNCHANGED <<live, seqs, rec, rd, pw, late, feedv, watchv, gone>>
+    /\ UNCHANGED <<live, seqs, top, rec, rd, pw, late, feedv, watchv, gone>>
 
 UpdateWrite(r) ==
     /\ live[r] /\ pw[r] # "-" /\ ~pub[r]
     /\ pw' = [pw EXCEPT ![r] = "-"]
     /\ rec' = [on |-> TRUE, pod |-> r, seq |-> st[r].seq, lab |-> pw[r]]
-    /\ UNCHANGED <<live, st, seqs, upds, rd, pub, stale, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rd, pub, stale, late, fails, feedv, watchv, gone>>
 
 \* A replica crashes: its streams vanish with no release and no down; its
 \* records expire at their TTL (Expire), publishing nothing (finding 12).
@@ -285,19 +295,19 @@ CrashR(r) ==
     /\ pub' = [pub EXCEPT ![r] = FALSE] /\ rd' = [rd EXCEPT ![r] = "-"] /\ pw' = [pw EXCEPT ![r] = "-"]
     /\ stale' = [stale EXCEPT ![r] = FALSE] /\ late' = [late EXCEPT ![r] = FALSE]
     /\ gone' = IF Mutant = "no-crash-resync" THEN gone ELSE gone \cup (R \ {r})
-    /\ UNCHANGED <<seqs, upds, rec, fails, feedv, watchv>>
+    /\ UNCHANGED <<seqs, top, upds, rec, fails, feedv, watchv>>
 
 \* A replica's resync a record TTL after it saw a crashed replica's marker
 \* expire: a new feed epoch, every cursor answers reset.
 Sweep(q) ==
     /\ q \in gone /\ live[q] /\ ~(rec.on /\ rec.pod \in R /\ ~live[rec.pod])
     /\ gone' = gone \ {q} /\ due' = [due EXCEPT ![q] = TRUE]
-    /\ UNCHANGED <<live, st, seqs, upds, rec, rd, pw, pub, stale, late, fails, bus, sub, rs, watchv>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, rd, pw, pub, stale, late, fails, bus, sub, rs, watchv>>
 
 Expire ==
     /\ rec.on /\ rec.pod \in R /\ (~live[rec.pod] \/ Leftover)
     /\ rec' = [on |-> FALSE, pod |-> "-", seq |-> 0, lab |-> "-"]
-    /\ UNCHANGED <<live, st, seqs, upds, recv, pub, feedv, watchv>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, recv, pub, feedv, watchv>>
 
 (* ---------------- the watcher (presenceclient.Wait + ListAgents) --------- *)
 
@@ -307,7 +317,7 @@ Due(r) == due[r]
 Wake(r) ==
     /\ live[r] /\ wpc[r] = "idle" /\ Due(r)
     /\ wpc' = [wpc EXCEPT ![r] = "cursor"]
-    /\ UNCHANGED <<live, st, seqs, upds, rec, recv, pub, feedv, view>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, recv, pub, feedv, view>>
 
 \* The re-list: the cursor first, then the snapshot. A watcher re-lists
 \* through presence ListAgents or through /api/v1/my/agents (the nfltr
@@ -320,14 +330,14 @@ Cursor(r) ==
     /\ live[r] /\ wpc[r] = "cursor"
     /\ due' = [due EXCEPT ![r] = FALSE]
     /\ wpc' = [wpc EXCEPT ![r] = "snap"]
-    /\ UNCHANGED <<live, st, seqs, upds, rec, recv, pub, bus, sub, rs, view>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, recv, pub, bus, sub, rs, view>>
 
 Snap(r) ==
     /\ live[r] /\ wpc[r] = "snap"
     /\ \/ view' = [view EXCEPT ![r] = Listing(r)]
        \/ Mutant \in {"partial-list", "partial-my-agents"} /\ view' = [view EXCEPT ![r] = Local(r)]
     /\ wpc' = [wpc EXCEPT ![r] = "idle"]
-    /\ UNCHANGED <<live, st, seqs, upds, rec, recv, pub, feedv>>
+    /\ UNCHANGED <<live, st, seqs, top, upds, rec, recv, pub, feedv>>
 
 Next ==
     \/ \E r \in R : \/ Publish(r) \/ PublishFail(r) \/ Deliver(r)
@@ -336,7 +346,7 @@ Next ==
                     \/ Supersede(r) \/ UpdateWrite(r) \/ CrashR(r)
                     \/ Update(r, "l1")
     \/ \E r \in W : Wake(r) \/ Cursor(r) \/ Snap(r)
-    \/ Expire \/ Lose
+    \/ Expire \/ Lose \/ OtherClaim
 
 Spec == Init /\ [][Next]_vars
 
@@ -378,6 +388,13 @@ NoSilentStale == \A r \in W : Stale(r) => Owed(r)
 \* wake), and a label update made on the other replica in its snapshot.
 WitnessStale == \A r \in W : ~Stale(r)
 WitnessRemoteUpdate == ~\E r \in W : ~st[r].on /\ view[r].on /\ view[r].lab = "l1"
+
+\* A stream is superseded only by a newer session of its record (finding
+\* 30): a renewal that finds the record lost or expired while its own
+\* session is still the newest writes it back. Witness: a stream
+\* superseded (finding 13: by a newer session that has ended).
+SupersededByNewer == \A r \in R : st[r].on /\ Superseded(r) => top > st[r].seq
+WitnessSuperseded == ~\E r \in R : st[r].on /\ Superseded(r)
 
 \* The wake is paid (PresenceLive.cfg): a stale watcher is woken, or the
 \* listing comes back to its snapshot (or its replica is gone: its client
