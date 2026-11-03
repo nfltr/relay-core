@@ -304,14 +304,14 @@ model (tokens are secrets; defence in depth); its guard is
 
 ### Code map (drift check)
 
-| file | what the spec models |
+| what the spec models | file |
 |---|---|
-| `core/session/agent_link.go` | `resumeToken`, `verify`, `bind`, `unbind`, `silent`, `quicPeer`, `agentLinkObserver`, `open` (the link-session count), `primaryEnded`, `dialNow` |
-| `core/session/dispatcher_tcp_streams.go` | `RegisterStream`, `unregister`, `leaveRotationLocked`, `carriesSessions`, `carries`, `yield`, `sendLoop`'s silent and supersede cases |
-| `core/session/dispatcher_tcp.go` | `handleLocalConn`, `onwardLocal`, `attach` |
-| `core/session/trace_handoff_on.go`, `trace_off.go` | the Handoff trace recorder (`TraceHandoff.tla`) |
-| `core/session/agent_rebalance.go` | `moveAgent`'s `carriesSessions` check |
-| relay `client/agent/agent_link.go`, `tcp.go` | `lazyLink` (`open`, `end`, `adopt`, `drainNow`), `linkPark`, the resume header |
+| `resumeToken`, `verify`, `bind`, `unbind`, `silent`, `quicPeer`, `agentLinkObserver`, `open` (the link-session count), `primaryEnded`, `dialNow` | `core/session/agent_link.go` |
+| `RegisterStream`, `unregister`, `leaveRotationLocked`, `carriesSessions`, `carries`, `yield`, `sendLoop`'s silent and supersede cases | `core/session/dispatcher_tcp_streams.go` |
+| `handleLocalConn`, `onwardLocal`, `attach` | `core/session/dispatcher_tcp.go` |
+| the Handoff trace recorder (`TraceHandoff.tla`) | `core/session/trace_handoff_on.go`, `trace_off.go` |
+| `moveAgent`'s `carriesSessions` check | `core/session/agent_rebalance.go` |
+| `lazyLink` (`open`, `end`, `adopt`, `drainNow`), `linkPark`, the resume header | relay `client/agent/agent_link.go`, `tcp.go` |
 
 ## Move.tla: moving an agent's HTTP session to another replica
 
@@ -404,16 +404,16 @@ with it. The agent's next connection is a new session, outside the model.
 
 ### Code map (drift check)
 
-| file | what the spec models |
+| what the spec models | file |
 |---|---|
-| `core/session/agent_move.go` | `routeLeases`, `RouteHere`, `startMove`, `recordMoved`, `stopRouting`, `resumeMove` |
-| `core/session/dispatcher_session_watch.go` | `WatchAgentSession`: `stopping`, `stopNow`, `ask`, `giveUp`, `moved`, `check`, `settle` |
-| `core/session/agent_rebalance.go` | `moveAgent`, `stays` |
-| `core/session/dispatcher_subscribe.go` | `relayRequestsToAgent`, `moveDone` |
-| `core/session/dispatcher_tcp_streams.go` | `sendLoop`'s superseded renewal (`movingAway`, `yield`), `streamFor` |
-| `frontend/http/dispatch.go`, `frontend.go`, `proxy.go` | `dispatcherURL`, `peer`, `routeLease`, the first publish |
-| `core/session/trace_move_on.go` | the recorder of A's steps (`TraceMove.tla`, "Trace validation") |
-| relay `client/agent/move.go`, `connect.go`, `run.go` | `moveConnect`, `waitIdle`, `closeWhenAnswered` |
+| `routeLeases`, `RouteHere`, `startMove`, `recordMoved`, `stopRouting`, `resumeMove` | `core/session/agent_move.go` |
+| `WatchAgentSession`: `stopping`, `stopNow`, `ask`, `giveUp`, `moved`, `check`, `settle` | `core/session/dispatcher_session_watch.go` |
+| `moveAgent`, `stays` | `core/session/agent_rebalance.go` |
+| `relayRequestsToAgent`, `moveDone` | `core/session/dispatcher_subscribe.go` |
+| `sendLoop`'s superseded renewal (`movingAway`, `yield`), `streamFor` | `core/session/dispatcher_tcp_streams.go` |
+| `dispatcherURL`, `peer`, `routeLease`, the first publish | `frontend/http/dispatch.go`, `frontend.go`, `proxy.go` |
+| the recorder of A's steps (`TraceMove.tla`, "Trace validation") | `core/session/trace_move_on.go` |
+| `moveConnect`, `waitIdle`, `closeWhenAnswered` | relay `client/agent/move.go`, `connect.go`, `run.go` |
 
 ## Presence.tla: the presence feed across replicas
 
@@ -532,18 +532,18 @@ every action but those only a mutant or a larger config enables
 
 ### Code map (drift check)
 
-| file | what the spec models |
+| what the spec models | file |
 |---|---|
-| `core/session/presence.go` | `presenceFeed` (`bump`, `resync`, `Watch`, `Cursor`), `BindBus`, `presenceOutbox` (`add`, `run`, `publish`, `requeue`), `notifyUpstreamRegistered` |
-| `core/session/dispatcher.go` | `UpdateAgentLabels`, `publishDeparture`, `DeregisterAgent` (`ConnectHTTP`'s End) |
-| `core/session/dispatcher_inventory_refresh.go` | `claimAgentRecord`, `renewAgentRecord`, `releaseAgentRecord`, `refreshAgentInventoryOnInboundActivity`, `rewriteRecord`, `departed` |
-| `core/session/dispatcher_grpc.go` | `ConnectAgentTunnel`: its record, its up, its teardown |
-| `core/session/dispatcher_subscribe.go` | `ConnectHTTP`'s Connect (`Presence.up` after `Agents.Store`) |
-| `core/session/dispatcher_tcp.go` | `ConnectTCP`'s Connect and End (`claimAgentRecord`, `departed`) |
-| `core/session/dispatcher_session_watch.go` | the reannounce case (`rewriteRecord`) |
-| `core/session/dispatcher_stale_agents.go` | `disconnectAgent` (the reaper's End) |
-| `core/directory/session.go` | `PutSession`, `DeleteSession` |
-| relay-server `redisbus`, `presence.go`, `my_agents.go`, `server_run.go`, `inventory_epoch.go`, `presence_resync.go`; relay `client/presenceclient` | the bus, the gateway, `ListAgents`, `handleMyAgents`, the bus's context, `noteReplicas`, `resyncBus`, the watcher |
+| `presenceFeed` (`bump`, `resync`, `Watch`, `Cursor`), `BindBus`, `presenceOutbox` (`add`, `run`, `publish`, `requeue`), `notifyUpstreamRegistered` | `core/session/presence.go` |
+| `UpdateAgentLabels`, `publishDeparture`, `DeregisterAgent` (`ConnectHTTP`'s End) | `core/session/dispatcher.go` |
+| `claimAgentRecord`, `renewAgentRecord`, `releaseAgentRecord`, `refreshAgentInventoryOnInboundActivity`, `rewriteRecord`, `departed` | `core/session/dispatcher_inventory_refresh.go` |
+| `ConnectAgentTunnel`: its record, its up, its teardown | `core/session/dispatcher_grpc.go` |
+| `ConnectHTTP`'s Connect (`Presence.up` after `Agents.Store`) | `core/session/dispatcher_subscribe.go` |
+| `ConnectTCP`'s Connect and End (`claimAgentRecord`, `departed`) | `core/session/dispatcher_tcp.go` |
+| the reannounce case (`rewriteRecord`) | `core/session/dispatcher_session_watch.go` |
+| `disconnectAgent` (the reaper's End) | `core/session/dispatcher_stale_agents.go` |
+| `PutSession`, `DeleteSession` | `core/directory/session.go` |
+| the bus, the gateway, `ListAgents`, `handleMyAgents`, the bus's context, `noteReplicas`, `resyncBus`, the watcher | relay-server `redisbus`, `presence.go`, `my_agents.go`, `server_run.go`, `inventory_epoch.go`, `presence_resync.go`; relay `client/presenceclient` |
 
 ## Trace validation
 
