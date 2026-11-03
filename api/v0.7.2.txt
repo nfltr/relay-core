@@ -1,2 +1,3 @@
 Compatible changes:
 - ./core/session.(*Dispatcher).RouteHere: added
+- ./core/session.Dispatcher.ServicesGo: added

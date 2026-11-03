@@ -142,11 +142,15 @@ type TCPDispatcher struct {
 	// A primary stream's sender (on its handler goroutine) renews the
 	// agent's inventory record every renewEvery and, once leaving closes,
 	// lets the agent go at a jittered moment of drainWindow (drain.go).
-	renewEvery  time.Duration
-	renew       func(agentID string, s directory.Session) error
-	renewNow    func() <-chan struct{} // closed when every record must be rewritten now
-	leaving     <-chan struct{}
-	drainWindow time.Duration
+	renewEvery time.Duration
+	renew      func(agentID string, s directory.Session) error
+	renewNow   func() <-chan struct{} // closed when every record must be rewritten now
+	leaving    <-chan struct{}
+	// servicesLeaving, when set, is the services' (uncounted) leaving
+	// instead (Dispatcher.ServicesGo).
+	servicesLeaving <-chan struct{}
+	uncounted       func(agentID string) bool
+	drainWindow     time.Duration
 	// DrainBy is the relay's drain deadline (RPCServer.drainBy): the agent
 	// link's sessions run until then once the gRPC port closed.
 	DrainBy func() time.Time
@@ -195,6 +199,14 @@ func (d *TCPDispatcher) ConfigureHeartbeats(interval time.Duration, onHeartbeat 
 // interval (its inventory record's TTL is longer).
 func (d *TCPDispatcher) ConfigureRenew(interval time.Duration, renew func(agentID string, s directory.Session) error, now func() <-chan struct{}) {
 	d.renewEvery, d.renew, d.renewNow = interval, renew, now
+}
+
+// leavingFor is the leaving of agentID's streams.
+func (d *TCPDispatcher) leavingFor(agentID string) <-chan struct{} {
+	if d.servicesLeaving != nil && d.uncounted != nil && d.uncounted(agentID) {
+		return d.servicesLeaving
+	}
+	return d.leaving
 }
 
 // ConfigureDrain lets every agent go at a jittered moment of the first
@@ -520,6 +532,10 @@ func (d *Dispatcher) ConnectTCP(stream pb.Dispatcher_ConnectTCPServer) error {
 	if v := metadata.ValueFromIncomingContext(stream.Context(), TCPBindHeader); len(v) > 0 {
 		d.Logger.Debug("agent bound an auxiliary ConnectTCP connection", "agent_id", agentID)
 		return d.TCPDispatcher.RegisterAuxStream(agentID, v[0], stream)
+	}
+
+	if d.agentsGone(agentID) { // relay-server finding M6
+		return status.Error(codes.Unavailable, "this relay is stopping: connect again")
 	}
 
 	// Register this pod's address in the streamer inventory so cross-pod TCP

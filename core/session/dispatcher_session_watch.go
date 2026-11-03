@@ -76,7 +76,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 	var stopping <-chan struct{}
 	switch {
 	case d.AgentsGo != nil:
-		stopping = d.AgentsGo
+		stopping = d.departure(agentID)
 	case d.globalContext != nil:
 		stopping = d.globalContext.Done()
 	}

@@ -138,7 +138,7 @@ func (d *Dispatcher) moveAgent(agentID string) bool {
 // admitted, since a client's first connection does not retry a refusal
 // (kind soak 2026-10-21: a refused first connection ended the agent).
 func (d *Dispatcher) refusesAgents(ctx context.Context, agentID string) bool {
-	if d.Leaving() {
+	if d.Leaving() || d.agentsGone(agentID) {
 		return true
 	}
 	if s, ok := d.Agents.Load(agentID); ok && s.moving.Load() {

@@ -694,7 +694,7 @@ func (d *TCPDispatcher) sendLoop(agentID string, as *tcpAgentStream, stream tcpF
 				renewNow = d.renewNow()
 			}
 		}
-		leaving = d.leaving
+		leaving = d.leavingFor(agentID)
 	}
 	for {
 		var frame *pb.TCPData

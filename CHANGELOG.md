@@ -12,6 +12,15 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `(*session.Dispatcher).ServicesGo`: set with `AgentsGo` on a relay
+  without peers, the relay's own services (`DispatcherConfig.Uncounted`)
+  go when it closes instead of with the other agents, and an agent other
+  than a service is refused a new session (`Unavailable`) once `AgentsGo`
+  closed. relay-server sets it so that its last usage flush, which the
+  accounts service takes, follows the agents' departure (relay-server
+  `spec/README.md` finding M6). Nil: every agent goes at `AgentsGo`, as
+  before.
+
 - `(*session.Dispatcher).RouteHere(agentID)`: a route lease on the
   agent's HTTP session here (ok while this replica routes to it), ended
   by `release` once the request's first message is on the agent's topic.

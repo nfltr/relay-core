@@ -125,6 +125,13 @@ type Dispatcher struct {
 	// closes (its clients drained, connect_drain.go) instead of at a
 	// jittered moment of the shutdown.
 	AgentsGo <-chan struct{}
+	// ServicesGo, set with AgentsGo, lets the relay's own services
+	// (Config.Uncounted) go later than the other agents (relay-server
+	// spec/README.md finding M6: the last usage flush reaches the
+	// accounts service after the agents went); an agent other than a
+	// service is refused a new session once AgentsGo closed. Nil: every
+	// agent goes at AgentsGo.
+	ServicesGo <-chan struct{}
 
 	// OnAgentDisconnect is called with the agentID each time an agent stream closes.
 	// Used to revoke share codes when their owning agent goes offline.
@@ -848,6 +855,30 @@ func (d *Dispatcher) AgentCount() int64 {
 		return 0
 	}
 	return int64(len(d.agentIDSet()))
+}
+
+// departure is the channel whose close lets agentID go (AgentsGo, or
+// ServicesGo for a service when set).
+func (d *Dispatcher) departure(agentID string) <-chan struct{} {
+	if d.ServicesGo != nil && d.uncounted(agentID) {
+		return d.ServicesGo
+	}
+	return d.AgentsGo
+}
+
+// agentsGone reports whether agentID may not start a session here: the
+// agents other than the services have gone (ServicesGo set, AgentsGo
+// closed), so one that reconnected would count after the last flush.
+func (d *Dispatcher) agentsGone(agentID string) bool {
+	if d.ServicesGo == nil || d.AgentsGo == nil || d.uncounted(agentID) {
+		return false
+	}
+	select {
+	case <-d.AgentsGo:
+		return true
+	default:
+		return false
+	}
 }
 
 // uncounted reports whether the agent limit and AgentCount skip agentID.

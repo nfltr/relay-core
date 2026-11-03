@@ -453,6 +453,9 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 	registrationCtx := d.agentInventoryRegistrationContext(ctx)
 
 	d.Logger.Info("received AgentTunnel call from agent", "AgentID", agentID)
+	if d.agentsGone(agentID) { // relay-server finding M6
+		return status.Error(codes.Unavailable, "this relay is stopping: connect again")
+	}
 	credential := streamCredential(stream.Context())
 	release, err := d.validateAgentConnection(registrationCtx, agentID, credential, d.StreamerIPInventory)
 	if err != nil {

@@ -56,6 +56,7 @@ func (c *Core) WireTCP(ctx context.Context, logger *slog.Logger, grace time.Dura
 		t.ConfigureDrain(ctx.Done(), grace)
 	} else {
 		t.ConfigureDrain(clientsDrained, 0)
+		t.servicesLeaving, t.uncounted = d.ServicesGo, d.uncounted
 	}
 	t.DrainBy = c.DrainBy // its agent link drains until then (agent_link.go)
 	d.ConfigureTCPRenew(t)
