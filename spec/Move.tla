@@ -25,13 +25,15 @@ CONSTANTS Req,     \* the visitors' requests
           TSess,   \* client TCP sessions to the agent
           Lease,   \* the route lease and the in-band MOVE_DONE (the design)
           Drain,   \* the replica may start draining during the move
+          FailBOn, \* B's new session may end after it took the record (MV-5)
           Mutant   \* "none", or a bug put back (spec/README.md)
 
 VARIABLES
     rel,     \* A's watch of the old session: routing, asked, gaveUp, stopped, done, ended
     routes,  \* A's Agents holds the old stream (IsAgentConnected)
     conn,    \* A received MOVE_CONNECTED
-    rec,     \* the directory's record: "A" or "B"
+    rec,     \* the directory's record: "A", "B", or "Bgone" (it names B's
+             \* session, which ended: MV-5; until its TTL)
     ag,      \* the agent: old, dialing, failed, both, closing, closed
     rq,      \* request -> new, picked, remote, fwd, onA, agentA, atB, answered, failed, gone
     exec,    \* requests the agent ran
@@ -75,6 +77,7 @@ Pick(r) ==
     /\ IF routes
        THEN rq' = [rq EXCEPT ![r] = "picked"]
        ELSE IF rec = "B" THEN rq' = [rq EXCEPT ![r] = "atB"]
+       ELSE IF rec = "Bgone" THEN UNCHANGED rq \* B answers 503 Retry-After: no agent ran it
        ELSE rq' = [rq EXCEPT ![r] = "failed"] \* the record names A, which does not route
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
     /\ UNCHANGED tcpVars
@@ -155,7 +158,7 @@ GiveUp ==
 \* stopRouting: the record names the new session; A routes no more.
 StopRouting ==
     /\ rel = "asked"
-    /\ conn /\ rec = "B"
+    /\ conn /\ rec # "A"
     /\ rel' = "stopped" /\ routes' = FALSE
     /\ UNCHANGED <<conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
     /\ UNCHANGED tcpVars
@@ -165,7 +168,7 @@ StopRouting ==
 \* fail); in the design a session A asked to move takes it as the move
 \* done.
 Refresh ==
-    /\ rel = "gaveUp" /\ rec = "B"
+    /\ rel = "gaveUp" /\ rec # "A"
     /\ IF Mutant # "supersede-ends"
        THEN /\ rel' = "stopped" /\ routes' = FALSE
             /\ UNCHANGED <<rq, cq, chA>>
@@ -234,7 +237,7 @@ PlaceTCP(s) ==
 \* (finding MV-4) left it in rotation, so new sessions kept landing on a
 \* stream the agent is about to close.
 TCPSupersede ==
-    /\ rec = "B" /\ ~tsup
+    /\ rec # "A" /\ ~tsup
     /\ tsup' = TRUE
     /\ tin' = (Mutant = "tcp-stays-in-rotation" /\ tin)
     /\ UNCHANGED <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg, ts, late>>
@@ -266,6 +269,17 @@ ConnectB ==
     /\ UNCHANGED <<rel, routes, conn, rq, exec, infl, cq, chA, drn, lg>>
     /\ UNCHANGED tcpVars
 
+\* B's new session ends after it took the record (MV-5: B crashed, or
+\* the new connection broke): the record names that ended session until
+\* its TTL. A has stopped renewing and refuses the agent, B answers 503
+\* Retry-After before any agent ran a request: unavailable until the
+\* agent's next connection takes the record, never a loss. That
+\* reconnection is a new session, outside this model.
+FailB ==
+    /\ FailBOn /\ rec = "B" /\ rec' = "Bgone"
+    /\ UNCHANGED <<rel, routes, conn, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
+    /\ UNCHANGED tcpVars
+
 \* Every try refused: the agent stays on the old connection.
 DialFails ==
     /\ ag = "dialing" /\ ag' = "failed"
@@ -288,7 +302,7 @@ Next ==
     \/ \E r \in Req : Pick(r) \/ PickRemote(r) \/ ArriveA(r) \/ Publish(r) \/ Unlease(r) \/ ServeB(r) \/ Answer(r)
     \/ Forward \/ Ask \/ GiveUp \/ StopRouting \/ Refresh \/ Done \/ RecvA
     \/ StartDrain \/ DrainBound \/ TCPSupersede \/ \E s \in TSess : PlaceTCP(s)
-    \/ RecvAgent \/ ConnectB \/ DialFails \/ CloseOld
+    \/ RecvAgent \/ ConnectB \/ DialFails \/ CloseOld \/ FailB
 
 Spec == Init /\ [][Next]_vars
 
@@ -305,7 +319,7 @@ LiveSpec == Spec /\ Fairness
 
 TypeOK ==
     /\ rel \in {"routing", "asked", "gaveUp", "stopped", "done", "ended"}
-    /\ rec \in {"A", "B"}
+    /\ rec \in {"A", "B", "Bgone"}
     /\ ag \in {"old", "dialing", "failed", "both", "closing", "closed"}
     /\ \A r \in Req : rq[r] \in {"new", "picked", "remote", "fwd", "onA", "agentA", "atB", "answered", "failed", "gone"}
     /\ \A s \in TSess : ts[s] \in {"new", "onA", "onB"}
@@ -319,7 +333,7 @@ NoLoss == \A r \in Req : rq[r] # "failed" \/ lg
 RunOnce == \A r \in exec : rq[r] # "failed" \/ lg
 
 \* Once A stopped routing, the record never names it again.
-OneOwner == rel \in {"stopped", "done"} => rec = "B" /\ ~routes
+OneOwner == rel \in {"stopped", "done"} => rec # "A" /\ ~routes
 
 \* No TCP session is placed on A's old primary once it found the agent's
 \* record moved (the agent closes that stream: finding MV-4).
@@ -337,4 +351,5 @@ WitnessLetGo == ~(lg /\ \E r \in Req : rq[r] = "failed")                        
 WitnessRemote == ~(rel \in {"stopped", "done"} /\ \E r \in Req : rq[r] = "remote")         \* NoLoss (MV-1)
 WitnessOwner == ~(rel = "done")                                                            \* OneOwner
 WitnessTCP == ~(\E s \in TSess : ts[s] = "onA" /\ rec = "B")                               \* NoTCPAfterMove
+WitnessBGone == ~(rel \in {"stopped", "done"} /\ rec = "Bgone")                            \* OneOwner, NoLoss (MV-5)
 =============================================================================

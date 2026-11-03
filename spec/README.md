@@ -380,7 +380,16 @@ agent closes the old stream with requests unanswered), `peer-no-lease`
 bounded loss is reachable), `WitnessRemote` (a peer's forward in flight
 after A stopped routing), `WitnessOwner`, `WitnessTCP` (a TCP session on
 A after the record moved: the window before the renewal finds it, which
-the agent's `waitIdle` bounds).
+the agent's `waitIdle` bounds), `WitnessBGone` (A stopped routing while
+the record names B's session that ended: MV-5).
+
+`FailB` (MV-5, lane W5-RCORE; `FailBOn`, off in `MoveLive.cfg`, whose
+`AllAnswered` it would break by design): B's new session ends after it
+took the record. A has stopped renewing and refuses the agent, so the
+record names an ended session until its TTL; a request picked meanwhile
+is answered 503 Retry-After before any agent ran it (it stays `new`), and
+`NoLoss`, `RunOnce` and `OneOwner` (the record never names A again) hold
+with it. The agent's next connection is a new session, outside the model.
 
 ### Environment assumptions
 
@@ -389,7 +398,7 @@ the agent's `waitIdle` bounds).
 | The in-memory broker's send returns once the message is on the consumer's channel | `broker/broker.go` contract |
 | The directory fences records by Seq; the newest session wins; a read may be stale by one write | relay-server `spec/Replicas.tla` |
 | A peer replica routes by the record it read; its forward can arrive any time later | `dispatcherURL`, the replica link (relay-server `core/replicas`) |
-| B's session may fail after taking the record: the agent reconnects elsewhere; requests answer 503 meanwhile (not loss) | finding MV-5 (review) |
+| B's session may fail after taking the record (`FailB`): the agent reconnects elsewhere, as a new session; requests answer 503 meanwhile (not loss) | finding MV-5 (review) |
 | HTTP requests on the agent link do not ride the topic: MOVE_DONE does not order them; they end with the old connection (park TTL 10 s) | `dispatch.go` (link branch releases the lease), relay `client/agent/agent_link.go` |
 | A rebalancing move skips an agent the relay counts as carrying TCP sessions (`carriesSessions`, exact by `Handoff.tla` `CarriesExact`); sessions placed after that check are bounded by the agent's `waitIdle` (30 s) | `moveAgent`; relay `client/agent/move.go` |
 
@@ -647,9 +656,21 @@ ends its trace there. `make spec-traces` runs the move tests of
 `reject-move-oneowner` (routing stopped before the new connection took
 the record) and `reject-move-notcp` (a TCP session placed on A's primary
 after it found the move). `COVERAGE=1` lists the move steps no trace took.
-Not recorded yet: a peer's forward (`ArriveA`) is logged as a `Pick`
-(`RouteHere` does not tell them apart), and the TCP steps (`TCPSupersede`,
-`PlaceTCP`; the checker takes them, `reject-move-notcp`). After a
+A peer replica's forward is `ArriveA` (frontend/http `peer` takes the
+lease through `tracehook.RoutePeer`; TLC chooses the peer's unlogged
+`PickRemote`, no more of them than forwards still to arrive). The TCP
+steps go to the trace of the agent's moving HTTP session
+(`tcpMovingAway` maps its TCP primary to it): `TCPSupersede` when the
+primary leaves the rotation (`yield`) and `PlaceTCP` (ok) when a session
+is added to it, each under `traceMu` taken before the stream's `Mu` (the
+lock order of `traceFinish`), which orders the two; a session placed
+elsewhere is not logged. `TestMovedAgentsTCPStreamTakesNoNewSessions`
+takes both (lane W5-RCORE). `tracePublish` holds `traceMu` across the
+send onto the consumer's channel, so `Publish` precedes its `Forward` in
+the file; a traced test that fills a channel (64 messages) would hang
+there, loudly (the test's timeout), never write a wrong trace. Decided
+(lane W5-RCORE): kept, the tag is test-only and no move test queues
+that many. After a
 rebalancing move gave up, a drain's `stopNow` asks the agent again
 (`startMove` with `mv` nil): `Ask` from `gaveUp` while draining (finding
 25); no test takes it yet.
@@ -662,7 +683,7 @@ rebalancing move gave up, a drain's `stopNow` asks the agent again
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 205,995 (47,884) | | 2-4 s |
-| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain (findings 31, 32) | 69,096 (16,515) | | 3 s |
+| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5) | 135,307 (29,460) | | 3 s before MV-5; 2 min 34 s at load 170 (2026-11-03) |
 | `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription, 1 failed write | 607,118 (100,778) | | 15 s at load 14, 83 s at load 100 (2026-11-03; 4 s before failed writes; same-replica replacement adds no distinct state) |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |

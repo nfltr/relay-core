@@ -23,7 +23,8 @@
 #             spec/TraceHandoff.tla; with COVERAGE=1 the steps no trace
 #             took (weekly).
 #   trace F   one recorded trace (its kind by its name).
-# TLC_WORKERS (default 4) caps TLC's threads; COVERAGE=1 adds -coverage 1.
+# TLC_WORKERS (default 4) caps TLC's threads; COVERAGE=1 adds -coverage 1;
+# MUTANTS=<regex> narrows mutants to those whose "CFG NAME" it matches.
 # Java and tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
 cd "$(dirname "$0")/.."
@@ -62,6 +63,8 @@ fail=0
 expect() {
 	c=$1 mod=$2 name=$3
 	shift 3
+	# MUTANTS=<regex> runs only the mutants whose "CFG NAME" it matches.
+	[ -z "${MUTANTS:-}" ] || echo "$c $name" | grep -qE "$MUTANTS" || return 0
 	# A mutant's own invariant must catch it: Refines only for interface:*.
 	case $name in
 	interface:*) sed "$@" "spec/$c" >"$work/Mutant.cfg" ;;
@@ -158,6 +161,7 @@ CONSTANTS
     TSess <- TraceTSess
     Lease = TRUE
     Drain = TRUE
+    FailBOn = FALSE
     Mutant = "none"
 INIT TraceInit
 NEXT TraceNext
@@ -274,6 +278,7 @@ mutants)
 	expect Move.cfg Move.tla witness:remote -e 's/^    RunOnce$/    WitnessRemote/'
 	expect Move.cfg Move.tla witness:owner -e 's/^    OneOwner$/    WitnessOwner/'
 	expect Move.cfg Move.tla witness:tcp -e 's/^    NoTCPAfterMove$/    WitnessTCP/'
+	expect Move.cfg Move.tla witness:b-gone -e 's/^    OneOwner$/    WitnessBGone/'
 	# Presence.tla: the bugs the design prevents (findings 8-13, 24-29, 34; release-by-agent: 2a1cf33).
 	for b in unfenced-label-write partial-list partial-my-agents renew-race drop-no-resync renew-resurrects publish-before-write resync-early resync-ignored publish-drop silent-rewrite no-late-down shared-counter release-by-agent; do
 		expect Presence.cfg Presence.tla "$b" -e "$m$b\"/"
@@ -300,7 +305,7 @@ simulate)
 	[ $st = 0 ] || { tail -60 "$work/sim.out"; exit $st; }
 	;;
 traces)
-	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining)$'}
+	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions)$'}
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown)$'}
 	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces"
 	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests" ./core/session/ >"$work/test.out" 2>&1 || {
@@ -336,10 +341,10 @@ traces)
 			sort -u >"$work/taken"
 		for a in 'Pick  true' 'Pick  false' 'Publish  true' 'Publish  false' 'Release  false' 'Forward  false' 'Ask  false' \
 			'GiveUp  false' 'StopRouting  false' 'Refresh  false' 'Done  false' 'StartDrain  false' 'DrainBound  false' \
-			'RecvA CONNECTED false' 'RecvA TXN false' 'RecvA EOF false' 'TCPSupersede  false' 'PlaceTCP  true' 'PlaceTCP  false'; do
+			'RecvA CONNECTED false' 'RecvA TXN false' 'RecvA EOF false' 'TCPSupersede  true' 'PlaceTCP  true' 'ArriveA  true' 'ArriveA  false'; do
 			grep -qxF "$a" "$work/taken" || echo "move step never taken: $a"
 		done
-		echo "(ArriveA is logged as Pick: RouteHere does not tell a peer's forward from a pick)"
+		echo "(PlaceTCP false is not logged: a session placed elsewhere is not A's step)"
 	fi
 	echo "== Handoff (spec/TraceHandoff.tla)"
 	checktraces "$work/htraces" htrace || st=1

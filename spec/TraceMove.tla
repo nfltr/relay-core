@@ -4,7 +4,8 @@
 (* by a run of the real dispatcher (-tags relaytrace), must be a behaviour *)
 (* of Move. The agent's steps (RecvAgent, ConnectB, Answer, CloseOld) and   *)
 (* with them the directory's record are not logged: TLC chooses them      *)
-(* between two logged ones. A lease's end (Release) is the step after its *)
+(* between two logged ones, as is a peer replica's PickRemote of each     *)
+(* forward A logs (ArriveA). A lease's end (Release) is the step after its *)
 (* Publish (pl counts those), or Unlease. The trace is accepted when TLC   *)
 (* reaches its end: TraceNotDone is then violated (spec.sh).               *)
 EXTENDS TraceMoveLog, Move
@@ -19,6 +20,7 @@ E == Log[l]
 
 Step ==
     CASE E.ev = "Pick" -> routes = E.ok /\ (\E r \in Req : Pick(r)) /\ UNCHANGED pl
+      [] E.ev = "ArriveA" -> routes = E.ok /\ (\E r \in Req : ArriveA(r)) /\ UNCHANGED pl
       [] E.ev = "Release" -> \/ pl > 0 /\ pl' = pl - 1 /\ UNCHANGED vars
                              \/ (\E r \in Req : Unlease(r)) /\ UNCHANGED pl
       [] E.ev = "Publish" -> (rel # "ended") = E.ok /\ Publish(E.r) /\ pl' = pl + 1
@@ -47,6 +49,10 @@ Unlogged ==
     /\ \/ RecvAgent
        \/ E.ev \in {"RecvA", "StopRouting", "Refresh", "TCPSupersede", "Pick"} /\ ConnectB
        \/ E.ev = "RecvA" /\ (CloseOld \/ \E r \in Req : Answer(r))
+       \* a peer's pick, on its replica, while the record names A: no more
+       \* than the forwards still to arrive (ArriveA lines from l on)
+       \/ /\ Cardinality({r \in Req : rq[r] = "remote"}) < Cardinality({j \in l..Len(Log) : Log[j].ev = "ArriveA"})
+          /\ \E r \in Req : PickRemote(r)
 
 TraceInit == Init /\ l = 1 /\ pl = 0
 
