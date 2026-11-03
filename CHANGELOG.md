@@ -86,6 +86,16 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- An agent's dispatcher record (`ConnectHTTP`, `ConnectAgentTunnel`) and
+  streamer record (`ConnectTCP`) take their session Seq from counters of
+  their own (`nfltr:agent-session-seq:<record key>`). With one counter per
+  agent, the other record's claim read as a newer session: once a live
+  HTTP session's record lapsed, its renewal ended the session instead of
+  writing the record back (`spec/README.md` finding 34; relay-server
+  `TestAgentLinkSurvivesReconnect` failed 3-5 in 10). The counter keys
+  change: a relay of this version takes the first Seq above the record's
+  current one, as after a store that lost its counters.
+
 - A presence change whose PUBLISH to peers failed is sent again (after a
   backoff of 100 ms doubling to 5 s), folded under the agent's newer
   changes; before, it was dropped and the peers, whose subscriptions did

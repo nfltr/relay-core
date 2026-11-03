@@ -20,8 +20,8 @@ import (
 //
 // "Newer" is the agent's session order in the shared store, not the
 // replicas' clocks (a replica whose clock ran behind kept or took back the
-// record): each claim takes the agent's next Seq from a counter there
-// (Cache.Incr), which outlives the agent's record (seqTTL) and never gives
+// record): each claim takes the record's next Seq from a counter there
+// (Cache.Incr, one per record: seqKey), which outlives the record (seqTTL) and never gives
 // a claim a Seq at or below the current record's. Records and sessions
 // without a Seq (an older relay's, during a rolling upgrade) are
 // ordered by their start times, as those replicas order them; Since is
@@ -111,7 +111,7 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 		// (relay-core spec/README.md finding 13); this session ends and
 		// the agent's reconnect claims anew.
 		if (errors.Is(err, ErrNotFound) || err == nil && v == nil) && s.Seq != 0 {
-			if n, err := d.inventory.Incr(ctx, seqKey(agentID), 0, seqTTL); err == nil && n > s.Seq {
+			if n, err := d.inventory.Incr(ctx, seqKey(key), 0, seqTTL); err == nil && n > s.Seq {
 				return ErrSuperseded
 			}
 		}
@@ -167,7 +167,11 @@ func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Sessi
 // reset the order.
 const seqTTL = 30 * 24 * time.Hour
 
-func seqKey(agentID string) string { return "nfltr:agent-session-seq:" + agentID }
+// seqKey is the session counter of the record at key: each record of an
+// agent (dispatcher, streamer) counts its own sessions, so one record's
+// claim never reads as a newer session of the other (spec/README.md
+// finding 34).
+func seqKey(recordKey string) string { return "nfltr:agent-session-seq:" + recordKey }
 
 func (d *ipInventory) ClaimSession(ctx context.Context, agentID string, s Session, labels map[string]string, capabilities []string, expiration time.Duration) (Session, error) {
 	seq, err := d.nextSeq(ctx, agentID)
@@ -183,12 +187,13 @@ func (d *ipInventory) ClaimSession(ctx context.Context, agentID string, s Sessio
 func (d *ipInventory) nextSeq(ctx context.Context, agentID string) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.opTimeout)
 	defer cancel()
-	seq, err := d.inventory.Incr(ctx, seqKey(agentID), 1, seqTTL)
+	key := d.getCacheKey(agentID)
+	seq, err := d.inventory.Incr(ctx, seqKey(key), 1, seqTTL)
 	if err != nil {
 		return 0, err
 	}
-	if v, err := d.inventory.Get(ctx, d.getCacheKey(agentID)); err == nil && v != nil && v.Seq >= seq {
-		return d.inventory.Incr(ctx, seqKey(agentID), v.Seq-seq+1, seqTTL)
+	if v, err := d.inventory.Get(ctx, key); err == nil && v != nil && v.Seq >= seq {
+		return d.inventory.Incr(ctx, seqKey(key), v.Seq-seq+1, seqTTL)
 	}
 	return seq, nil
 }

@@ -201,7 +201,7 @@ func TestRenewalAfterANewerSessionEndedIsSuperseded(t *testing.T) {
 		want error
 	}{{4, ErrSuperseded}, {5, nil}} {
 		mc := newMockCache()
-		mc.counters = map[string]int64{seqKey("agent-1"): 5}
+		mc.counters = map[string]int64{seqKey(key): 5}
 		inv, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
 		err := inv.(SessionStore).PutSession(context.Background(), "agent-1", Session{Since: time.Now(), Seq: tc.seq}, true, nil, nil, time.Minute)
 		if !errors.Is(err, tc.want) && err != tc.want {
@@ -210,5 +210,35 @@ func TestRenewalAfterANewerSessionEndedIsSuperseded(t *testing.T) {
 		if _, ok := mc.store[key]; ok != (tc.want == nil) {
 			t.Fatalf("Seq %d: record written=%v", tc.seq, ok)
 		}
+	}
+}
+
+// Finding 34 (relay-core spec/README.md, Presence.tla shared-counter): an
+// agent's dispatcher record (ConnectHTTP, ConnectAgentTunnel) and its
+// streamer record (ConnectTCP) count their sessions apart. The streamer
+// claim after the dispatcher one is no newer session of the dispatcher
+// record: when that record lapsed (a late renewal, a store that lost it),
+// its session's renewal writes it back instead of ending the agent.
+func TestRenewalAfterTheOtherRecordsClaimWritesItBack(t *testing.T) {
+	viper.Set("pod_ip.env_var", "POD_IP")
+	t.Cleanup(viper.Reset)
+	t.Setenv("POD_IP", "10.0.0.1")
+	ctx := context.Background()
+	mc := newMockCache()
+	disp, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetDispatcherCacheKey)
+	strm, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
+	s, err := disp.(SessionStore).ClaimSession(ctx, "agent-1", Session{Since: time.Now()}, nil, nil, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := strm.(SessionStore).ClaimSession(ctx, "agent-1", Session{Since: time.Now()}, nil, nil, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	delete(mc.store, GetDispatcherCacheKey("agent-1")) // the record lapsed
+	if err := disp.(SessionStore).PutSession(ctx, "agent-1", s, true, nil, nil, time.Minute); err != nil {
+		t.Fatalf("the live session's renewal: %v, want its record written back", err)
+	}
+	if _, ok := mc.store[GetDispatcherCacheKey("agent-1")]; !ok {
+		t.Fatal("the dispatcher record was not written back")
 	}
 }
