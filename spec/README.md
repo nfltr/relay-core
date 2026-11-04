@@ -1492,3 +1492,15 @@ relay link connection never outlives every primary holding its token.
     decisions come from `agentStream`, `GetIP` and `yield`, which it
     runs). The replay also found relay-server finding R8 (its spec's
     renewal missed this module's finding 13 counter read).
+40. **A share visited in its last flush interval idle-expired** (code,
+    low; relay-server `spec/README.md` finding S2, lane XREPO3).
+    `ShareUses` reported every use at the next flush (30 s) and the
+    issuer extends active codes only: a visit in the code's last 30 s
+    reached it after the end. Design checked in relay-server
+    `spec/Share.tla` (`urgent`, mutants `S2:no-urgent` and
+    `S2:touch-ended-row`, the second the refuted design of extending an
+    ended row). Fixed: `CachedGrants.UsedEnd` hands `ShareUses.UsedEnding`
+    the end the grant read, and a use within `After` of it is sent at
+    once (`TestShareUsesReportsAtOnceNearTheEnd`, which fails without
+    it). `compose` sets it; relay-server's `shareReader` still uses `Used`
+    until it requires this version.

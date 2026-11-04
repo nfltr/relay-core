@@ -1,2 +1,4 @@
 Compatible changes:
+- ./core/frontend.(*ShareUses).UsedEnding: added
+- ./core/frontend.CachedGrants.UsedEnd: added
 - ./core/directory.Session.Newer: added

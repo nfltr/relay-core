@@ -70,7 +70,8 @@ func shareGrants(c *session.Core, auth *identity.Authenticator, logger *slog.Log
 		Reserve: func() time.Duration { return viper.GetDuration("http.share_reservation_ttl") },
 		After:   shareUsesFlush, Log: logger.Warn,
 	}
-	grants := frontend.NewCachedGrants(frontend.ServiceGrantLookup(client, base), uses.Used)
+	grants := frontend.NewCachedGrants(frontend.ServiceGrantLookup(client, base), nil)
+	grants.UsedEnd = uses.UsedEnding
 	journal = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, _, ok := connect.RequestPrincipal(auth, r, identity.Credential{})
 		if !ok || r.Method != http.MethodPost || !slices.ContainsFunc(agents, func(a agent) bool { return strings.EqualFold(p.Owner, a.owner) }) {

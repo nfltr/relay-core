@@ -12,6 +12,15 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `(*frontend.ShareUses).UsedEnding(code, end)` and
+  `frontend.CachedGrants.UsedEnd`: a grant reports the code's end it read
+  (`SharePolicy.ExpiresAt`), and a use within `After` of that end is sent
+  to the issuer at once instead of at the next flush, so a share visited
+  in its last flush interval no longer idle-expires (relay-server
+  `spec/README.md` finding S2, `spec/Share.tla` `urgent`). The core-only
+  relay (`compose`) sets it. Migration: none; a relay that reports uses
+  sets `grants.UsedEnd = uses.UsedEnding` in place of `uses.Used`.
+
 - `(directory.Session).Newer(other)`: whether this session is newer than
   `other` (higher `Seq`, then later `Since`), the order the directory
   already used. `session.TCPDispatcher` uses it to keep a newer session's

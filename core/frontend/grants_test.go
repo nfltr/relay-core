@@ -92,6 +92,47 @@ func TestShareUsesReportsGrantedCodes(t *testing.T) {
 	}
 }
 
+// TestShareUsesReportsAtOnceNearTheEnd (relay-server spec/Share.tla
+// urgent, finding S2): a visit to a code whose end, as its grant read it, is
+// within the flush interval is reported at once, so the issuer extends the
+// code before it ends; a visit to a code far from its end waits for the
+// flush.
+func TestShareUsesReportsAtOnceNearTheEnd(t *testing.T) {
+	got := make(chan sharecode.UsedReport, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var rep sharecode.UsedReport
+		_ = json.NewDecoder(r.Body).Decode(&rep)
+		got <- rep
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	uses := &ShareUses{Send: ServiceShareUses(srv.Client(), srv.URL), Reserve: func() time.Duration { return time.Hour }, After: time.Hour, Log: func(string, ...any) {}}
+	ends := map[string]time.Time{"far": time.Now().Add(2 * time.Hour), "near": time.Now().Add(time.Minute)}
+	g := NewCachedGrants(func(code string) (string, SharePolicy, error) {
+		return "alice.web", SharePolicy{ExpiresAt: ends[code].Format(time.RFC3339)}, nil
+	}, nil)
+	g.UsedEnd = uses.UsedEnding
+	if _, err := g.Grant("far"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case rep := <-got:
+		t.Fatalf("a code far from its end reported before the flush: %+v", rep)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := g.Grant("near"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case rep := <-got:
+		if len(rep.SharesUsed) != 2 {
+			t.Fatalf("report %+v, want both codes (the urgent report takes every use so far)", rep)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a code within the flush interval of its end was not reported at once")
+	}
+}
+
 // TestCachedGrantsForgetAll: after the issuer's word (a revocation it did
 // not name), every code is read again.
 func TestCachedGrantsForgetAll(t *testing.T) {

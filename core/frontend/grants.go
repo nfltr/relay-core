@@ -44,10 +44,13 @@ type ShareLookup func(code string) (subject string, policy SharePolicy, err erro
 type CachedGrants struct {
 	lookup ShareLookup
 	used   func(code string) // a code granted; nil: none
-	Now    func() time.Time  // the clock (tests)
-	mu     sync.Mutex
-	hits   map[string]cachedGrant // code -> grant
-	miss   map[string]time.Time   // code -> until
+	// UsedEnd, when set, hears every grant in place of used, with the
+	// code's end the grant read (zero: none): ShareUses.UsedEnding.
+	UsedEnd func(code string, end time.Time)
+	Now     func() time.Time // the clock (tests)
+	mu      sync.Mutex
+	hits    map[string]cachedGrant // code -> grant
+	miss    map[string]time.Time   // code -> until
 }
 
 type cachedGrant struct {
@@ -67,7 +70,12 @@ func (r *CachedGrants) IsCode(s string) bool { return sharecode.Valid(s) }
 // the lookup's error (not cached) when it could not answer.
 func (r *CachedGrants) Grant(code string) (Grant, error) {
 	g, err := r.grant(code, r.Now())
-	if err == nil && r.used != nil {
+	switch {
+	case err != nil:
+	case r.UsedEnd != nil:
+		end, _ := time.Parse(time.RFC3339, g.Policy.ExpiresAt)
+		r.UsedEnd(code, end)
+	case r.used != nil:
 		r.used(code)
 	}
 	return g, err
@@ -153,21 +161,37 @@ type ShareUses struct {
 
 	mu    sync.Mutex
 	codes map[string]time.Time // code -> reserved until
+	soon  bool                 // a Flush started for an urgent use has not taken codes yet
 }
 
-// Used records code granted now.
-func (u *ShareUses) Used(code string) {
+// Used records code granted now; its report waits for the flush.
+func (u *ShareUses) Used(code string) { u.UsedEnding(code, time.Time{}) }
+
+// UsedEnding records code granted now by a grant that read the code's end
+// (zero: none). An end within After sends the report at once, so the issuer
+// extends the code before it ends (relay-server spec/Share.tla urgent,
+// finding S2; a visit within the send's latency of the end stays lost).
+// ponytail: one send per urgent visit while a send is in flight; a code
+// within After of its end is visited at that rate only until the issuer's
+// extension reaches this relay's cache (ShareReadTTL).
+func (u *ShareUses) UsedEnding(code string, end time.Time) {
 	ttl := u.Reserve()
 	if ttl <= 0 {
 		return
 	}
+	now := time.Now()
 	u.mu.Lock()
-	defer u.mu.Unlock()
 	if len(u.codes) == 0 {
 		u.codes = map[string]time.Time{}
 		time.AfterFunc(u.After, u.Flush)
 	}
-	u.codes[code] = time.Now().Add(ttl)
+	u.codes[code] = now.Add(ttl)
+	urgent := !end.IsZero() && end.Sub(now) <= u.After && !u.soon
+	u.soon = u.soon || urgent
+	u.mu.Unlock()
+	if urgent {
+		go u.Flush()
+	}
 }
 
 // Flush reports the uses not yet reported, now.
@@ -175,6 +199,7 @@ func (u *ShareUses) Flush() {
 	u.mu.Lock()
 	codes := u.codes
 	u.codes = nil
+	u.soon = false
 	u.mu.Unlock()
 	if len(codes) == 0 {
 		return
