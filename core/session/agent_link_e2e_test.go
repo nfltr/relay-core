@@ -53,6 +53,34 @@ func TestAgentLinkTCPSessions(t *testing.T) {
 	}
 }
 
+// TestAgentLinkCarriesSessions: a rebalance's carriesSessions counts a
+// session on the agent link while it is open and not after it ended
+// (Handoff.tla CarriesExact; its trace takes TCarries both ways).
+func TestAgentLinkCarriesSessions(t *testing.T) {
+	for _, tc := range linkTransportAgents {
+		t.Run(tc.transport, func(t *testing.T) {
+			h := startTunnelHarnessWith(t, startTarget(t), nil, "", 0, relayCurrent, tc.ag)
+			if err := echo(h, t, []byte("dial")); err != nil {
+				t.Fatal(err)
+			}
+			waitLinkTransport(t, h, tc.transport)
+			waitUntil(t, func() bool { return !h.D.carriesSessions(harnessAgentID) }, func() string { return "the first session still counted" })
+			c := h.Dial(t)
+			if _, err := c.Write(append(targetHeader('e', 0), 'x')); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.ReadFull(c, make([]byte, 1)); err != nil {
+				t.Fatal(err)
+			}
+			if !h.D.carriesSessions(harnessAgentID) {
+				t.Fatal("an open session on the agent link is not counted")
+			}
+			_ = c.Close()
+			waitUntil(t, func() bool { return !h.D.carriesSessions(harnessAgentID) }, func() string { return "an ended session still counted" })
+		})
+	}
+}
+
 // TestAgentLinkE2EE: E2EE vhost sessions (TLS ended at the agent) on each
 // transport.
 func TestAgentLinkE2EE(t *testing.T) {

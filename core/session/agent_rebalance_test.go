@@ -366,6 +366,30 @@ func TestRebalanceMoveGivenUpKeepsTheAgent(t *testing.T) {
 	}
 }
 
+// TestRebalanceGivenUpThenDrainAsksAgain: a drain that starts after a
+// rebalancing move gave up asks the agent again (Move.tla's second Ask,
+// finding 32), so the agent moves instead of being let go at the drain's
+// bound.
+func TestRebalanceGivenUpThenDrainAsksAgain(t *testing.T) {
+	d, s, sink, _, inv, drain := movingSession(t)
+	d.moveBound = 100 * time.Millisecond
+	s.rebalance = make(chan struct{})
+	ctx, stop := context.WithCancel(t.Context())
+	watched := make(chan struct{})
+	go func() { defer close(watched); _ = d.WatchAgentSession(ctx, "agent-1", s, inv, make(chan error)) }()
+	defer func() { stop(); <-watched }()
+	if got := d.rebalanceAgents(0, 2); got != 1 {
+		t.Fatalf("asked %d, want 1", got)
+	}
+	waitMove(t, "MOVE_RECONNECT", func() bool { return len(sink.steps()) == 1 })
+	waitMove(t, "the move given up", func() bool { return !s.moving.Load() })
+	drain()
+	waitMove(t, "a second MOVE_RECONNECT", func() bool { return len(sink.steps()) == 2 })
+	if steps := sink.steps(); steps[1] != pb.Move_MOVE_RECONNECT {
+		t.Fatalf("steps %v, want a second MOVE_RECONNECT", steps)
+	}
+}
+
 // TestRebalanceMoveLateConnectedGoesOn: an agent whose new connection is
 // accepted after the move was given up (its own bound runs from its
 // receipt of MOVE_RECONNECT) has its record taken by the new session; the
