@@ -432,16 +432,7 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 		md = metadata.Join(md, d.Link.ask(stream.Context(), as))
 	}
 
-	d.Mu.Lock()
-	d.Streams[agentID] = as
-	d.All[agentID] = append(d.All[agentID], as)
-	d.bound[as.token] = as
-	if traceOn {
-		traceHRegister(d, as)
-	}
-	close(d.registered)
-	d.registered = make(chan struct{})
-	d.Mu.Unlock()
+	d.enterRotation(agentID, as)
 	// The header goes out once the token binds: the agent dials at once.
 	// Sessions placed here meanwhile only queue (the sender starts below).
 	_ = stream.SendHeader(md)
@@ -458,6 +449,32 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 	recvDone := make(chan error, 1)
 	go func() { recvDone <- d.recvLoop(as, stream, onControl) }()
 	return d.sendLoop(agentID, as, stream, recvDone)
+}
+
+// enterRotation adds the primary as to the agent's rotation here, in
+// session order (directory.Session.Newer; registration order on a tie): it
+// takes new sessions unless a newer session's primary is here, which an
+// older session's slower claim must not displace (relay-server
+// spec/README.md finding R9; Replicas.tla Register and Routing,
+// TestReplicasModelWalks), and wakes the opens waiting for a registration.
+func (d *TCPDispatcher) enterRotation(agentID string, as *tcpAgentStream) {
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
+	if cur := d.Streams[agentID]; cur == nil || !cur.session.Newer(as.session) {
+		d.Streams[agentID] = as
+	}
+	all := d.All[agentID]
+	i := slices.IndexFunc(all, func(s *tcpAgentStream) bool { return s.primary == nil && s.session.Newer(as.session) })
+	if i < 0 {
+		i = len(all)
+	}
+	d.All[agentID] = slices.Insert(all, i, as)
+	d.bound[as.token] = as
+	if traceOn {
+		traceHRegister(d, as)
+	}
+	close(d.registered)
+	d.registered = make(chan struct{})
 }
 
 // RegisterAuxStream serves a stream an agent opened on an auxiliary

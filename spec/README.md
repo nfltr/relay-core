@@ -639,14 +639,14 @@ replay found finding 36. Regenerate the walks when the spec changes.
 | Each store call (GET, SET, DEL, INCRBY) is atomic and linearizable; `PutSession`'s renew and `DeleteSession` are two calls each, modelled apart in `DirectoryHeal.cfg` (finding 38) | Redis docs, "Transactions" (single commands are atomic); `MemoryCache` (one mutex) |
 | A key expires at its TTL after its last write; a counter (`seqTTL`, 30 days) outlives every record | Redis `EXPIRE`; `MemoryCache.liveLocked` |
 | A store that restarts empty loses records and counters together (`StoreLoss`, once) | Redis without persistence; relay-server finding R7 |
-| Start times (`Since`) of an agent's sessions are distinct; their order only breaks a Seq tie, so a skewed clock picks which of two tied sessions yields, never whether one does | `Session.newer` |
+| Start times (`Since`) of an agent's sessions are distinct; their order only breaks a Seq tie, so a skewed clock picks which of two tied sessions yields, never whether one does | `Session.Newer` |
 | A session has a Seq unless its claim's counter step failed (`ClaimNoSeq`, the streamer's record only: ConnectTCP's claim is not fatal); a record with neither Seq nor start time (the relay's own agent's `SetIP`) is not modelled | `ClaimSession`, `dispatcher_tcp.go` |
 
 ### Code map (drift check)
 
 | what the spec models | file |
 |---|---|
-| `ClaimSession`, `nextSeq`, `PutSession` (renew), `DeleteSession`, `Session.newer`, `seqKey` | `core/directory/session.go` |
+| `ClaimSession`, `nextSeq`, `PutSession` (renew), `DeleteSession`, `Session.Newer`, `seqKey` | `core/directory/session.go` |
 | `MemoryCache` (`Get`, `Set`, `Del`, `Incr`, expiry): the store the walks run on | `core/directory/memory.go` |
 
 ## Layer contract: what the layer above may assume
@@ -680,7 +680,10 @@ Code against model, both ways: `Directory` by replaying TLC's walks on
 the store (`TestDirectoryModelWalks`); `AgentLink`, `Handoff`, `Move` and
 `Presence` by trace validation of the real code's runs (a replay of
 their walks would drive gRPC streams, timers and the agent from outside;
-the traces check the same steps where they happen). `scripts/spec.sh
+the traces check the same steps where they happen). relay-server's
+`Replicas.tla` (the directory records and the dispatcher's routing across
+replicas) by replaying its walks on this module's code
+(`TestReplicasModelWalks`, below). `scripts/spec.sh
 actions` (in `make spec`) keeps the action tables complete both ways and
 fails on an event a trace module takes that no Go records.
 
@@ -1468,3 +1471,24 @@ relay link connection never outlives every primary holding its token.
     compare-and-set or compare-and-delete step in `directory.Cache` (a
     Redis script in relay-server's store), a contract change for the
     relay-server lane; `DirectoryHeal.cfg` then drops `TwoStep`.
+39. **An older session's primary that registered last took the agent's
+    new sessions on its replica** (code, low; relay-server
+    `spec/README.md` finding R9, lane XREPO3). Found by
+    `TestReplicasModelWalks` (core/session): relay-server
+    `spec/ReplicasWalk.tla`'s walks (`spec/testdata/replicas-walks.ndjson`,
+    70 walks, 1,871 steps, made by relay-server's `scripts/spec.sh walks`)
+    replayed on two replicas' `TCPDispatcher`s and streamer records over
+    one `MemoryCache`, each record SET and DEL held to its own step as in
+    the model; after every step the record, the Seq counter, every
+    connection's Seq, phase and pending write, each replica's routing
+    (`agentStream`) and every session's outcome must be the model's. Two
+    connections of the agent to one replica, the older one's claim slower:
+    `RegisterStream` made it the stream new sessions go to, the
+    connection the agent was replacing. Fixed: `enterRotation` keeps the
+    primaries in session order (`directory.Session.Newer`, exported for
+    it; a tie by registration, as before). The replay fails on the code
+    before. Not driven by the replay: `HandleConn`/`ServeLinkTCP` I/O,
+    `streamFor`'s wait, the replica link and `sendLoop`'s timers (their
+    decisions come from `agentStream`, `GetIP` and `yield`, which it
+    runs). The replay also found relay-server finding R8 (its spec's
+    renewal missed this module's finding 13 counter read).

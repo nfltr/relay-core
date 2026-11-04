@@ -64,7 +64,7 @@ type SessionStore interface {
 	// PutSession writes the agent's record for this pod's session s. With
 	// renew it first reads the record and writes nothing, returning
 	// ErrSuperseded, when the record names another pod's session that is
-	// newer than s (Session.newer), or there is none and the agent's Seq
+	// newer than s (Session.Newer), or there is none and the agent's Seq
 	// counter is past s's.
 	PutSession(ctx context.Context, agentID string, s Session, renew bool, labels map[string]string, capabilities []string, expiration time.Duration) error
 	// ClaimSession starts this pod's session s of the agent: it takes the
@@ -100,7 +100,7 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 		// ponytail: get-then-set, not atomic; a session that loses the
 		// microsecond race is corrected by the newer one's next renewal.
 		v, err := d.inventory.Get(ctx, key)
-		if err == nil && v != nil && recordSession(v).newer(s) {
+		if err == nil && v != nil && recordSession(v).Newer(s) {
 			if v.PodIP != GetPodIP() {
 				return ErrSuperseded
 			}
@@ -202,11 +202,11 @@ func (d *ipInventory) nextSeq(ctx context.Context, agentID string) (int64, error
 	return seq, nil
 }
 
-// newer reports whether a is a later session of the agent than b: by their
+// Newer reports whether a is a later session of the agent than b: by their
 // Seqs when both have one, an equal Seq (a store that restarted empty gave
 // it twice: relay-server spec/README.md finding R7) or none by their start
 // times.
-func (a Session) newer(b Session) bool {
+func (a Session) Newer(b Session) bool {
 	if a.Seq != 0 && b.Seq != 0 && a.Seq != b.Seq {
 		return a.Seq > b.Seq
 	}
