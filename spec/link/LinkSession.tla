@@ -1,6 +1,6 @@
-\* A copy of github.com/nfltr/link spec/LinkSession.tla (the session
-\* interface); scripts/spec.sh checks it equals the link module's copy
-\* once the required link version carries one. Do not edit here.
+\* github.com/nfltr/link spec/LinkSession.tla for link versions before it
+\* carried one (v0.12.1): scripts/spec.sh reads the required link's when it
+\* has one. Delete this directory once go.mod requires link v0.12.2 or later.
 ----------------------------- MODULE LinkSession -----------------------------
 (* What a layer above link may assume of its sessions: the interface.      *)
 (* Link.tla (the protocol as the Go code implements it) refines it: TLC    *)

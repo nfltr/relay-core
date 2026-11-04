@@ -44,7 +44,7 @@ tlc() {
 	shift 2
 	cov=
 	[ -z "${COVERAGE:-}" ] || cov="-coverage 1"
-	(cd spec && "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-4}" $cov \
+	(cd spec && "$java" -XX:+UseParallelGC -DTLA-Library="$linkspec" -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-4}" $cov \
 		-deadlock -noGenerateSpecTE -metadir "${META:-$work/states}" -config "$c" "$@" "$mod")
 }
 
@@ -123,16 +123,10 @@ CFG
 }
 
 # LinkSession.tla is link's (spec/README.md "The link session interface"):
-# once the required link module carries it, the copy here must be the same.
-linksession() {
-	dir=$(go list -m -f '{{.Dir}}' github.com/nfltr/link 2>/dev/null) || dir=
-	if [ -n "$dir" ] && [ -f "$dir/spec/LinkSession.tla" ]; then
-		tail -n +4 spec/LinkSession.tla | cmp -s - "$dir/spec/LinkSession.tla" || {
-			echo "spec/LinkSession.tla differs from $dir/spec/LinkSession.tla: copy link's"
-			exit 1
-		}
-	fi
-}
+# TLC reads it from the required link module, so a link spec change never
+# leaves a stale copy here; spec/link/ only for a link without one (v0.12.1).
+linkspec=$(go list -m -f '{{.Dir}}' github.com/nfltr/link)/spec
+[ -f "$linkspec/LinkSession.tla" ] || linkspec=$PWD/spec/link
 
 # htrace FILE: TLC on one recorded Handoff trace (spec/TraceHandoff.tla); 0 when accepted.
 htrace() {
@@ -237,7 +231,6 @@ checktraces() {
 
 case ${1:-} in
 check)
-	linksession
 	# AgentLink.cfg's Refines is the nightly's (it triples the run); in CI
 	# AgentLinkIface.cfg checks it on fewer bytes.
 	sed '/^PROPERTY Refines/d' spec/AgentLink.cfg >"$work/AgentLink.cfg"
