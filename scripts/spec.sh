@@ -327,8 +327,9 @@ mutants)
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'
 	expect Handoff.cfg Handoff.tla keep-conns -e "$m"'keep-conns"/'
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'
-	# Handoff.tla: carriesSessions (HO-3), QUIC silence (HO-2); witnesses.
-	for b in count-per-primary carries-newest quic-silent-ends; do
+	# Handoff.tla: carriesSessions (HO-3), QUIC silence (HO-2), a parked link's
+	# answers (finding 42); witnesses.
+	for b in count-per-primary carries-newest quic-silent-ends park-primary-ctx; do
 		expect Handoff.cfg Handoff.tla "$b" -e "$m$b\"/"
 	done
 	expect Handoff.cfg Handoff.tla witness:link-open -e 's/^    PlacedOnLive$/    WitnessLinkOpen/'
@@ -336,6 +337,7 @@ mutants)
 	expect Handoff.cfg Handoff.tla witness:resumed -e 's/^    NoOrphanLink$/    WitnessResumed/'
 	expect Handoff.cfg Handoff.tla witness:carry-old -e 's/^    CarriesExact$/    WitnessCarryOld/'
 	expect Handoff.cfg Handoff.tla witness:silent -e 's/^    SilenceOnDeadPath$/    WitnessSilent/'
+	expect Handoff.cfg Handoff.tla witness:parked-open -e 's/^    LinkOpensAnswered$/    WitnessParkedOpen/'
 	# The code's races (spec/README.md "Findings").
 	expect AgentLink.cfg MCAgentLink.tla inproc-closewrite -e "$m"'inproc-closewrite"/'
 	expect AgentLinkWrite.cfg MCAgentLink.tla inproc-enqueue-blocks -e "$m"'inproc-enqueue-blocks"/'

@@ -276,6 +276,9 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
   they opened through.
 - `SilenceOnDeadPath`: a link's silence ends a primary only when the
   agent's TCP path is dead (finding 17).
+- `LinkOpensAnswered`: an open the relay placed on the link is answered
+  by the agent, also on a link in the agent's park between two primaries;
+  only an open with no stream for it is refused (finding 42).
 
 A session's end is one of `done` (its apps), `lost` (its primary ended
 under it), `cut` (its link connection closed) or `refused` (no stream);
@@ -289,10 +292,12 @@ Mutants (`make spec-mutants`): `attach-ended` (`PlacedOnLive`),
 `keep-conns` (`NoOrphanLink`), `wait-forever` (`Placed`),
 `count-per-primary`, `carries-newest` (`CarriesExact`, finding 18: the
 code before), `quic-silent-ends` (`SilenceOnDeadPath`, finding 17: the
-code before). Witnesses, each violated: `WitnessLinkOpen`,
+code before), `park-primary-ctx` (`LinkOpensAnswered`, finding 42: the
+agent's code before). Witnesses, each violated: `WitnessLinkOpen`,
 `WitnessFallback` (`PlacedOnLive`), `WitnessResumed` (`NoOrphanLink`),
 `WitnessCarryOld` (`CarriesExact`: a link session outlives the primary it
-opened through), `WitnessSilent` (`SilenceOnDeadPath`). `COVERAGE=1`
+opened through), `WitnessSilent` (`SilenceOnDeadPath`), `WitnessParkedOpen`
+(`LinkOpensAnswered`: a session opens on a parked link). `COVERAGE=1`
 takes every action.
 
 Trace validation (`make spec-traces`, `TraceHandoff.tla`): see "Trace
@@ -311,6 +316,7 @@ model (tokens are secrets; defence in depth); its guard is
 | link/TCP and the frame streams share the agent's TCP path; link/QUIC rides UDP, a path that fails apart (UDP blocked, shorter NAT UDP timeouts) | RFC 9000 §10.1 (QUIC idle timeout), RFC 4787 REQ-5 (UDP mapping timeout) |
 | A dead peer is detected by link's ping liveness on link/TCP, QUIC's idle timeout on QUIC, heartbeats on the frame streams | link `Liveness`; quic-go `MaxIdleTimeout`; `HeartbeatRecvThreshold` |
 | `node.Open` can fail (GOAWAY drain, close, `agentLinkDialWait`); the caller then attaches | peerlink `Node.Open`; `agentLink.open` |
+| An agent whose primary ended registers its next one on a working connection (`Register` is not forced: the model refuses opens offline meanwhile, as designed) | relay `client/agent` `runWithReconnect` (each cycle's TCP tunnel on that cycle's connection: `TestAgentTCPTunnelFollowsReconnect`, finding 42) |
 
 ### Code map (drift check)
 
@@ -1513,3 +1519,21 @@ relay link connection never outlives every primary holding its token.
     wins) and the next flush is armed; a kept use whose reservation has
     passed is not sent again (`TestShareUsesKeepsUsesAFailedSendDid`,
     which fails without it).
+42. **An open on a parked agent link was refused** (model gap, agent code,
+    fixed; lane RECONNFLAKE). relay-server `relaytest`
+    `TestAgentLinkSurvivesReconnect` went red on the Linux runner 2026-10-28
+    and 10-29 (4 runs): (a) an open the relay placed on the QUIC link after
+    the agent's primary ended was refused, application code 40, "dial tcp:
+    operation was canceled": the agent's link sessions dialled their target
+    in the ended primary's tunnel context (`Config.Drain`); (b) the agent's
+    next primary never registered ("agent is not connected after 500ms"):
+    `runWithReconnect` shadowed its client, so the next cycle's TCP tunnel
+    ran on the closed connection. `Handoff.tla` reached neither as a
+    violation: it took every placed link open as answered, and leaves the
+    agent's reconnect to the environment. Both fixed in relay client by
+    v0.19.12 (`newLinkSessions` dials in `park.ctx`:
+    `TestLinkSessionsDialPastThePrimary`; `TestAgentTCPTunnelFollowsReconnect`);
+    0 of 242 relay-server runner runs red on it since. The model now states
+    (a): `OnLinkOr`'s answer, `LinkOpensAnswered`, mutant
+    `park-primary-ctx`, witness `WitnessParkedOpen`; (b) is the environment
+    assumption "an agent whose primary ended registers its next one".

@@ -201,9 +201,12 @@ Attach(s, p) ==
 
 \* agentLink.open on p's token: the link, counted on p; or, when node.Open
 \* fails (the connection draining after GOAWAY or closing, the dial wait),
-\* the frame streams (handleLocalConn's attach).
+\* the frame streams (handleLocalConn's attach). The agent answers a link
+\* session in its own context, also on a link in the park (newLinkSessions:
+\* park.ctx); the bug (park-primary-ctx, RECONNFLAKE): it dialled the
+\* target in its ended primary's context and refused the open.
 OnLinkOr(s, p) ==
-    \/ /\ sst' = [sst EXCEPT ![s] = "open"]
+    \/ /\ sst' = [sst EXCEPT ![s] = IF Mutant = "park-primary-ctx" /\ pk = tok[p] THEN "refused" ELSE "open"]
        /\ via' = [via EXCEPT ![s] = "link"]
        /\ on' = [on EXCEPT ![s] = tok[p]]
        /\ by' = [by EXCEPT ![s] = p]
@@ -279,6 +282,10 @@ Carries ==
     ELSE \E g \in Gens : prim[g] = "up" /\ CarriesOn(g)
 CarriesExact == Carries <=> \E s \in Sess : sst[s] = "open"
 
+\* An open the relay placed on the link is answered by the agent: only
+\* one with no stream for it is refused (finding 42).
+LinkOpensAnswered == \A s \in Sess : sst[s] = "refused" => via[s] # "link"
+
 \* A primary ends for its link's silence only when its TCP path is dead:
 \* a QUIC link's silence says nothing of TCP (finding HO-2).
 SilenceOnDeadPath == \A g \in Gens : sil[g] => ~tcpUp
@@ -295,4 +302,5 @@ WitnessResumed == ~\E g \in Gens : resumed[g] /\ prim[g] = "ended" /\ conn[tok[g
 WitnessCarryOld == ~\E s \in Sess : sst[s] = "open" /\ via[s] = "link" /\ prim[by[s]] = "ended" \* CarriesExact
 WitnessFallback == ~\E s \in Sess : sst[s] = "open" /\ via[s] = "grpc" /\ conn[tok[on[s]]] \* PlacedOnLive (HO-4)
 WitnessSilent == ~\E g \in Gens : sil[g]                                                \* SilenceOnDeadPath
+WitnessParkedOpen == ~\E s \in Sess : sst[s] = "open" /\ via[s] = "link" /\ on[s] = pk   \* LinkOpensAnswered
 =============================================================================
