@@ -23,6 +23,7 @@ CONSTANTS R,          \* the replicas
           MaxResync,  \* resubscriptions in all
           Crash,      \* a replica may crash (its records expire, finding 12)
           MaxFail,    \* directory writes that fail (finding 27)
+          InFlight,   \* an update is received, then applied (finding 14)
           Mutant      \* "none", or a bug put back (spec/README.md)
 
 Lab == {"l0", "l1"}       \* l0: the connect labels; l1: an update
@@ -50,11 +51,15 @@ VARIABLES
     late,   \* replica -> a release failed: a down is due once the record's
             \* TTL has passed (finding 27)
     fails,  \* directory writes failed so far
-    gone    \* the replicas whose feed resyncs once a crashed replica's
+    gone,   \* the replicas whose feed resyncs once a crashed replica's
             \* records expired (finding 12)
+    uq,     \* replica -> the session (seq) whose update request was received
+            \* there and is not yet applied (0: none; InFlight, finding 14)
+    sent    \* the sessions that sent an update (history)
 
-vars == <<live, st, seqs, top, upds, rec, rd, pw, pub, due, bus, sub, rs, wpc, view, stale, late, fails, gone>>
-recv == <<rd, pw, stale, late, fails, gone>>
+vars == <<live, st, seqs, top, upds, rec, rd, pw, pub, due, bus, sub, rs, wpc, view, stale, late, fails, gone, uq, sent>>
+recv == <<rd, pw, stale, late, fails, gone, uq, sent>>
+updv == <<uq, sent>>
 feedv == <<due, bus, sub, rs>>
 watchv == <<wpc, view>>
 
@@ -77,6 +82,7 @@ Init ==
     /\ view = [r \in W |-> None]
     /\ stale = [r \in R |-> FALSE] /\ late = [r \in R |-> FALSE] /\ fails = 0
     /\ gone = {}
+    /\ uq = [r \in R |-> 0] /\ sent = {}
 
 (* ---------------- the feed and the bus ----------------------------------- *)
 
@@ -162,6 +168,7 @@ Connect(r) ==
     /\ rd' = [rd EXCEPT ![r] = "-"] /\ pw' = [pw EXCEPT ![r] = "-"]
     /\ stale' = [stale EXCEPT ![r] = FALSE]
     /\ UNCHANGED <<live, upds, late, fails, gone, feedv, watchv>>
+    /\ UNCHANGED updv
 
 
 \* Mutant shared-counter (finding 34, the code before): a claim of the
@@ -185,6 +192,7 @@ End(r) ==
        /\ pub' = [pub EXCEPT ![r] = TRUE]
        /\ stale' = [stale EXCEPT ![r] = FALSE]
        /\ UNCHANGED <<live, seqs, top, upds, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED updv
 
 \* The release fails (finding 27): the record stays, naming an ended
 \* session, until its TTL; every replica lists the agent meanwhile. The
@@ -200,6 +208,7 @@ EndFail(r) ==
     /\ stale' = [stale EXCEPT ![r] = FALSE]
     /\ late' = [late EXCEPT ![r] = Mutant # "no-late-down"]
     /\ UNCHANGED <<live, seqs, top, upds, rec, feedv, watchv, gone>>
+    /\ UNCHANGED updv
 
 \* A record naming no stream of a live replica (a failed release's) is
 \* gone once its TTL passed.
@@ -209,6 +218,7 @@ LateDown(r) ==
     /\ late[r] /\ live[r] /\ ~(Leftover /\ rec.pod = r)
     /\ late' = [late EXCEPT ![r] = FALSE] /\ pub' = [pub EXCEPT ![r] = TRUE]
     /\ UNCHANGED <<live, st, seqs, top, upds, rec, rd, pw, stale, fails, feedv, watchv, gone>>
+    /\ UNCHANGED updv
 
 \* The store loses a live session's record (Redis restarted empty, or the
 \* renewals failed past its TTL): the replica's epoch tick (5 s) sees the
@@ -221,6 +231,7 @@ Lose ==
        /\ rec' = [on |-> FALSE, pod |-> "-", seq |-> 0, lab |-> "-"]
        /\ stale' = [stale EXCEPT ![p] = TRUE]
        /\ UNCHANGED <<live, st, seqs, top, upds, rd, pw, late, pub, feedv, watchv, gone>>
+    /\ UNCHANGED updv
 
 \* renewAgentRecord's check: a newer session on another pod holds the
 \* record, or (the design) no record is there and the store's Seq counter
@@ -247,6 +258,7 @@ Renew(r) ==
             /\ pub' = [pub EXCEPT ![r] = pub[r] \/ (stale[r] /\ Mutant # "silent-rewrite")]
             /\ UNCHANGED rd
     /\ UNCHANGED <<live, st, seqs, top, upds, pw, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED updv
 
 RenewWrite(r) ==
     /\ live[r] /\ st[r].on /\ rd[r] # "-"
@@ -254,18 +266,14 @@ RenewWrite(r) ==
     /\ rec' = IF Superseded(r) THEN rec
               ELSE [on |-> TRUE, pod |-> r, seq |-> st[r].seq, lab |-> rd[r]]
     /\ UNCHANGED <<live, st, seqs, top, upds, pw, pub, stale, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED updv
 
 \* The renewal finding a newer session elsewhere ends the stream (End).
 Supersede(r) == live[r] /\ st[r].on /\ Superseded(r) /\ End(r)
 
-\* UpdateLabels from the agent's stream on r (UpdateAgentLabels). The
-\* design: under the stream's record lock, the fenced renewal write with
-\* the new labels (refused when superseded), the stream's labels, then the
-\* publish. Mutant unfenced-label-write (the code): SetIPWithAgentInfo, a
-\* record naming no session (finding 8). Mutant publish-before-write.
-Update(r, l) ==
-    /\ live[r] /\ st[r].on /\ upds < MaxUpd /\ pw[r] = "-"
-    /\ upds' = upds + 1
+\* The update's write and publish (UpdateAgentLabels) of labels l.
+Apply(r, l) ==
+    /\ pw[r] = "-"
     /\ CASE Mutant = "unfenced-label-write" ->
               /\ rec' = [on |-> TRUE, pod |-> r, seq |-> 0, lab |-> l]
               /\ st' = [st EXCEPT ![r].lab = l] /\ pub' = [pub EXCEPT ![r] = TRUE]
@@ -281,6 +289,36 @@ Update(r, l) ==
               /\ UNCHANGED pw
     /\ UNCHANGED <<live, seqs, top, rd, stale, late, fails, feedv, watchv, gone>>
 
+\* UpdateLabels from the agent's stream on r (UpdateAgentLabels). The
+\* design: under the stream's record lock, the fenced renewal write with
+\* the new labels (refused when superseded), the stream's labels, then the
+\* publish. Mutant unfenced-label-write (the code): SetIPWithAgentInfo, a
+\* record naming no session (finding 8). Mutant publish-before-write.
+Update(r, l) ==
+    /\ ~InFlight /\ live[r] /\ st[r].on /\ upds < MaxUpd
+    /\ upds' = upds + 1 /\ sent' = sent \cup {st[r].seq}
+    /\ Apply(r, l)
+    /\ UNCHANGED uq
+
+\* InFlight (finding 14): serveUpdateLabels received the request on the
+\* agent's stream of session uq[r]; UpdateAgentLabels applies it only to
+\* that session's stream (RoutingInfo.source_session): a newer connection
+\* that replaced it here (Connect) refuses it. Mutant update-by-agent: it
+\* is applied to whatever stream of the agent is here (the code before).
+UpdateRecv(r) ==
+    /\ InFlight /\ live[r] /\ st[r].on /\ upds < MaxUpd /\ uq[r] = 0
+    /\ upds' = upds + 1 /\ sent' = sent \cup {st[r].seq}
+    /\ uq' = [uq EXCEPT ![r] = st[r].seq]
+    /\ UNCHANGED <<live, st, seqs, top, rec, rd, pw, pub, stale, late, fails, feedv, watchv, gone>>
+
+UpdateApply(r, l) ==
+    /\ InFlight /\ live[r] /\ uq[r] # 0
+    /\ uq' = [uq EXCEPT ![r] = 0]
+    /\ IF st[r].on /\ (uq[r] = st[r].seq \/ Mutant = "update-by-agent")
+       THEN Apply(r, l)
+       ELSE UNCHANGED <<live, st, seqs, top, rec, rd, pw, pub, stale, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED <<upds, sent>>
+
 \* The update's write fails (finding 27): the stream's labels change and
 \* are published (this replica lists them), the record keeps the old ones
 \* until a renewal lands, which publishes (stale).
@@ -290,12 +328,14 @@ UpdateFail(r, l) ==
     /\ st' = [st EXCEPT ![r].lab = l] /\ pub' = [pub EXCEPT ![r] = TRUE]
     /\ stale' = [stale EXCEPT ![r] = TRUE]
     /\ UNCHANGED <<live, seqs, top, rec, rd, pw, late, feedv, watchv, gone>>
+    /\ sent' = sent \cup {st[r].seq} /\ UNCHANGED uq
 
 UpdateWrite(r) ==
     /\ live[r] /\ pw[r] # "-" /\ ~pub[r]
     /\ pw' = [pw EXCEPT ![r] = "-"]
     /\ rec' = [on |-> TRUE, pod |-> r, seq |-> st[r].seq, lab |-> pw[r]]
     /\ UNCHANGED <<live, st, seqs, top, upds, rd, pub, stale, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED updv
 
 \* A replica crashes: its streams vanish with no release and no down; its
 \* records expire at their TTL (Expire), publishing nothing (finding 12).
@@ -310,6 +350,7 @@ CrashR(r) ==
     /\ stale' = [stale EXCEPT ![r] = FALSE] /\ late' = [late EXCEPT ![r] = FALSE]
     /\ gone' = IF Mutant = "no-crash-resync" THEN gone ELSE gone \cup (R \ {r})
     /\ UNCHANGED <<seqs, top, upds, rec, fails, feedv, watchv>>
+    /\ UNCHANGED updv
 
 \* A replica's resync a record TTL after it saw a crashed replica's marker
 \* expire: a new feed epoch, every cursor answers reset.
@@ -317,6 +358,7 @@ Sweep(q) ==
     /\ q \in gone /\ live[q] /\ ~(rec.on /\ rec.pod \in R /\ ~live[rec.pod])
     /\ gone' = gone \ {q} /\ due' = [due EXCEPT ![q] = TRUE]
     /\ UNCHANGED <<live, st, seqs, top, upds, rec, rd, pw, pub, stale, late, fails, bus, sub, rs, watchv>>
+    /\ UNCHANGED updv
 
 Expire ==
     /\ rec.on /\ rec.pod \in R /\ (~live[rec.pod] \/ Leftover)
@@ -358,7 +400,7 @@ Next ==
                     \/ EndFail(r) \/ LateDown(r) \/ UpdateFail(r, "l1") \/ Sweep(r) \/ Drop(r) \/ Resubscribe(r)
                     \/ Connect(r) \/ End(r) \/ Renew(r) \/ RenewWrite(r)
                     \/ Supersede(r) \/ UpdateWrite(r) \/ CrashR(r)
-                    \/ Update(r, "l1")
+                    \/ Update(r, "l1") \/ UpdateRecv(r) \/ UpdateApply(r, "l1")
     \/ \E r \in W : Wake(r) \/ Cursor(r) \/ Snap(r)
     \/ Expire \/ Lose \/ OtherClaim
 
@@ -396,6 +438,12 @@ Owed(r) ==
 Stale(r) == wpc[r] = "idle" /\ view[r] # Listing(r)
 
 NoSilentStale == \A r \in W : Stale(r) => Owed(r)
+
+\* A stream's labels change only by an update its own session sent
+\* (finding 14: not one received on the connection it replaced).
+OwnUpdate == \A r \in R : st[r].on /\ st[r].lab = "l1" => st[r].seq \in sent
+\* Witness: an update in flight from a connection a newer one replaced.
+WitnessUpdateReplaced == ~\E r \in R : uq[r] # 0 /\ st[r].on /\ uq[r] # st[r].seq
 
 \* Witnesses (make spec-mutants): each must be violated, so the states
 \* NoSilentStale guards are reached: a watcher's snapshot stale (owed a

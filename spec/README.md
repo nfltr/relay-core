@@ -468,7 +468,7 @@ relay-core v0.7.2, which has none of them; review r2 F8).
 |---|---|
 | `Connect`, `End`, `Supersede` | `ConnectAgentTunnel`: `claimAgentRecord`, `notifyUpstreamRegistered`; `ConnectHTTP` (`Presence.up` after `Agents.Store`; `DeregisterAgent`), `ConnectTCP`; their teardowns `releaseAgentRecord`, `departed`, `publishDeparture`; a renewal's `directory.ErrSuperseded` |
 | `Renew` (`RenewWrite`) | `refreshAgentInventoryOnInboundActivity`, `renewAgentRecord`, `PutSession` renew |
-| `Update` (`UpdateWrite`) | `UpdateAgentLabels` (relay-server `serveUpdateLabels`) |
+| `Update` (`UpdateWrite`); with `InFlight` `UpdateRecv`, `UpdateApply` | `UpdateAgentLabels` (relay-server `serveUpdateLabels`); the request received on a stream (`rpcclient.SourceSession`), applied under the stream's record lock only to that session (finding 14) |
 | `Publish`, `PublishFail`, `Deliver` | `presenceOutbox` (`publish`, `requeue` on a failed send), `BindBus`'s subscriber: `bump` |
 | `Drop`, `Resubscribe` | Redis dropping a subscriber, go-redis resubscribing; redisbus's empty payload, `presenceFeed.resync` |
 | `Wake`, `Cursor`, `Snap` | `presenceFeed.Watch` answering, `ListAgents` (`Presence.Cursor`, `myAgents`) or `handleMyAgents` |
@@ -503,8 +503,9 @@ the old teardown's steps against the new connect changes only the
 events' contents (an up folded into a down), never whether a wake is
 owed, so the model keeps one stream per replica and the contents are
 the consumer's (finding 28, F6). Finding 14 (an update in flight from
-the replaced connection) needs the update to name its session, a relay
-proto change (lane W5-RELAY). `PresenceLive.cfg` (`make spec-liveness`, 57 s) checks `Woken`
+the replaced connection, applied after the replacement) is `InFlight`'s
+`UpdateRecv` and `UpdateApply`, fenced by the session the request came on
+(`OwnUpdate`). `PresenceLive.cfg` (`make spec-liveness`, 57 s) checks `Woken`
 under weak fairness on the feed's steps (`Publish`, `Deliver`,
 `Resubscribe`, `Wake`, `Cursor`, `Snap`): a stale watcher is woken, or
 the listing comes back to its snapshot. Mutants (`make spec-mutants`),
@@ -1043,11 +1044,16 @@ acknowledgement, and `inproc-enqueue-blocks`).
     it except as an opaque number on calls it receives (older agents skip
     it). Guards: `TestUpdateAgentLabelsFromAReplacedConnection`,
     `TestDispatcher_dispatchAgentToAgent_StampsAuthenticatedSourceAgentID`,
-    relay-server `TestServeUpdateLabels*`. Open: `Presence.tla` has
-    same-replica replacement (F9) but takes `Update` atomically on the
-    current stream, so no mutant guards this yet; the model needs an
-    update request received on the old session and applied after
-    `Connect` (mutant: applied by agent, not session).
+    relay-server `TestServeUpdateLabels*`. Modelled (lane
+    CONFORM-relay-core): with `InFlight` (`Presence.cfg`) an update is
+    received on a stream (`UpdateRecv`, the session it came on) and
+    applied later (`UpdateApply`), only to that session's stream; a
+    `Connect` between them replaces the stream and the update is
+    refused. Invariant `OwnUpdate` (a stream's labels change only by an
+    update its own session sent); mutant `update-by-agent` (the code
+    before: applied to whatever stream of the agent is here); witness
+    `WitnessUpdateReplaced`. Traces keep the atomic `Update`
+    (`InFlight = FALSE`: the recorder logs the applied update).
 15. **A lost or aborted session reached the client as a clean end** (code,
     Linux runner flake of
     `TestTCPTunnelEndAckStreamLossResetsHalfClosedClient/endpoint`, and

@@ -183,6 +183,7 @@ CONSTANTS
     MaxResync <- TraceMaxResync
     MaxFail <- TraceMaxFail
     Crash = FALSE
+    InFlight = FALSE
     Mutant = "none"
 INIT TraceInit
 NEXT TraceNext
@@ -316,6 +317,9 @@ mutants)
 	expect Presence.cfg Presence.tla witness:stale -e 's/^    NoSilentStale$/    WitnessStale/'
 	expect Presence.cfg Presence.tla witness:remote-update -e 's/^    NoSilentStale$/    WitnessRemoteUpdate/'
 	expect Presence.cfg Presence.tla witness:superseded -e 's/^    SupersededByNewer$/    WitnessSuperseded/'
+	# Finding 14: an update received on a replaced connection.
+	expect Presence.cfg Presence.tla update-by-agent -e "$m"'update-by-agent"/'
+	expect Presence.cfg Presence.tla witness:update-replaced -e 's/^    OwnUpdate$/    WitnessUpdateReplaced/'
 	expect Presence.cfg Presence.tla witness:replaced -e 's/^SPECIFICATION Spec$/SPECIFICATION Spec PROPERTY WitnessReplaced/'
 	# The wake is paid only if the feed's steps go on (finding 26); no
 	# failed writes, to keep these quick.
