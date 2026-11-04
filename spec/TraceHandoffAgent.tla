@@ -51,9 +51,11 @@ UPathDown == Unl /\ PathDown
 UPark == Unl /\ Park
 \* The session the agent takes next arrives, and waits for a dial; the
 \* trace's sessions are all link sessions, so none other is placed. Before
-\* a dial the agent logs, a session of the trace may arrive and wait: the
-\* relay asks for a dial only for a waiting session (Place).
-Waits(s) == (E.ev = "Open" /\ s = E.s) \/ E.ev = "Dial"
+\* a dial the agent logs, the next session it takes may arrive and wait:
+\* the relay asks for a dial only for a waiting session (Place).
+Opens == {i \in l..Len(Log) : Log[i].ev = "Open"}
+NextOpen == IF Opens = {} THEN "" ELSE Log[CHOOSE i \in Opens : \A j \in Opens : i <= j].s
+Waits(s) == s = IF E.ev = "Dial" THEN NextOpen ELSE IF E.ev = "Open" THEN E.s ELSE ""
 UArrive == Unl /\ \E s \in Sess : Waits(s) /\ Arrive(s)
 UWait == Unl /\ \E s \in Sess : Waits(s) /\ Place(s) /\ sst'[s] = "wait"
 

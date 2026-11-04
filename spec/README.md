@@ -829,9 +829,8 @@ Each line is written under the lock that orders its change
 relay's steps (`PrimEnd`, a bind of the Node's own redial, drops,
 silences), the path's failure, the park of the link `AgentEnd` took off
 its primary (`Park`, finding 43) and the arrival (and dial wait) of the
-session the agent takes next, or of a session of the trace before a
-`Dial` line (the relay asks for a dial only for a waiting session), are
-not logged: TLC chooses them. `make
+session the agent takes next (also before a `Dial` line: the relay asks
+for a dial only for a waiting session) are not logged: TLC chooses them. `make
 spec-traces` checks every agent trace of the `HANDOFF_TESTS` (the real
 agent against the real relay) with Handoff's five invariants, after
 checking that `spec/testdata/reject-hagent-adopt-after-end.ndjson`
@@ -850,12 +849,19 @@ RECONNFLAKE test), run once by hand with this recorder, gave a trace of
 57 lines with two sessions opened on the parked link between `AgentEnd`
 and the next `Register` (finding 42's case), accepted.
 
-The relay client's own tests (fake relays) are not in `make
-spec-traces`: `TestLazyAgentLink`'s traces are rejected, since its fake
-relay retires the link (`dataplane.AgentLinkClose`) and asks for a new
-dial with no session waiting, which no relay does (finding 4: the
-agent's branch for it is dead against this relay, and `Handoff.tla` has
-no retire).
+The relay client's own tests (fake relays, `CLIENT_TESTS`) are in `make
+spec-traces` too (2026-11-04, lane HANDOFF2): they take, every run, the
+steps the real relay pair leaves to chance: an open on the parked link
+and its resume (`TestTCPTunnelReturnsAfterTheLinkIsParked`, finding 42's
+case), a refused adoption while the new primary dials
+(`TestTCPTunnelAdoptRefusedWhileDialling`), a dial that gives up
+(`TestLazyAgentLinkGivesUp`), and `TestLazyAgentLink`,
+`TestAgentLinkUpOnlyWhileBound`: 8 traces (4-9 lines), all accepted.
+`TestLazyAgentLink`'s traces were rejected before: its fake relay retired
+the link (`dataplane.AgentLinkClose`), which no relay sends (finding 4);
+the message is deleted. `COVERAGE=1`: only `ARefused` (the reject
+fixture; the fixed agent never refuses an open on its link) and
+`AUnknown` are taken by no trace.
 
 ### Moves (`TraceMove.tla`)
 
@@ -1109,6 +1115,8 @@ acknowledgement, and `inproc-enqueue-blocks`).
    agent still acts on it (`lazyLink.control`), and the relay keeps a
    primary's link for the primary's whole life (`agent_link.go`); the
    agent-side branch is dead against this relay. Severity: info.
+   Deleted (lane HANDOFF2): the constant from relay proto `dataplane`,
+   the agent's branch and the `retired` flag from `lazyLink`.
 5. **A resumed link needs the new primary before the relay notices the
    old one ended** (model, `Handoff.tla`). `resumeToken` resumes only a
    primary that is still up; when the relay's `unregister` runs first,

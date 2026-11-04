@@ -24,7 +24,8 @@
 #             each move's (move-*.ndjson) against spec/TraceMove.tla, each
 #             agent's agent-link handoff (handoff-*.ndjson) against
 #             spec/TraceHandoff.tla, the agent's side of it
-#             (hagent-*.ndjson, relay client/agent's recorder) against
+#             (hagent-*.ndjson, relay client/agent's recorder, also from
+#             relay client/agent's own tests in CLIENT_TESTS) against
 #             spec/TraceHandoffAgent.tla, each deployment's presence
 #             (presence-*.ndjson) against spec/TracePresence.tla, each
 #             agent-to-agent call's credit (callcredit-*.ndjson, relay
@@ -464,11 +465,23 @@ traces)
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown|TestAgentLinkResumedByTheNextPrimary|TestAgentLinkCarriesSessions)$'}
 	ptests=${PRESENCE_TESTS:-'^(TestPresenceAcrossReplicas|TestPresenceAcrossReplicasFailedWrites)$'}
 	cctests=${CALLCREDIT_TESTS:-'^TestInternalAgentRouting_.*$'}
+	# The agent's own Handoff tests (relay client/agent, fake relays): the
+	# steps the real relay pair leaves to chance (an open on the parked link,
+	# a refused adoption, a dial that gives up).
+	ctests=${CLIENT_TESTS:-'^(TestLazyAgentLink|TestLazyAgentLinkGivesUp|TestAgentLinkUpOnlyWhileBound|TestTCPTunnelReturnsAfterTheLinkIsParked|TestTCPTunnelAdoptRefusedWhileDialling)$'}
 	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces" "$work/cctraces"
 	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests|$cctests" ./core/session/ >"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
 		exit 1
 	}
+	mkdir -p "$work/client"
+	RELAYTRACE=$work/client go test -tags relaytrace -count=1 -run "$ctests" github.com/nfltr/relay/client/agent >>"$work/test.out" 2>&1 || {
+		cat "$work/test.out"
+		exit 1
+	}
+	for t in "$work"/client/*.ndjson; do
+		[ ! -e "$t" ] || mv "$t" "$work/atraces/hagent-client-$(basename "$t" | sed 's/^hagent-//')"
+	done
 	for t in "$work"/all/*.ndjson; do
 		case $(basename "$t") in
 		move-*) mv "$t" "$work/mtraces/" ;;
