@@ -2,10 +2,11 @@
 (* Trace validation of Handoff.tla (spec/README.md "Trace validation"): the  *)
 (* relay's steps for one agent with the agent link on, recorded by a run of *)
 (* the real relay and agent (-tags relaytrace, trace_handoff_on.go), must   *)
-(* be a behaviour of Handoff. The agent's steps (Dial, AgentEnd, Adopt,     *)
-(* AdoptRefused), a refused or second connection's bind, and its TCP path's *)
-(* failure are not logged: TLC chooses them between two logged ones. The    *)
-(* trace is accepted when TLC reaches its end: TraceNotDone is violated.    *)
+(* be a behaviour of Handoff. The agent's steps (Dial, AgentEnd, Park,      *)
+(* Adopt, AdoptRefused), a refused or second connection's bind, and its     *)
+(* TCP path's failure are not logged: TLC chooses them between two logged   *)
+(* ones. The trace is accepted when TLC reaches its end: TraceNotDone is    *)
+(* violated.                                                                *)
 EXTENDS TraceHandoffLog, Handoff, TLC
 
 VARIABLE l \* the next line
@@ -55,6 +56,7 @@ TUnknown ==
 Unl == l <= Len(Log) /\ UNCHANGED l
 UDial == Unl /\ \E g \in Gens : Dial(g)
 UAgentEnd == Unl /\ \E g \in Gens : AgentEnd(g)
+UPark == Unl /\ Park
 UAdopt == Unl /\ Adopt
 UAdoptRefused == Unl /\ AdoptRefused
 UPathDown == Unl /\ PathDown
@@ -66,7 +68,7 @@ TraceInit == Init /\ l = 1
 TraceNext ==
     \/ TRegister \/ TPrimEnd \/ TBind \/ TLinkDrop \/ TLinkDropGone \/ TSilent \/ TSilentAfterDrop
     \/ TCarries \/ TArrive \/ TWait \/ TPlace \/ TWake \/ TEnd \/ TEndGone \/ TUnknown
-    \/ UDial \/ UAgentEnd \/ UAdopt \/ UAdoptRefused \/ UPathDown \/ UBind \/ USkipWait
+    \/ UDial \/ UAgentEnd \/ UPark \/ UAdopt \/ UAdoptRefused \/ UPathDown \/ UBind \/ USkipWait
 
 \* Violated once every line was taken: the trace is a behaviour.
 TraceNotDone == l <= Len(Log)

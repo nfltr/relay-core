@@ -25,6 +25,9 @@ VARIABLES
     dial,     \* [Gens -> BOOLEAN]: linkUse.dial: a dial request of primary g is out
     lz,       \* the agent's lazyLink of its current primary: [st |-> "none"|"dialing"|"up", t |-> token]
     pk,       \* the token of the agent's parked link (linkPark), NoTok for none
+    pkg,      \* the primary whose end parked pk
+    pend,     \* [t, g]: the up link of primary g, whose end the agent saw, not yet parked (lazyLink.end); t = NoTok: none
+    asked,    \* [Gens -> Gens \cup {NoTok}]: the parked link's token primary g asked the relay to resume
     hdr,      \* the token the relay echoed as resumed to the agent's newest primary, not yet adopted; NoTok
     tcpUp,    \* the agent's TCP path works (frame streams, link/TCP); UDP (QUIC) is another path
     sil,      \* [Gens -> BOOLEAN]: a link silence ended g's path (agentLink.silent): g must end
@@ -33,7 +36,7 @@ VARIABLES
     on,       \* [Sess -> Gens \cup {NoTok}]: the primary (grpc, wait) or the token (link)
     by        \* [Sess -> Gens \cup {NoTok}]: the primary a link session opened through (agentLink.open's p)
 
-vars == <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, hdr, tcpUp, sil, sst, via, on, by>>
+vars == <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, pkg, pend, asked, hdr, tcpUp, sil, sst, via, on, by>>
 
 Init ==
     /\ prim = [g \in Gens |-> "none"]
@@ -45,6 +48,9 @@ Init ==
     /\ dial = [g \in Gens |-> FALSE]
     /\ lz = [st |-> "none", t |-> NoTok]
     /\ pk = NoTok
+    /\ pkg = NoTok
+    /\ pend = [t |-> NoTok, g |-> NoTok]
+    /\ asked = [g \in Gens |-> NoTok]
     /\ hdr = NoTok
     /\ tcpUp = TRUE
     /\ sil = [g \in Gens |-> FALSE]
@@ -66,6 +72,11 @@ Cur == IF \E g \in Gens : prim[g] = "up" THEN CHOOSE g \in Gens : prim[g] = "up"
 Register(g) ==
     /\ prim[g] = "none" /\ tcpUp
     /\ IF g = 1 THEN TRUE ELSE aend[g - 1]
+    \* The next primary connects once the end has parked the link
+    \* (runTCPTunnel waits for lazyLink.end); the bug (end-async): end ran
+    \* in its own goroutine, so the next primary could ask before the park.
+    /\ pend.t = NoTok \/ Mutant = "end-async"
+    /\ asked' = [asked EXCEPT ![g] = pk]
     /\ LET r == pk
            old == IF r # NoTok THEN bound[r] ELSE NoTok
            ok == old # NoTok /\ prim[old] = "up" /\ ~resumed[old] /\ conn[r]
@@ -77,7 +88,7 @@ Register(g) ==
           /\ dial' = [dial EXCEPT ![g] = ~conn[t]]
           /\ hdr' = IF ok THEN t ELSE NoTok
     /\ lz' = [st |-> "none", t |-> NoTok]
-    /\ UNCHANGED <<aend, conn, pk, tcpUp, sil, sst, via, on, by>>
+    /\ UNCHANGED <<aend, conn, pk, pkg, pend, tcpUp, sil, sst, via, on, by>>
 
 \* The agent reads its new primary's header (relay client tcp.go): it
 \* adopts the parked link the relay resumed (lazyLink.adopt) while the park
@@ -85,7 +96,7 @@ Register(g) ==
 Adopt ==
     /\ hdr # NoTok /\ pk = hdr /\ lz.st = "none"
     /\ lz' = [st |-> "up", t |-> hdr] /\ pk' = NoTok /\ hdr' = NoTok
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, tcpUp, sil, sst, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, pkg, pend, asked, tcpUp, sil, sst, via, on, by>>
 
 \* A link connection of token t closes; its sessions are cut. redial: the
 \* agent's up link redials it (its peerlink Node, linkBackoff), so its
@@ -97,6 +108,7 @@ DropAs(t, redial) ==
              ELSE IF redial /\ lz.st = "up" THEN [lz EXCEPT !.st = "dialing"]
              ELSE [st |-> "none", t |-> NoTok]
     /\ pk' = IF pk = t THEN NoTok ELSE pk
+    /\ pend' = IF pend.t = t THEN [t |-> NoTok, g |-> NoTok] ELSE pend
 
 DropBody(t) == DropAs(t, FALSE)
 
@@ -106,15 +118,15 @@ DropBody(t) == DropAs(t, FALSE)
 AdoptRefused ==
     /\ hdr # NoTok /\ (pk # hdr \/ lz.st # "none")
     /\ hdr' = NoTok
-    /\ IF pk # NoTok THEN DropBody(pk) ELSE UNCHANGED <<conn, sst, lz, pk>>
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, dial, tcpUp, sil, via, on, by>>
+    /\ IF pk # NoTok THEN DropBody(pk) ELSE UNCHANGED <<conn, sst, lz, pk, pend>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, dial, pkg, asked, tcpUp, sil, via, on, by>>
 
 \* The agent dials on the request (lazyLink.open, run); the relay verifies
 \* and binds the connection (agentLink.verify, bind), waking the waiters.
 Dial(g) ==
     /\ prim[g] # "none" /\ ~aend[g] /\ dial[g] /\ lz.st = "none"
     /\ lz' = [st |-> "dialing", t |-> tok[g]]
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, pk, hdr, tcpUp, sil, sst, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, pk, pkg, pend, asked, hdr, tcpUp, sil, sst, via, on, by>>
 
 Bind ==
     /\ lz.st = "dialing"
@@ -125,23 +137,28 @@ Bind ==
                  /\ lz' = [lz EXCEPT !.st = "up"]
             ELSE /\ lz' = [st |-> "none", t |-> NoTok]  \* refused: the agent gives up on this primary
                  /\ UNCHANGED <<conn, dial>>
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, pk, hdr, tcpUp, sil, sst, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, pk, pkg, pend, asked, hdr, tcpUp, sil, sst, via, on, by>>
 
-\* The agent's primary stream ends (its context): an up link waits in the
-\* park for the next primary (lazyLink.end); a link parked before closes.
+\* The agent's primary stream ends (its context): lazyLink.end takes an up
+\* link off the primary (pend), then Park puts it in the park for the next
+\* primary; a link parked before closes, its sessions cut.
 AgentEnd(g) ==
     /\ prim[g] # "none" /\ ~aend[g]
     /\ \A h \in Gens : h > g => prim[h] = "none"
     /\ aend' = [aend EXCEPT ![g] = TRUE]
-    /\ IF lz.st = "up"
-          THEN /\ pk' = lz.t
-               /\ conn' = IF pk # NoTok /\ pk # lz.t THEN [conn EXCEPT ![pk] = FALSE] ELSE conn
-          ELSE UNCHANGED <<pk, conn>>
+    /\ pend' = IF lz.st = "up" THEN [t |-> lz.t, g |-> g] ELSE pend
     /\ lz' = [st |-> "none", t |-> NoTok]
     /\ hdr' = NoTok \* an ended primary adopts nothing
-    /\ sst' = [s \in Sess |-> IF sst[s] = "open" /\ via[s] = "link" /\ pk # NoTok /\ pk # lz.t /\ on[s] = pk
+    /\ UNCHANGED <<prim, tok, resumed, bound, conn, dial, pk, pkg, asked, tcpUp, sil, sst, via, on, by>>
+
+Park ==
+    /\ pend.t # NoTok
+    /\ pk' = pend.t /\ pkg' = pend.g
+    /\ pend' = [t |-> NoTok, g |-> NoTok]
+    /\ conn' = IF pk # NoTok /\ pk # pend.t THEN [conn EXCEPT ![pk] = FALSE] ELSE conn
+    /\ sst' = [s \in Sess |-> IF sst[s] = "open" /\ via[s] = "link" /\ pk # NoTok /\ pk # pend.t /\ on[s] = pk
                                  THEN "cut" ELSE sst[s]]
-    /\ UNCHANGED <<prim, tok, resumed, bound, dial, tcpUp, sil, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, dial, lz, asked, hdr, tcpUp, sil, via, on, by>>
 
 \* The relay's primary ends (unregister -> primaryEnded, CloseAll): its
 \* token's connections close unless a newer primary resumed them; its
@@ -157,12 +174,12 @@ PrimEnd(g) ==
                       IF sst[s] = "open" /\ via[s] = "grpc" /\ on[s] = g THEN "lost"
                       ELSE IF sst[s] = "open" /\ via[s] = "link" /\ on[s] = tok[g] /\ close THEN "cut"
                       ELSE sst[s]]
-    /\ UNCHANGED <<aend, tok, resumed, lz, pk, hdr, tcpUp, sil, via, on, by>>
+    /\ UNCHANGED <<aend, tok, resumed, lz, pk, pkg, pend, asked, hdr, tcpUp, sil, via, on, by>>
 
 \* A link connection closes: the park's TTL, the agent's stop, the network.
 LinkDrop(t) ==
     /\ conn[t] /\ \E redial \in BOOLEAN : DropAs(t, redial)
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, dial, hdr, tcpUp, sil, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, dial, pkg, asked, hdr, tcpUp, sil, via, on, by>>
 
 \* A link connection dead past its liveness timeout (link.ErrDeadPeer on
 \* TCP, QUIC's idle timeout). A silent TCP link means the agent's TCP path
@@ -175,17 +192,17 @@ Silent(t, tr) ==
     /\ tr = "tcp" => ~tcpUp
     /\ sil' = IF (tr = "tcp" \/ Mutant = "quic-silent-ends") /\ bound[t] # NoTok
                  THEN [sil EXCEPT ![bound[t]] = TRUE] ELSE sil
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, dial, hdr, tcpUp, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, dial, pkg, asked, hdr, tcpUp, via, on, by>>
 
 \* The agent's TCP path dies, for the rest of the run (no reconnect over it).
 PathDown ==
     /\ tcpUp /\ tcpUp' = FALSE
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, hdr, sil, sst, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, pkg, pend, asked, hdr, sil, sst, via, on, by>>
 
 Arrive(s) ==
     /\ sst[s] = "idle"
     /\ sst' = [sst EXCEPT ![s] = "arrived"]
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, hdr, tcpUp, sil, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, pkg, pend, asked, hdr, tcpUp, sil, via, on, by>>
 
 \* attach: the session on primary p's frame streams, or, when p takes no
 \* more (addSession refuses an ending stream), on the newest primary; none
@@ -226,7 +243,7 @@ Place(s) ==
               /\ on' = [on EXCEPT ![s] = p]
               /\ dial' = [dial EXCEPT ![p] = TRUE]
               /\ UNCHANGED <<via, by>>
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, lz, pk, hdr, tcpUp, sil>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, lz, pk, pkg, pend, asked, hdr, tcpUp, sil>>
 
 \* The wait ends: a connection bound or the primary ended (the request
 \* closed), or agentLinkDialWait passed. Then the link of p's token if it
@@ -236,16 +253,16 @@ Wake(s) ==
     /\ LET p == on[s] IN
          /\ ~dial[p] \/ Mutant # "wait-forever"
          /\ IF conn[tok[p]] THEN OnLinkOr(s, p) ELSE Attach(s, p)
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, hdr, tcpUp, sil>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, pkg, pend, asked, hdr, tcpUp, sil>>
 
 End(s) ==
     /\ sst[s] = "open"
     /\ sst' = [sst EXCEPT ![s] = "done"]
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, hdr, tcpUp, sil, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, pkg, pend, asked, hdr, tcpUp, sil, via, on, by>>
 
 Next ==
     \/ \E g \in Gens : Register(g) \/ Dial(g) \/ AgentEnd(g) \/ PrimEnd(g)
-    \/ Bind \/ Adopt \/ AdoptRefused \/ PathDown
+    \/ Bind \/ Park \/ Adopt \/ AdoptRefused \/ PathDown
     \/ \E t \in Gens : LinkDrop(t) \/ \E tr \in {"tcp", "quic"} : Silent(t, tr)
     \/ \E s \in Sess : Arrive(s) \/ Place(s) \/ Wake(s) \/ End(s)
 
@@ -290,6 +307,11 @@ LinkOpensAnswered == \A s \in Sess : sst[s] = "refused" => via[s] # "link"
 \* a QUIC link's silence says nothing of TCP (finding HO-2).
 SilenceOnDeadPath == \A g \in Gens : sil[g] => ~tcpUp
 
+\* The agent offers its parked link to every primary after the one whose
+\* end parked it: a newer primary that did not ask to resume it left it to
+\* drain at the park's TTL, its sessions cut (end-async).
+ParkOffered == pk # NoTok => \A h \in Gens : h > pkg /\ prim[h] # "none" => asked[h] = pk
+
 Placed == \A s \in Sess : sst[s] = "arrived" ~> sst[s] \notin {"arrived", "wait"}
 
 \* A silent link's primary ends (sendLoop's errAgentLinkSilent).
@@ -302,5 +324,6 @@ WitnessResumed == ~\E g \in Gens : resumed[g] /\ prim[g] = "ended" /\ conn[tok[g
 WitnessCarryOld == ~\E s \in Sess : sst[s] = "open" /\ via[s] = "link" /\ prim[by[s]] = "ended" \* CarriesExact
 WitnessFallback == ~\E s \in Sess : sst[s] = "open" /\ via[s] = "grpc" /\ conn[tok[on[s]]] \* PlacedOnLive (HO-4)
 WitnessSilent == ~\E g \in Gens : sil[g]                                                \* SilenceOnDeadPath
+WitnessEndUnparked == pend.t = NoTok                                                   \* ParkOffered
 WitnessParkedOpen == ~\E s \in Sess : sst[s] = "open" /\ via[s] = "link" /\ on[s] = pk   \* LinkOpensAnswered
 =============================================================================

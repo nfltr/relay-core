@@ -47,17 +47,22 @@ UPrimEnd == Unl /\ \E g \in Gens : PrimEnd(g)
 UBind == Unl /\ Bind /\ lz'.st = "up" \* the Node's redial (DropAs redial)
 ULinkDrop == Unl /\ \E t \in Gens : LinkDrop(t) \/ \E tr \in {"tcp", "quic"} : Silent(t, tr)
 UPathDown == Unl /\ PathDown
+\* lazyLink.end parks the link it took off its ended primary (linkPark.park).
+UPark == Unl /\ Park
 \* The session the agent takes next arrives, and waits for a dial; the
-\* trace's sessions are all link sessions, so none other is placed.
-UArrive == Unl /\ E.ev = "Open" /\ Arrive(E.s)
-UWait == Unl /\ E.ev = "Open" /\ Place(E.s) /\ sst'[E.s] = "wait"
+\* trace's sessions are all link sessions, so none other is placed. Before
+\* a dial the agent logs, a session of the trace may arrive and wait: the
+\* relay asks for a dial only for a waiting session (Place).
+Waits(s) == (E.ev = "Open" /\ s = E.s) \/ E.ev = "Dial"
+UArrive == Unl /\ \E s \in Sess : Waits(s) /\ Arrive(s)
+UWait == Unl /\ \E s \in Sess : Waits(s) /\ Place(s) /\ sst'[s] = "wait"
 
 TraceInit == Init /\ l = 1
 
 TraceNext ==
     \/ ARegister \/ ADial \/ ABind \/ AGiveUp \/ AAgentEnd \/ AAdopt \/ AAdoptRefused
     \/ ADrain \/ ADrainGone \/ AOpen \/ ARefused \/ AUnknown
-    \/ UPrimEnd \/ UBind \/ ULinkDrop \/ UPathDown \/ UArrive \/ UWait
+    \/ UPrimEnd \/ UBind \/ ULinkDrop \/ UPathDown \/ UPark \/ UArrive \/ UWait
 
 TraceNotDone == l <= Len(Log)
 =============================================================================

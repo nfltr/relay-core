@@ -256,7 +256,7 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
 | `Register(g)` | `RegisterStream`: `resumeToken` (a parked link's token), `bound`, the header (`TCPBindHeader`), `dialNow` |
 | `Adopt`, `AdoptRefused` | relay `client/agent` `tcp.go` after `stream.Header()`: `lazyLink.adopt`; refused while dialling, or the park's TTL first: `drainNow` |
 | `Dial`, `Bind` | the agent's `lazyLink.open`/`run` on `AgentLinkDial`; `agentLink.verify`+`bind` |
-| `AgentEnd(g)` | the agent's primary's context ends: `lazyLink.end` (park) |
+| `AgentEnd(g)`, `Park` | the agent's primary's context ends: `lazyLink.end` takes the up link off it, then parks it (`linkPark.park`); `runTCPTunnel` returns, and the agent's next primary connects (`Register`), only after both (the bug before: `end` ran in `context.AfterFunc`'s goroutine, finding 43) |
 | `PrimEnd(g)` | `unregister` -> `primaryEnded` (closes the token's connections unless resumed), `CloseAll` |
 | `LinkDrop(t)`, `DropAs` | a link connection closes (park TTL, agent stop, network); the agent's up link redials it (its peerlink Node, `linkBackoff`: finding 30) |
 | `Silent(t, tr)` | a link connection dead past its liveness: link/TCP `agentLinkObserver.ConnDown` -> `agentLink.silent` (ends the primary bound to the token); QUIC's idle timeout (`quicPeer`): `unbind` only |
@@ -264,7 +264,7 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
 | `Arrive(s)`, `Place(s)`, `Wake(s)`, `OnLinkOr`, `Attach` | `handleLocalConn` -> `agentLink.open` (link, or wait `agentLinkDialWait` for a requested dial; `node.Open` failing falls back: `OnLinkOr`), else `attach` (`addSession`; an ending primary's: the newest one's, or refused) |
 | `End(s)` | a session's apps end it |
 
-### Invariants and properties (`Handoff.cfg`, `make spec`, 43k states)
+### Invariants and properties (`Handoff.cfg`, `make spec`, 82k states)
 
 - `PlacedOnLive`: a session is placed on frame streams only of a primary
   not ended (`attach`'s `addSession` refuses an ending stream:
@@ -279,6 +279,8 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
   they opened through.
 - `SilenceOnDeadPath`: a link's silence ends a primary only when the
   agent's TCP path is dead (finding 17).
+- `ParkOffered`: the agent asks every primary after the one whose end
+  parked its link to resume it (finding 43).
 - `LinkOpensAnswered`: an open the relay placed on the link is answered
   by the agent, also on a link in the agent's park between two primaries;
   only an open with no stream for it is refused (finding 42).
@@ -296,11 +298,14 @@ Mutants (`make spec-mutants`): `attach-ended` (`PlacedOnLive`),
 `count-per-primary`, `carries-newest` (`CarriesExact`, finding 18: the
 code before), `quic-silent-ends` (`SilenceOnDeadPath`, finding 17: the
 code before), `park-primary-ctx` (`LinkOpensAnswered`, finding 42: the
+agent's code before), `end-async` (`ParkOffered`, finding 43: the
 agent's code before). Witnesses, each violated: `WitnessLinkOpen`,
 `WitnessFallback` (`PlacedOnLive`), `WitnessResumed` (`NoOrphanLink`),
 `WitnessCarryOld` (`CarriesExact`: a link session outlives the primary it
 opened through), `WitnessSilent` (`SilenceOnDeadPath`), `WitnessParkedOpen`
-(`LinkOpensAnswered`: a session opens on a parked link). `COVERAGE=1`
+(`LinkOpensAnswered`: a session opens on a parked link),
+`WitnessEndUnparked` (`ParkOffered`: the agent saw its primary end and
+has not parked the link yet). `COVERAGE=1`
 takes every action.
 
 Trace validation (`make spec-traces`, `TraceHandoff.tla`): see "Trace
@@ -822,12 +827,17 @@ the agent's steps of `Handoff.tla` for one agent run (its `linkPark`; a
 Each line is written under the lock that orders its change
 (`lazyLink.mu`, `linkPark.mu`; the recorder's lock innermost). The
 relay's steps (`PrimEnd`, a bind of the Node's own redial, drops,
-silences), the path's failure and the arrival (and dial wait) of the
-session the agent takes next are not logged: TLC chooses them. `make
+silences), the path's failure, the park of the link `AgentEnd` took off
+its primary (`Park`, finding 43) and the arrival (and dial wait) of the
+session the agent takes next, or of a session of the trace before a
+`Dial` line (the relay asks for a dial only for a waiting session), are
+not logged: TLC chooses them. `make
 spec-traces` checks every agent trace of the `HANDOFF_TESTS` (the real
 agent against the real relay) with Handoff's five invariants, after
-checking that `spec/testdata/reject-hagent-park-primary-ctx.ndjson` is
-rejected: an open on a parked link refused, finding 42's agent bug (with
+checking that `spec/testdata/reject-hagent-adopt-after-end.ndjson`
+(finding 44: an ended primary drained the park) and
+`spec/testdata/reject-hagent-park-primary-ctx.ndjson` are rejected; the
+latter is an open on a parked link refused, finding 42's agent bug (with
 `Mutant = "park-primary-ctx"` the same trace is a behaviour that breaks
 `LinkOpensAnswered`). First run (2026-11-04, lane HANDOFFREC): 18 traces
 (6-45 lines, a few seconds each), all accepted, among them the resume
@@ -966,7 +976,7 @@ accepted, 4-6 s each.
 | `AgentLink.cfg` (CI) | invariants, 1 session, window 2, 2 bytes, 1 a frame, in-process relay end, `EndAck` (2026-11-02, after findings 1-2) | 2,905,774 (601,711) | | 28 s |
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
-| `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 205,995 (47,884) | | 2-4 s |
+| `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 341,113 (81,647) | | 2-4 s |
 | `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5) | 135,307 (29,460) | | 3 s before MV-5; 2 min 34 s at load 170 (2026-11-03) |
 | `Presence.cfg` (CI) | `NoSilentStale`, `OwnUpdate`, 2 replicas, 1 watcher, 2 sessions, 1 update in flight, 1 resubscription, 1 failed write | 953,324 (159,269) | | 8 s (2026-11-04, `InFlight`; 607,118 states before) |
 | `Directory.cfg` (CI) | `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong`, 2 pods, 2 record keys, 3 claims, a store loss, claims without a Seq | 492,852 (129,090) | | 4 s (2026-11-04; 186,958 states before `ClaimNoSeq`) |
@@ -1606,6 +1616,32 @@ relay link connection never outlives every primary holding its token.
     (a): `OnLinkOr`'s answer, `LinkOpensAnswered`, mutant
     `park-primary-ctx`, witness `WitnessParkedOpen`; (b) is the environment
     assumption "an agent whose primary ended registers its next one".
+43. **A fast reconnect lost its link's resume** (model gap, agent code,
+    fixed; lane HANDOFF2). relay client's `lazyLink.end` ran in
+    `context.AfterFunc`'s goroutine, so `runTCPTunnel` could return and the
+    agent's next primary read `linkPark.parked()` for its resume header
+    before the end parked the link: the next primary asked for no resume,
+    the relay closed the old primary's connections, the parked link
+    drained at its TTL and its sessions were cut. `Handoff.tla` took
+    `AgentEnd` (end seen) and the park as one step, so it could not reach
+    this; found by HANDOFFREC's action map, never by a trace. The model now
+    splits them (`AgentEnd` takes the link off the primary into `pend`,
+    `Park` parks it, `Register` waits for `pend` empty), states
+    `ParkOffered`, mutant `end-async`, witness `WitnessEndUnparked`.
+    Fixed: `runTCPTunnel` returns only after the end ran
+    (`TestTCPTunnelReturnsAfterTheLinkIsParked`).
+44. **A primary that ended before reading its header drained the resumed
+    link** (agent code, fixed; lane HANDOFF2). `runTCPTunnel`'s header
+    goroutine could take the park after its primary ended (and after the
+    next primary had asked to resume it): `lazyLink.adopt` refused it for
+    the ended context and drained it, so the next primary found no link to
+    adopt. `Handoff.tla` forbids it (`AgentEnd` clears `hdr`: an ended
+    primary adopts nothing, the park keeps the link); a trace of it is
+    rejected (`spec/testdata/reject-hagent-adopt-after-end.ndjson`).
+    Fixed: the goroutine leaves the park alone once the primary's end
+    began, `runTCPTunnel` waits for one that already took it, and
+    `adopt` puts the link back in the park when its primary ended
+    (`TestTCPTunnelLeavesTheParkToTheNextPrimary`).
 
 ## Agent-to-agent calls (relay spec/CallCredit.tla)
 

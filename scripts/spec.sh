@@ -202,6 +202,7 @@ INVARIANTS
     CarriesExact
     SilenceOnDeadPath
     LinkOpensAnswered
+    ParkOffered
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TraceHandoffAgent.tla >"$1.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
@@ -387,7 +388,7 @@ mutants)
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'
 	# Handoff.tla: carriesSessions (HO-3), QUIC silence (HO-2), a parked link's
 	# answers (finding 42); witnesses.
-	for b in count-per-primary carries-newest quic-silent-ends park-primary-ctx; do
+	for b in count-per-primary carries-newest quic-silent-ends park-primary-ctx end-async; do
 		expect Handoff.cfg Handoff.tla "$b" -e "$m$b\"/"
 	done
 	expect Handoff.cfg Handoff.tla witness:link-open -e 's/^    PlacedOnLive$/    WitnessLinkOpen/'
@@ -396,6 +397,7 @@ mutants)
 	expect Handoff.cfg Handoff.tla witness:carry-old -e 's/^    CarriesExact$/    WitnessCarryOld/'
 	expect Handoff.cfg Handoff.tla witness:silent -e 's/^    SilenceOnDeadPath$/    WitnessSilent/'
 	expect Handoff.cfg Handoff.tla witness:parked-open -e 's/^    LinkOpensAnswered$/    WitnessParkedOpen/'
+	expect Handoff.cfg Handoff.tla witness:end-unparked -e 's/^    ParkOffered$/    WitnessEndUnparked/'
 	# The code's races (spec/README.md "Findings").
 	expect AgentLink.cfg MCAgentLink.tla inproc-closewrite -e "$m"'inproc-closewrite"/'
 	expect AgentLinkWrite.cfg MCAgentLink.tla inproc-enqueue-blocks -e "$m"'inproc-enqueue-blocks"/'
