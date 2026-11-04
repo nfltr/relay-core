@@ -224,16 +224,22 @@ func (d *Dispatcher) departed(agentID string, s directory.Session, stream Stream
 	}
 	if err != nil {
 		d.Logger.Error("failed to delete agentID dispatcher addr from cache", "AgentID", agentID, "error", err)
-		if ttl := d.Config.HeartbeatRecvThreshold; ttl > 0 {
-			time.AfterFunc(ttl+time.Second, func() {
-				if traceOn {
-					tracePresRecord(d, agentID, "LateDown", true, nil)
-				}
-				d.publishDeparture(agentID, stream)
-			})
-		}
+		d.lateDown(agentID, stream)
 	} else {
 		d.Logger.Debug("deleted agentID dispatcher addr from cache", "AgentID", agentID)
 	}
 	d.publishDeparture(agentID, stream)
+}
+
+// lateDown publishes the agent's down again once the record a failed
+// release left has passed its TTL (Presence.tla LateDown, findings 27, 29).
+func (d *Dispatcher) lateDown(agentID string, stream Streamer) {
+	if ttl := d.Config.HeartbeatRecvThreshold; ttl > 0 {
+		time.AfterFunc(ttl+time.Second, func() {
+			if traceOn {
+				tracePresRecord(d, agentID, "LateDown", true, nil)
+			}
+			d.publishDeparture(agentID, stream)
+		})
+	}
 }

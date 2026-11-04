@@ -1311,8 +1311,12 @@ relay link connection never outlives every primary holding its token.
     `DeregisterAgent`; `ConnectTCP` an up after its record and a down
     through `departed` (with finding 27's second down); no down while
     another session of the agent is listed here. Guard:
-    `TestPresenceHTTPAndTCPAgentsPublish`. Open: an HTTP agent whose
-    release failed publishes no second down.
+    `TestPresenceHTTPAndTCPAgentsPublish`. An HTTP agent whose release
+    failed published no second down (the code skipped the model's
+    `LateDown`); fixed in lane CONFORM-relay-core: `ConnectHTTP`'s failed
+    release takes `lateDown` as `departed` does. Guard:
+    `TestPresenceHTTPAgentFailedReleaseDownsAgainAfterTheTTL` (failed
+    before).
 34. **A live session was superseded by its own agent's other record**
     (code, found by relay-server's `TestAgentLinkSurvivesReconnect`
     failing 3-5 in 10 against relay-core main, lane RSFOLLOW; model

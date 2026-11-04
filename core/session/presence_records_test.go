@@ -212,6 +212,51 @@ func TestPresenceFailedReleaseDownsAgainAfterTheTTL(t *testing.T) {
 	}
 }
 
+// Finding 29 with finding 27 (Presence.tla End, EndFail, LateDown): an
+// HTTP-tunnel (ConnectHTTP) agent whose release fails downs again once the
+// record's TTL passed, as a ConnectAgentTunnel or ConnectTCP one does.
+func TestPresenceHTTPAgentFailedReleaseDownsAgainAfterTheTTL(t *testing.T) {
+	viper.Set("pod_ip.env_var", "TEST_POD_IP")
+	t.Cleanup(viper.Reset)
+	t.Setenv("TEST_POD_IP", "10.0.0.1")
+	d, cancel := newTestDispatcher(t)
+	defer cancel()
+	d.Config.HeartbeatRecvThreshold = 500 * time.Millisecond
+	mc := newMockCache()
+	inv, err := directory.NewIPInventory(fake.TestLogger(), mc, time.Second, "127.0.0.1", directory.GetDispatcherCacheKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.IPInventory = inv
+	client, ctx := dialDispatcher(t, serveDispatcherAs(t, d, "agent-1"))
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	s, err := client.ConnectHTTP(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Header(); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return d.IsAgentConnected("agent-1") }, func() string { return "agent not registered" })
+	cursor := d.Presence.Cursor()
+	setCacheErr(mc, errors.New("store down"))
+	stop() // the agent goes; its release fails
+	downs := 0
+	for deadline := time.Now().Add(10 * time.Second); downs < 2 && time.Now().Before(deadline); {
+		resp := d.Presence.Watch(t.Context(), cursor, time.Second, nil)
+		for _, ev := range resp.GetEvents() {
+			if ev.GetDown() != nil {
+				downs++
+			}
+		}
+		cursor = resp.GetCursor()
+	}
+	if downs != 2 {
+		t.Fatalf("%d downs after a failed release, want 2 (now, and after the record's TTL)", downs)
+	}
+}
+
 // Review r2 F6: an older session's end on this replica publishes no down
 // once a newer session of the agent is listed here. Its CompareAndDelete
 // can precede the newer one's Store, so the feed got the newer up and

@@ -151,6 +151,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 		err = releaseAgentRecord(context.Background(), d.IPInventory, agentID, session)
 		if err != nil {
 			d.Logger.Error("failed to delete agentID dispatcher addr from cache", "agent_id", agentID, "error", err)
+			d.lateDown(agentID, nil) // its down now is DeregisterAgent's (finding 29)
 		}
 	}()
 
