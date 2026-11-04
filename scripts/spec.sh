@@ -80,7 +80,7 @@ expect() {
 	if tlc "$work/Mutant.cfg" "$mod" >"$work/m.out" 2>&1; then
 		echo "$name: not caught"
 		fail=1
-	elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* was violated|Action property .* is violated)' "$work/m.out"; then
+	elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* (was|were) violated|Action property .* is violated)' "$work/m.out"; then
 		echo "$name: caught: $(grep -m1 -E '^Error: (Invariant|Temporal|Action)' "$work/m.out" | sed 's/^Error: //') ($(grep -c '^State [0-9]*:' "$work/m.out") states deep, $(grep -E '^[0-9]+ states generated' "$work/m.out" | cut -d' ' -f1) states)"
 	else
 		echo "$name: TLC failed:"
