@@ -12,6 +12,11 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `(directory.Session).Newer(other)`: whether this session is newer than
+  `other` (higher `Seq`, then later `Since`), the order the directory
+  already used. `session.TCPDispatcher` uses it to keep a newer session's
+  primary when an older one registers a stream (finding 39). No migration.
+
 - `(*session.Dispatcher).ServicesGo`: set with `AgentsGo` on a relay
   without peers, the relay's own services (`DispatcherConfig.Uncounted`)
   go when it closes instead of with the other agents, and an agent other
