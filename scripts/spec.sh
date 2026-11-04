@@ -127,7 +127,9 @@ CFG
 
 # LinkSession.tla is link's (spec/README.md "The link session interface"):
 # TLC reads it from the required link module, so a link spec change never
-# leaves a stale copy here.
+# leaves a stale copy here. go list -m names no Dir for a module not yet
+# downloaded (a fresh CI machine), so download it first.
+go mod download github.com/nfltr/link
 linkspec=$(go list -m -f '{{.Dir}}' github.com/nfltr/link)/spec
 [ -f "$linkspec/LinkSession.tla" ] || { echo "spec.sh: no LinkSession.tla in $linkspec (link >= v0.12.2 required)" >&2; exit 1; }
 
