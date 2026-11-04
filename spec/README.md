@@ -577,12 +577,14 @@ and a claim whose counter step fails (`ClaimNoSeq`: the store unreachable;
 ConnectTCP goes on with a session without a Seq, which renews and ends by
 its start time alone, finding 37).
 Both record keys (the dispatcher's, the streamer's) are in it, so finding
-34 is. Every store call is atomic: the get-then-set and get-then-delete
-windows are relay-server `Replicas.tla`'s (its finding 1b); the replicas,
-the epoch and the re-announce are too.
+34 is. Each store call is atomic. `PutSession`'s renew and
+`DeleteSession` are two calls (a GET, then a SET or DEL); `Directory.cfg`
+takes each as one step, and `DirectoryHeal.cfg` (`TwoStep`) splits them
+(`Read`, then `Done` deciding on what was read, finding 38). The
+replicas, the epoch and the re-announce are relay-server `Replicas.tla`'s.
 
-Invariants (`Directory.cfg`, `make spec`, 186,958 states (50,146
-distinct), depth 12, 1 s): `SupersededByNewer` (a session yields only to
+Invariants (`Directory.cfg`, `make spec`, 492,852 states (129,090
+distinct), 4 s): `SupersededByNewer` (a session yields only to
 a newer session of its own record), `NoResurrect` (until the store loses
 its counters, a record never names a session older than another claimed
 one of its key), `DeleteOwn` (a record goes only with its own session's
@@ -595,7 +597,14 @@ has a witness TLC must violate (`WitnessSuperseded`,
 `seq-tie` (relay-server finding R7, the Seq compared alone),
 `delete-any`, `seqless-by-pod` and `seqless-masks-counter` (37: the code
 before its fix). `NoResurrect` judges records of sessions with a Seq: a
-session without one cannot know a newer one ended. `COVERAGE=1` takes every action and every branch of
+session without one cannot know a newer one ended. With the two calls
+apart (`DirectoryHeal.cfg`, 1,126,085 states (320,277 distinct), 7 s) the
+race does break `DeleteOwn` (`race:renew-get-set`: a claim between an
+end's GET and its DEL is deleted) and `NoResurrect` (an older session's
+SET over a newer one's record), and `Heals` holds: the agent's latest
+session's next renewal writes its own record, whatever was read or
+written meanwhile (mutant `heal:renew-yields`: a renewal that yields to
+any other record never heals). `COVERAGE=1` takes every action and every branch of
 `Renew` and `End`.
 
 Model-based test: `scripts/spec.sh walks` writes 60 random walks of
@@ -616,7 +625,7 @@ replay found finding 36. Regenerate the walks when the spec changes.
 
 | assumption | source |
 |---|---|
-| Each store call (GET, SET, DEL, INCRBY) is atomic and linearizable; the two-call windows of `PutSession` and `DeleteSession` are out of the model (relay-server `Replicas.tla` finding 1b) | Redis docs, "Transactions" (single commands are atomic); `MemoryCache` (one mutex) |
+| Each store call (GET, SET, DEL, INCRBY) is atomic and linearizable; `PutSession`'s renew and `DeleteSession` are two calls each, modelled apart in `DirectoryHeal.cfg` (finding 38) | Redis docs, "Transactions" (single commands are atomic); `MemoryCache` (one mutex) |
 | A key expires at its TTL after its last write; a counter (`seqTTL`, 30 days) outlives every record | Redis `EXPIRE`; `MemoryCache.liveLocked` |
 | A store that restarts empty loses records and counters together (`StoreLoss`, once) | Redis without persistence; relay-server finding R7 |
 | Start times (`Since`) of an agent's sessions are distinct; their order only breaks a Seq tie, so a skewed clock picks which of two tied sessions yields, never whether one does | `Session.newer` |
@@ -1382,3 +1391,20 @@ relay link connection never outlives every primary holding its token.
     with no record. Guards: `TestSeqlessSessionDeletesOnlyItsOwnRecord`
     (failed before), `TestDirectoryModelWalks` (its `ClaimNoSeq` walks
     diverge from the code before).
+38. **`PutSession`'s renew and `DeleteSession` decide on a GET they act on
+    later** (design, re-judged by lane CONFORM-relay-core; model
+    `DirectoryHeal.cfg`, `TwoStep`; `race:renew-get-set`). The two
+    `ponytail:` windows were "accepted" without a model. With the calls
+    apart TLC shows both: a claim landing between an end's GET and its DEL
+    is deleted (`DeleteOwn`; an agent reconnecting to another pod while
+    its old stream ends is the likely case), and an older session's SET
+    over a newer record (`NoResurrect`, until the older one's next renewal
+    yields). `Heals` holds: the agent's latest session's next renewal
+    (on inbound activity, throttled to the heartbeat) writes its own
+    record and its active-set entry, whatever was read or written
+    meanwhile; mutant `heal:renew-yields` must break it. Decided: kept,
+    bounded by one renewal interval (the agent unlisted, routes to it
+    refused, no data lost, no session left open). Closing it needs a
+    compare-and-set or compare-and-delete step in `directory.Cache` (a
+    Redis script in relay-server's store), a contract change for the
+    relay-server lane; `DirectoryHeal.cfg` then drops `TwoStep`.

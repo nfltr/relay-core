@@ -81,7 +81,7 @@ func renewAgentRecord(ctx context.Context, inv directory.IPInventory, agentID st
 // releaseAgentRecord removes the agent's record when it names this pod's
 // session s (the shared inventory's DeleteSession), so a stream that ends
 // after a newer session of the agent claimed the record leaves it; an
-// inventory without sessions, or s without a Seq: by this pod (DeleteIPs).
+// inventory without sessions: by this pod (DeleteIPs).
 func releaseAgentRecord(ctx context.Context, inv directory.IPInventory, agentID string, s directory.Session) error {
 	if store, ok := inv.(interface {
 		DeleteSession(context.Context, string, directory.Session) error

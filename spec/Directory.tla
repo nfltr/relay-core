@@ -25,6 +25,7 @@ CONSTANTS Pods,    \* replicas, as strings ("p1")
           MaxSess, \* claims in a behaviour
           Loss,    \* the store may restart empty once
           NoSeq,   \* a claim may get no Seq (ClaimNoSeq)
+          TwoStep, \* renew and delete as a GET, then a SET or DEL (a race)
           Mutant   \* "none", or a bug put back (spec/README.md)
 
 VARIABLES
@@ -33,9 +34,10 @@ VARIABLES
     sess,  \* the sessions in claim order: key, pod, seq, st (live, sup, end)
     w,     \* key -> the session the record was last written for; 0 once it lapsed or was lost
     lost,  \* the store restarted empty
-    act    \* the last step, for the walks and the witnesses
+    act,   \* the last step, for the walks and the witnesses
+    pr     \* TwoStep: the GETs whose SET or DEL is still to come
 
-vars == <<rec, ctr, sess, w, lost, act>>
+vars == <<rec, ctr, sess, w, lost, act, pr>>
 
 \* A session's start time is its claim order (Since; distinct, monotonic).
 Since(i) == i
@@ -73,6 +75,7 @@ Init ==
     /\ w = [k \in Keys |-> 0]
     /\ lost = FALSE
     /\ act = [n |-> "Init", p |-> "", k |-> "", i |-> 0]
+    /\ pr = {}
 
 \* ClaimSession: nextSeq (the counter's next, above the record's), then
 \* the record written for the new session.
@@ -86,7 +89,7 @@ Claim(p, k) ==
           /\ rec' = [rec EXCEPT ![k] = i]
           /\ w' = [w EXCEPT ![k] = i]
           /\ act' = [n |-> "Claim", p |-> p, k |-> k, i |-> i]
-    /\ UNCHANGED lost
+    /\ UNCHANGED <<lost, pr>>
 
 \* ClaimSession whose counter step failed (the store unreachable): the
 \* session has no Seq and nothing is written; ConnectTCP goes on with it
@@ -96,16 +99,15 @@ ClaimNoSeq(p, k) ==
     /\ NoSeq /\ k = "s" /\ Len(sess) < MaxSess
     /\ sess' = Append(sess, [key |-> k, pod |-> p, seq |-> 0, st |-> "live"])
     /\ act' = [n |-> "ClaimNoSeq", p |-> p, k |-> k, i |-> Len(sess) + 1]
-    /\ UNCHANGED <<rec, ctr, w, lost>>
+    /\ UNCHANGED <<rec, ctr, w, lost, pr>>
 
 \* PutSession with renew, by live session i. A record without a Seq (a
 \* session that got none) does not hide the counter: "seqless-masks-counter"
 \* is the code before finding 37.
-Renew(i) ==
+RenewWith(i, r) ==
     /\ sess[i].st = "live"
     /\ LET k == sess[i].key
-           r == rec[k]
-       IN IF r # 0 /\ Newer(r, i)
+       IN IF r # 0 /\ (Newer(r, i) \/ (Mutant = "renew-yields" /\ r # i))
           THEN IF sess[r].pod # sess[i].pod
                THEN /\ sess' = [sess EXCEPT ![i].st = "sup"]
                     /\ UNCHANGED <<rec, w>>
@@ -120,6 +122,8 @@ Renew(i) ==
     /\ act' = [n |-> "Renew", p |-> "", k |-> "", i |-> i]
     /\ UNCHANGED <<ctr, lost>>
 
+Renew(i) == ~TwoStep /\ RenewWith(i, rec[sess[i].key]) /\ UNCHANGED pr
+
 \* The record r names session i as DeleteSession checks it: its pod and
 \* its session (Seq and start time; "seq-only" compares the Seq alone).
 \* "seqless-by-pod" is the code before finding 37: a session without a Seq
@@ -132,10 +136,9 @@ OwnRecord(r, i) ==
 
 \* A session's end (it ended, or was superseded): DeleteSession, which
 \* deletes the record when it names this pod and this session.
-End(i) ==
+EndWith(i, r) ==
     /\ sess[i].st # "end"
     /\ LET k == sess[i].key
-           r == rec[k]
        IN IF r # 0 /\ (Mutant = "delete-any" \/ OwnRecord(r, i))
           THEN /\ rec' = [rec EXCEPT ![k] = 0]
           ELSE UNCHANGED rec
@@ -143,13 +146,32 @@ End(i) ==
     /\ act' = [n |-> "End", p |-> "", k |-> "", i |-> i]
     /\ UNCHANGED <<ctr, w, lost>>
 
+End(i) == ~TwoStep /\ EndWith(i, rec[sess[i].key]) /\ UNCHANGED pr
+
+\* TwoStep (race:renew-get-set, race:delete-get-del): PutSession's renew
+\* and DeleteSession as the code does them, a GET and later a SET or DEL
+\* (the ponytail comments): another pod's claim can land between the two.
+\* The design keeps them atomic until the store compares and sets in one
+\* step (relay-server Replicas.tla finding 1b); spec.sh checks that the
+\* race breaks the invariants, so it is a known, documented window.
+Read(i, op) ==
+    /\ TwoStep /\ sess[i].st # "end" /\ (op = "renew" => sess[i].st = "live")
+    /\ ~\E x \in pr : x.i = i
+    /\ pr' = pr \cup {[i |-> i, op |-> op, r |-> rec[sess[i].key]]}
+    /\ act' = [n |-> "Read", p |-> "", k |-> "", i |-> i]
+    /\ UNCHANGED <<rec, ctr, sess, w, lost>>
+
+Done(x) ==
+    /\ x \in pr /\ pr' = pr \ {x}
+    /\ IF x.op = "renew" THEN RenewWith(x.i, x.r) ELSE EndWith(x.i, x.r)
+
 \* A record's TTL passed (its session's renewals were late).
 Expire(k) ==
     /\ rec[k] # 0
     /\ rec' = [rec EXCEPT ![k] = 0]
     /\ w' = [w EXCEPT ![k] = 0]
     /\ act' = [n |-> "Expire", p |-> "", k |-> k, i |-> 0]
-    /\ UNCHANGED <<ctr, sess, lost>>
+    /\ UNCHANGED <<ctr, sess, lost, pr>>
 
 \* The store restarted empty: records and counters gone (once).
 StoreLoss ==
@@ -159,15 +181,18 @@ StoreLoss ==
     /\ w' = [k \in Keys |-> 0]
     /\ lost' = TRUE
     /\ act' = [n |-> "Loss", p |-> "", k |-> "", i |-> 0]
-    /\ UNCHANGED sess
+    /\ UNCHANGED <<sess, pr>>
 
 RenewSome == \E i \in Sess : Renew(i)
 EndSome == \E i \in Sess : End(i)
+TwoStepSome == \/ \E i \in Sess, op \in {"renew", "end"} : Read(i, op)
+               \/ \E x \in pr : Done(x)
 
 Next ==
     \/ \E p \in Pods, k \in Keys : Claim(p, k) \/ ClaimNoSeq(p, k)
     \/ RenewSome
     \/ EndSome
+    \/ TwoStepSome
     \/ \E k \in Keys : Expire(k)
     \/ StoreLoss
 
@@ -202,6 +227,12 @@ NoPingPong ==
             => (Newer(i, j) \/ Newer(j, i))
 
 \* Witnesses: each must be violated (the state its invariant guards is reached).
+\* Under TwoStep the race loses a record, or writes an older session's
+\* over a newer one's, only until the agent's latest session renews: that
+\* renewal writes its own record (no store loss: TwoStep runs without one).
+Latest(i) == sess[i].seq # 0 /\ \A j \in Sess : sess[j].key = sess[i].key => sess[j].seq <= sess[i].seq
+Heals == [][(act'.n = "Renew" /\ Latest(act'.i)) => rec'[sess[act'.i].key] = act'.i]_vars
+
 WitnessSuperseded == \A i \in Sess : sess[i].st # "sup"
 WitnessResurrectSetup ==
     ~\E i, j \in Sess : sess[i].key = sess[j].key /\ sess[i].st = "live" /\ sess[j].st = "end"

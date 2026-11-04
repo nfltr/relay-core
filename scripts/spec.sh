@@ -243,6 +243,8 @@ check)
 	run Move.cfg Move.tla
 	run Presence.cfg Presence.tla
 	run Directory.cfg Directory.tla
+	# That race heals at the latest session's next renewal (finding 38).
+	run DirectoryHeal.cfg Directory.tla
 	;;
 nightly)
 	run AgentLink.cfg MCAgentLink.tla
@@ -334,6 +336,10 @@ mutants)
 	expect Directory.cfg Directory.tla witness:dir-resurrect -e 's/^    NoResurrect$/    WitnessResurrectSetup/'
 	expect Directory.cfg Directory.tla witness:dir-end-keeps -e 's/^    DeleteOwn$/    WitnessEndKeeps/'
 	expect Directory.cfg Directory.tla witness:dir-tie -e 's/^    NoPingPong$/    WitnessTie/'
+	# PutSession's renew and DeleteSession as a GET, then a SET or DEL: the
+	# race the design closes with an atomic step (finding 38).
+	expect DirectoryHeal.cfg Directory.tla race:renew-get-set -e 's/^PROPERTY Heals$/INVARIANT DeleteOwn NoResurrect/'
+	expect DirectoryHeal.cfg Directory.tla heal:renew-yields -e "$m"'renew-yields"/'
 	expect Presence.cfg Presence.tla no-crash-resync -e "$m"'no-crash-resync"/' -e 's/Crash = FALSE/Crash = TRUE/'
 	exit $fail
 	;;
@@ -416,10 +422,11 @@ walks)
 		tail -40 "$work/walk.out"
 		exit 1
 	}
-	# Drop TLC's _action and the model's w and lost: the replay reads act, rec, ctr and sess.
+	# Drop TLC's _action and the model's w, lost and pr (empty: TwoStep is
+	# off): the replay reads act, rec, ctr and sess.
 	for n in $(ls "$work/walks" | sort -n); do cat "$work/walks/$n"; done |
 		sed -E -e 's/^\{"_action":\{"name":"[A-Za-z]+","location":\{[^}]*\}(,"context":\{[^}]*\},"parameters":\[[^]]*\])?\},/{/' \
-			-e 's/,"w":\{[^}]*\}//' -e 's/,"lost":(true|false)//' >spec/testdata/directory-walks.ndjson
+			-e 's/,"w":\{[^}]*\}//' -e 's/,"lost":(true|false)//' -e 's/,"pr":\[\]//' -e 's/"pr":\[\],//' >spec/testdata/directory-walks.ndjson
 	echo "$(ls "$work/walks" | wc -l | tr -d ' ') walks, $(wc -l <spec/testdata/directory-walks.ndjson | tr -d ' ') states: spec/testdata/directory-walks.ndjson"
 	;;
 trace)
