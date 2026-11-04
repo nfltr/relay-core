@@ -26,7 +26,10 @@
 #             spec/TraceHandoff.tla, the agent's side of it
 #             (hagent-*.ndjson, relay client/agent's recorder) against
 #             spec/TraceHandoffAgent.tla, each deployment's presence
-#             (presence-*.ndjson) against spec/TracePresence.tla; with
+#             (presence-*.ndjson) against spec/TracePresence.tla, each
+#             agent-to-agent call's credit (callcredit-*.ndjson, relay
+#             client/rpcclient's recorder, TestInternalAgentRouting_*)
+#             against relay's spec/TraceCallCredit.tla (relayspec); with
 #             COVERAGE=1 the steps no trace took (weekly).
 #   walks     random walks of spec/Directory.cfg into
 #             spec/testdata/directory-walks.ndjson (core/directory
@@ -134,6 +137,30 @@ CFG
 go mod download github.com/nfltr/link
 linkspec=$(go list -m -f '{{.Dir}}' github.com/nfltr/link)/spec
 [ -f "$linkspec/LinkSession.tla" ] || { echo "spec.sh: no LinkSession.tla in $linkspec (link >= v0.12.2 required)" >&2; exit 1; }
+
+# relayspec: a relay tree holding what checks a CallCredit trace (relay
+# scripts/spec.sh cctraces, its spec/CallCredit.tla and
+# TraceCallCredit.tla), at the relay/client version go.mod requires: those
+# files from github.com/nfltr/relay (public) at that commit or tag, so the
+# check is the one that version's recorder was written for. RELAY_DIR=<a
+# relay checkout> uses that instead (co-development under a go.work).
+relayspec() {
+	if [ -n "${RELAY_DIR:-}" ]; then
+		echo "$RELAY_DIR"
+		return
+	fi
+	v=$(go list -m -f '{{.Version}}' github.com/nfltr/relay/client)
+	case $v in
+	*-0.*-*) rev=${v##*-} ;; # a pseudo-version: its commit
+	*) rev=client/$v ;;
+	esac
+	for f in scripts/spec.sh scripts/fetch-tla.sh spec/CallCredit.tla spec/TraceCallCredit.tla; do
+		mkdir -p "$work/relay/$(dirname "$f")"
+		curl -fsSL --retry 3 -o "$work/relay/$f" "https://raw.githubusercontent.com/nfltr/relay/$rev/$f"
+	done
+	chmod +x "$work/relay/scripts/spec.sh" "$work/relay/scripts/fetch-tla.sh"
+	echo "$work/relay"
+}
 
 # htrace FILE: TLC on one recorded Handoff trace (spec/TraceHandoff.tla); 0 when accepted.
 htrace() {
@@ -434,8 +461,9 @@ traces)
 	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions|TestTCPTunnelClientResetResetsTargetEndToEnd|TestTraceWriteAfterFinishIsLeftOut)$'}
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown|TestAgentLinkResumedByTheNextPrimary|TestAgentLinkCarriesSessions)$'}
 	ptests=${PRESENCE_TESTS:-'^(TestPresenceAcrossReplicas|TestPresenceAcrossReplicasFailedWrites)$'}
-	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces"
-	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests" ./core/session/ >"$work/test.out" 2>&1 || {
+	cctests=${CALLCREDIT_TESTS:-'^TestInternalAgentRouting_.*$'}
+	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces" "$work/cctraces"
+	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests|$cctests" ./core/session/ >"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
 		exit 1
 	}
@@ -445,6 +473,7 @@ traces)
 		handoff-*) mv "$t" "$work/htraces/" ;;
 		hagent-*) mv "$t" "$work/atraces/" ;;
 		presence-*) mv "$t" "$work/ptraces/" ;;
+		callcredit-*) mv "$t" "$work/cctraces/" ;;
 		*) mv "$t" "$work/traces/" ;;
 		esac
 	done
@@ -481,6 +510,9 @@ traces)
 	checktraces "$work/atraces" atrace || st=1
 	echo "== Presence (spec/TracePresence.tla)"
 	checktraces "$work/ptraces" ptrace || st=1
+	echo "== CallCredit, agent-to-agent calls (relay spec/TraceCallCredit.tla)"
+	ls "$work"/cctraces/*.ndjson >/dev/null 2>&1 || { echo "no CallCredit trace"; st=1; }
+	"$(relayspec)/scripts/spec.sh" cctraces "$work"/cctraces/*.ndjson || st=1
 	if [ -n "${COVERAGE:-}" ]; then
 		# Presence.tla's steps no presence trace took: test gaps.
 		cat "$work"/ptraces/presence-*.ndjson 2>/dev/null |

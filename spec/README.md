@@ -943,6 +943,22 @@ replicas (vector clocks merged with CommunityModules `VectorClocks`), and
 a recorder for the real bus's `Drop` and the epoch's `Sweep`, are
 relay-server's.
 
+### Agent-to-agent call credit traces (relay `TraceCallCredit.tla`)
+
+Per-call credit of agent-to-agent calls is relay's model
+(`spec/CallCredit.tla`, `CallCreditBoth.tla` there; relay
+`spec/README.md` "CallCredit traces"); its recorder is relay
+`client/rpcclient/trace_callcredit_on.go`, and the two-agent runs that feed
+it are here: `make spec-traces` runs `CALLCREDIT_TESTS`
+(`TestInternalAgentRouting_.*`: the saturated call beside a healthy one,
+and `StreamsPastTheWindows`, local and cross-replica through
+`RelayTunnel`) and checks each `callcredit-*.ndjson` with relay's
+`scripts/spec.sh cctraces`, fetched with `CallCredit.tla` and
+`TraceCallCredit.tla` from github.com/nfltr/relay at the relay/client
+version go.mod requires (`relayspec`; `RELAY_DIR=<checkout>` for
+co-development): one check per call and direction, 8 (2026-11-05), all
+accepted, 4-6 s each.
+
 ## Measurements (2026-11-02, M-series Mac, load 10-19, `taskpolicy -b`)
 
 | config | what | states (distinct) | depth | time |
@@ -964,6 +980,7 @@ relay-server's.
 | `make spec-traces` | 16 AgentLink, 64 Move, 12 Handoff traces, all accepted; 14 reject fixtures rejected | | | 6 min 38 s (load 15-35) |
 | `make spec-traces`, agent-side Handoff (2026-11-04) | 18 agent traces accepted; 1 reject fixture rejected | | | 1-5 s a trace |
 | `make spec-traces`, presence only (2026-11-03) | 2 Presence traces accepted; 3 reject fixtures rejected | | | under 10 s at load 120-140 |
+| `make spec-traces`, CallCredit (2026-11-05) | 8 call directions (4 calls) accepted; relay's 2 reject fixtures rejected there | up to 813 | up to 265 | 4-6 s each (load 9) |
 
 `COVERAGE=1 scripts/spec.sh check` takes every action of both models
 except `Stall`: with credit (`Credit = TRUE`) no queue fills, so the stall
