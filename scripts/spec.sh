@@ -127,9 +127,9 @@ CFG
 
 # LinkSession.tla is link's (spec/README.md "The link session interface"):
 # TLC reads it from the required link module, so a link spec change never
-# leaves a stale copy here; spec/link/ only for a link without one (v0.12.1).
+# leaves a stale copy here.
 linkspec=$(go list -m -f '{{.Dir}}' github.com/nfltr/link)/spec
-[ -f "$linkspec/LinkSession.tla" ] || linkspec=$PWD/spec/link
+[ -f "$linkspec/LinkSession.tla" ] || { echo "spec.sh: no LinkSession.tla in $linkspec (link >= v0.12.2 required)" >&2; exit 1; }
 
 # htrace FILE: TLC on one recorded Handoff trace (spec/TraceHandoff.tla); 0 when accepted.
 htrace() {

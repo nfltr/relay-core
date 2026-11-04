@@ -198,9 +198,8 @@ whole close in a config whose property needs the apps to finish.
 guarantees a layer above may assume of a link session (link
 `spec/README.md` "The session interface"; link's `Link.tla` refines it).
 `scripts/spec.sh` reads it from the required link module (`go list -m`,
-TLC's `TLA-Library`), so a link spec change cannot strand relay-core;
-`spec/link/LinkSession.tla` serves only a link without one (v0.12.1) and
-goes once go.mod requires link v0.12.2 or later. relay-core uses link's
+TLC's `TLA-Library`), so a link spec change cannot strand relay-core
+(link v0.12.2 or later; relay-core keeps no copy). relay-core uses link's
 sessions in three places and models them only by these guarantees:
 
 | where | which guarantees | spec |
