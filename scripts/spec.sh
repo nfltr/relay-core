@@ -2,12 +2,15 @@
 # Copyright 2026 nfltr
 # SPDX-License-Identifier: Apache-2.0
 
-# spec.sh check|nightly|liveness|mutants|simulate|traces|walks|trace F: the TLA+ models of
+# spec.sh actions|check|nightly|liveness|mutants|simulate|traces|walks|trace F: the TLA+ models of
 # spec/ (spec/README.md).
-#   check     TLC on spec/AgentLink.cfg (Refines left out), AgentLinkIface.cfg
-#             (Refines on fewer bytes), spec/Handoff.cfg, spec/Move.cfg,
-#             spec/Presence.cfg and spec/Directory.cfg: invariants;
-#             spec/AgentLinkWrite.cfg: WriteReturns (CI).
+#   actions   every model step in spec/README.md's action tables (and every
+#             row a step), every event a trace module takes recorded by Go.
+#   check     actions, then TLC on spec/AgentLink.cfg (Refines left out),
+#             AgentLinkIface.cfg (Refines on fewer bytes), spec/Handoff.cfg,
+#             spec/Move.cfg, spec/Presence.cfg, spec/Directory.cfg and
+#             DirectoryHeal.cfg: invariants; spec/AgentLinkWrite.cfg:
+#             WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
 #             Presence's with a crash (nightly, weekly).
@@ -230,8 +233,48 @@ checktraces() {
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 }
 
+# actions_check: each model's steps against its README action table (both
+# ways) and each trace module's event names against the recorder's Go.
+actions_check() {
+	ok=0
+	for m in AgentLink Handoff Move Presence Directory; do
+		# A step: a definition whose body primes or keeps a variable (not a temporal formula).
+		acts=$(awk '
+			function flush() { if (name != "" && act && !tmp) print name; name = "" }
+			/^[A-Z][A-Za-z0-9_]*(\(.*\))? ==/ { flush(); name = $1; sub(/\(.*/, "", name); act = 0; tmp = 0; next }
+			/^(=+$|-+ MODULE)/ { flush() }
+			name != "" && /UNCHANGED|'"'"' *(=|\\in)/ { act = 1 }
+			name != "" && /\[\]\[|~>/ { tmp = 1 }
+			END { flush() }' "spec/$m.tla" | sort -u)
+		tab=$(awk -v m="## $m.tla" '
+			index($0, m) == 1 { in_s = 1; next }
+			/^## / { in_s = 0 }
+			in_s && /^\| action \| Go \|/ { in_t = 1; next }
+			in_s && in_t && !/^\|/ { in_t = 0 }
+			in_s && in_t && /^\| `/ { split($0, c, "|"); s = c[2]
+				while (match(s, /`[A-Z][A-Za-z0-9_]*/)) { print substr(s, RSTART + 1, RLENGTH - 1); s = substr(s, RSTART + RLENGTH) } }' spec/README.md | sort -u)
+		for a in $acts; do
+			echo "$tab" | grep -qx "$a" || { echo "$m.tla: step $a is not in spec/README.md's action table"; ok=1; }
+		done
+		for a in $tab; do
+			grep -qE "^$a(\(.*\))? ==" "spec/$m.tla" || { echo "spec/README.md: $m's action $a is not defined in $m.tla"; ok=1; }
+		done
+	done
+	go=$(cat core/session/*.go | grep -v '^//' | grep -ohE '"[A-Za-z0-9]+"' | sort -u)
+	for t in Trace TraceHandoff TraceMove TraceMoveLog TracePresence; do
+		for e in $(grep -E '\bev\b' "spec/$t.tla" | grep -ohE '"[A-Z][A-Za-z0-9]*"' | sort -u); do
+			echo "$go" | grep -qx "$e" || { echo "spec/$t.tla: event $e is recorded by no Go in core/session"; ok=1; }
+		done
+	done
+	return $ok
+}
+
 case ${1:-} in
+actions)
+	actions_check && echo "every step mapped, every traced event recorded"
+	;;
 check)
+	actions_check || exit 1
 	# AgentLink.cfg's Refines is the nightly's (it triples the run); in CI
 	# AgentLinkIface.cfg checks it on fewer bytes.
 	sed '/^PROPERTY Refines/d' spec/AgentLink.cfg >"$work/AgentLink.cfg"
@@ -433,7 +476,7 @@ trace)
 	check_trace "$2" && echo accepted || { grep -E 'Error|unknown event' "$2.out" | head -5; echo rejected; exit 1; }
 	;;
 *)
-	echo "usage: spec.sh check|nightly|liveness|mutants|simulate|traces|walks|trace FILE" >&2
+	echo "usage: spec.sh actions|check|nightly|liveness|mutants|simulate|traces|walks|trace FILE" >&2
 	exit 2
 	;;
 esac

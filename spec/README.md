@@ -96,7 +96,8 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `StartClose(s)` | `inProcConn.Close` begins: it marks the session closed, then takes `wmu` for its close frame (finding 3) |
 | `Abort(p, s)` | relay `handleLocalConn`/`pumpToAgent` error -> close frame, `markClosed`; agent `sessionConn.Close`, `pump`'s read error -> close frame (the session ends at `Finish`) |
 | `Read(p, s, k)` | a pop of the session queue (`PopBatch`) -> `Credit.Consumed` -> window frame |
-| `Recv(p)` | relay `recvLoop` (`grpcCreditFrame`, then `Dispatch`); agent `serveTCPStream`'s receive loop |
+| `SendWin(p, s)` | the window frame `link.NewCredit`'s grant callback queues (`dataplane.WindowFrame`) |
+| `Recv(p)`, `RecvData`, `RecvWin`, `RecvClose`, `Release` | relay `recvLoop` (`grpcCreditFrame`, then `Dispatch`); agent `serveTCPStream`'s receive loop: a data frame into the session queue (`PushWithin`), a window frame to `Credit.Grant` (`ParseWindowFrame`), a close frame (`closeFrame`), the half close released to the reader at once or at the ack (`recvAck`) |
 | `SendAck(p, s)` | the ack frame (`dataplane.EndAckFrame`) queued by its own goroutine: the receive loop never waits for its outbox |
 | `Finish(p, s)` | relay `removeSession` (`handleLocalConn` returned: both halves closed, the peer's whole close, or its own); agent `closeSession` (`pump` after `<-written`, `closeFrame`) |
 | `Stall(p)` | without credit only: `deliver`/`PushWithin` time out, `resetSession` |
@@ -255,10 +256,10 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
 | `Dial`, `Bind` | the agent's `lazyLink.open`/`run` on `AgentLinkDial`; `agentLink.verify`+`bind` |
 | `AgentEnd(g)` | the agent's primary's context ends: `lazyLink.end` (park) |
 | `PrimEnd(g)` | `unregister` -> `primaryEnded` (closes the token's connections unless resumed), `CloseAll` |
-| `LinkDrop(t)` | a link connection closes (park TTL, agent stop, network); the agent's up link redials it (its peerlink Node, `linkBackoff`: finding 30) |
+| `LinkDrop(t)`, `DropAs` | a link connection closes (park TTL, agent stop, network); the agent's up link redials it (its peerlink Node, `linkBackoff`: finding 30) |
 | `Silent(t, tr)` | a link connection dead past its liveness: link/TCP `agentLinkObserver.ConnDown` -> `agentLink.silent` (ends the primary bound to the token); QUIC's idle timeout (`quicPeer`): `unbind` only |
 | `PathDown` | the agent's TCP path dies (the frame streams' heartbeats, `WatchAgentSession`, take over once no link vouches) |
-| `Arrive(s)`, `Place(s)`, `Wake(s)` | `handleLocalConn` -> `agentLink.open` (link, or wait `agentLinkDialWait` for a requested dial; `node.Open` failing falls back), else `attach` |
+| `Arrive(s)`, `Place(s)`, `Wake(s)`, `OnLinkOr`, `Attach` | `handleLocalConn` -> `agentLink.open` (link, or wait `agentLinkDialWait` for a requested dial; `node.Open` failing falls back: `OnLinkOr`), else `attach` (`addSession`; an ending primary's: the newest one's, or refused) |
 | `End(s)` | a session's apps end it |
 
 ### Invariants and properties (`Handoff.cfg`, `make spec`, 43k states)
@@ -355,7 +356,8 @@ github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
 | `Refresh` | the renewal after `GiveUp` finding B's record (`directory.ErrSuperseded`): `resumeMove` |
 | `Done` | `routeLeases` idle, then `relayRequestsToAgent`'s `moveDone`: the channel drained, `MOVE_DONE` |
 | `StartDrain`, `DrainBound` | `stopping`; `stopNow` (`moveBound` from `MOVE_RECONNECT`, disarmed once A stopped routing): the agent let go (`errServerRestarting`) |
-| `RecvA` | `receiveFromHTTPAgent`; the agent's EOF ends the session (`failInflight`, `failQueued`) |
+| `RecvA`, `EndA` | `receiveFromHTTPAgent`; the agent's EOF ends the session (`failInflight`, `failQueued`) |
+| `ServeB`, `FailB` | B serving a request that reached it (its own session, not modelled); B's new session ending after it took the record (MV-5) |
 | `TCPSupersede`, `PlaceTCP` | `sendLoop`'s superseded renewal of the agent's TCP primary (`yield` when `movingAway`); `streamFor` placing a TCP session |
 | `RecvAgent`, `ConnectB`, `DialFails`, `Answer`, `CloseOld` | `processStream`, `moveConnect`, a handler's answer, `closeWhenAnswered` |
 
@@ -468,7 +470,7 @@ relay-core v0.7.2, which has none of them; review r2 F8).
 |---|---|
 | `Connect`, `End`, `Supersede` | `ConnectAgentTunnel`: `claimAgentRecord`, `notifyUpstreamRegistered`; `ConnectHTTP` (`Presence.up` after `Agents.Store`; `DeregisterAgent`), `ConnectTCP`; their teardowns `releaseAgentRecord`, `departed`, `publishDeparture`; a renewal's `directory.ErrSuperseded` |
 | `Renew` (`RenewWrite`) | `refreshAgentInventoryOnInboundActivity`, `renewAgentRecord`, `PutSession` renew |
-| `Update` (`UpdateWrite`); with `InFlight` `UpdateRecv`, `UpdateApply` | `UpdateAgentLabels` (relay-server `serveUpdateLabels`); the request received on a stream (`rpcclient.SourceSession`), applied under the stream's record lock only to that session (finding 14) |
+| `Update` (`UpdateWrite`), `Apply`, `UpdateRecv`, `UpdateApply` | `UpdateAgentLabels` (relay-server `serveUpdateLabels`); with `InFlight` the request received on a stream (`rpcclient.SourceSession`), applied under the stream's record lock only to that session (finding 14) |
 | `Publish`, `PublishFail`, `Deliver` | `presenceOutbox` (`publish`, `requeue` on a failed send), `BindBus`'s subscriber: `bump` |
 | `Drop`, `Resubscribe` | Redis dropping a subscriber, go-redis resubscribing; redisbus's empty payload, `presenceFeed.resync` |
 | `Wake`, `Cursor`, `Snap` | `presenceFeed.Watch` answering, `ListAgents` (`Presence.Cursor`, `myAgents`) or `handleMyAgents` |
@@ -476,6 +478,7 @@ relay-core v0.7.2, which has none of them; review r2 F8).
 | `LateDown` | `departed`'s second down a TTL after a failed release |
 | `Sweep` | relay-server `inventory_epoch.go` `noteReplicas`, `presence_resync.go` `resyncBus` |
 | `CrashR`, `Expire` | a replica gone without its teardown; a record's TTL (its replica gone, or a failed release's leftover) |
+| `OtherClaim` | mutant `shared-counter` only: a claim of the agent's other record taking the same counter (finding 34, the code before) |
 
 The design (`Presence.cfg`, `make spec`, 17k states): a label update is a
 fenced renewal of the stream's own session (refused when superseded), and
@@ -576,6 +579,15 @@ once, the store restarting empty (`StoreLoss`: records and counters gone);
 and a claim whose counter step fails (`ClaimNoSeq`: the store unreachable;
 ConnectTCP goes on with a session without a Seq, which renews and ends by
 its start time alone, finding 37).
+| action | Go |
+|---|---|
+| `Claim(p, k)`, `ClaimNoSeq(p, k)` | `ClaimSession` (`nextSeq`: `Incr` on `seqKey`, above the record's Seq; then `PutSession` without renew); its `Incr` failing |
+| `Renew(i)`, `RenewWith` | `PutSession` with renew (`renewAgentRecord`), as one step |
+| `End(i)`, `EndWith` | `DeleteSession` (`releaseAgentRecord`), as one step |
+| `Read(i, op)`, `Done(x)` | `TwoStep` only: the GET of `PutSession`'s renew or `DeleteSession`, then its SET or DEL |
+| `Expire(k)` | the record's TTL (`MemoryCache.liveLocked`, Redis `EXPIRE`) |
+| `StoreLoss` | the store restarting empty |
+
 Both record keys (the dispatcher's, the streamer's) are in it, so finding
 34 is. Each store call is atomic. `PutSession`'s renew and
 `DeleteSession` are two calls (a GET, then a SET or DEL); `Directory.cfg`
@@ -637,6 +649,47 @@ replay found finding 36. Regenerate the walks when the spec changes.
 |---|---|
 | `ClaimSession`, `nextSeq`, `PutSession` (renew), `DeleteSession`, `Session.newer`, `seqKey` | `core/directory/session.go` |
 | `MemoryCache` (`Get`, `Set`, `Del`, `Incr`, expiry): the store the walks run on | `core/directory/memory.go` |
+
+## Layer contract: what the layer above may assume
+
+relay-server (its `spec/Replicas.tla`), the relay's clients and the agent
+SDK may assume these of relay-core, and only these; each is checked by
+the named invariant or property (`make spec`, `spec-liveness`), its
+mutants (`make spec-mutants`) and, where it says so, traces of the real
+code (`make spec-traces`). relay-core assumes of link only its
+`spec/README.md` layer contract (ordered, credited sessions; typed ends;
+GOAWAY drain), not its internals.
+
+| guarantee | invariant or property | traced |
+|---|---|---|
+| A TCP session's bytes arrive in order, once each, while its stream lives; a sender never exceeds its peer's window | `AgentLink` `Conservation`, `CreditBounds`, `NoProtocolError` | yes (`Trace.tla`) |
+| One stalled reader never blocks another session on its stream | `NoHOL`, `BufferBound`; `Isolation` (live) | yes |
+| An EOF means every byte the peer wrote before its close arrived; any other end is typed (reset, lost) | `TypedEnd`, `NoSilentLoss` (with `EndAck`) | yes |
+| An abort on either side reaches the other side as a reset, never as an EOF | `AbortTyped` | yes (`TestTCPTunnelClientResetResetsTargetEndToEnd`) |
+| Once a stream ended, no session stays open on it, and after a break every session ends at both sides | `DownEndsAll`; `EndsAfterBreak` (live) | yes |
+| A session is placed only on a live primary's frame streams or on a link connection bound to an up primary's token; a placement that fails falls back or is refused, never hangs | `Handoff` `PlacedOnLive`, `NoOrphanLink`; `Placed` (live) | yes (`TraceHandoff.tla`) |
+| `carriesSessions` is exactly "a session of the agent is open here" | `CarriesExact` | yes |
+| A link's silence ends a primary only when the agent's TCP path is dead | `SilenceOnDeadPath`; `SilentEnds` (live) | yes |
+| A make-before-break move loses no request except the documented drain bound; no request runs without its answer reaching the visitor; once A stops routing the record names B | `Move` `NoLoss`, `RunOnce`, `OneOwner`; `AllAnswered` (live) | yes (`TraceMove.tla`) |
+| After a move, no TCP session is placed on A's old primary | `NoTCPAfterMove` | yes |
+| A presence watcher whose snapshot is stale is owed a wake, and is woken (or the listing returns to its snapshot) | `Presence` `NoSilentStale`; `Woken` (live) | yes (`TracePresence.tla`) |
+| A label update lands only on the session it came on | `OwnUpdate` | yes (the update; the fence by `TestUpdateAgentLabelsFromAReplacedConnection`) |
+| A session yields only to a newer session of its own record; a record never names a session older than a claimed one (until the store loses its counters); a record goes only with its own session, its TTL or the store | `Directory` `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong` | by model-based test (`TestDirectoryModelWalks`) |
+| With `PutSession`'s renew and `DeleteSession` as two store calls (as today), a lost or stale record is rewritten by the agent's latest session at its next renewal | `DirectoryHeal.cfg` `Heals` | no (finding 38) |
+
+Code against model, both ways: `Directory` by replaying TLC's walks on
+the store (`TestDirectoryModelWalks`); `AgentLink`, `Handoff`, `Move` and
+`Presence` by trace validation of the real code's runs (a replay of
+their walks would drive gRPC streams, timers and the agent from outside;
+the traces check the same steps where they happen). `scripts/spec.sh
+actions` (in `make spec`) keeps the action tables complete both ways and
+fails on an event a trace module takes that no Go records.
+
+What the layer above must provide (relay-core's environment assumptions,
+the tables above): single store commands atomic and linearizable, TTL
+expiry, Redis pub/sub at most once and in order per publisher with a
+resync after a resubscription, one agent process per agent id, bind
+tokens secret.
 
 ## Trace validation
 
@@ -833,12 +886,13 @@ relay-server's.
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 205,995 (47,884) | | 2-4 s |
 | `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5) | 135,307 (29,460) | | 3 s before MV-5; 2 min 34 s at load 170 (2026-11-03) |
-| `Presence.cfg` (CI) | `NoSilentStale`, 2 replicas, 1 watcher, 2 sessions, 1 update, 1 resubscription, 1 failed write | 607,118 (100,778) | | 15 s at load 14, 83 s at load 100 (2026-11-03; 4 s before failed writes; same-replica replacement adds no distinct state) |
-| `Directory.cfg` (CI) | `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong`, 2 pods, 2 record keys, 3 claims, a store loss | 186,958 (50,146) | 12 | 1 s (2026-11-03, load 3) |
+| `Presence.cfg` (CI) | `NoSilentStale`, `OwnUpdate`, 2 replicas, 1 watcher, 2 sessions, 1 update in flight, 1 resubscription, 1 failed write | 953,324 (159,269) | | 8 s (2026-11-04, `InFlight`; 607,118 states before) |
+| `Directory.cfg` (CI) | `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong`, 2 pods, 2 record keys, 3 claims, a store loss, claims without a Seq | 492,852 (129,090) | | 4 s (2026-11-04; 186,958 states before `ClaimNoSeq`) |
+| `DirectoryHeal.cfg` (CI) | `Heals`, the renew and delete as two store calls, no store loss | 1,126,085 (320,277) | | 7 s (2026-11-04) |
 | `AgentLinkLive.cfg` | `Isolation`, 2 sessions, window 1 | 2,161,261 (531,955) | 41 | 2 min 3 s |
 | `AgentLinkBreak.cfg` | `EndsAfterBreak`, stream breaks | 296,341 (74,783) | 36 | 42 s |
 | `HandoffLive.cfg` | `Placed` | | | 7 s |
-| `PresenceLive.cfg` | `Woken`, as `Presence.cfg` with a crash | 1,438,047 (244,286) | | 57 s (2026-11-03) |
+| `PresenceLive.cfg` | `Woken`, as `Presence.cfg` with a crash and the update in flight | 2,320,252 (402,327) | 24 | 1 min 46 s (2026-11-04) |
 | `PresenceLarge.cfg` (`make spec-nightly`) | `NoSilentStale`, as `Presence.cfg` with a crash | 1,438,047 (244,286) | | 26 s (2026-11-03) |
 | `make spec-mutants` | 9 mutants, each caught (on the CI config) | | 5-11 | 14 s |
 | `make spec-traces` | 16 AgentLink, 64 Move, 12 Handoff traces, all accepted; 14 reject fixtures rejected | | | 6 min 38 s (load 15-35) |

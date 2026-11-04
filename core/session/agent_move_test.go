@@ -304,7 +304,9 @@ func TestAgentMovesUnderClockSkew(t *testing.T) {
 // (spec/README.md finding 21, Move.tla DrainBound).
 func TestDrainBoundEndsOnceRoutingStopped(t *testing.T) {
 	d, s, sink, mc, inv, drain := movingSession(t)
-	d.moveBound = 200 * time.Millisecond
+	// The bound must outlast the move's first half (the record check's
+	// tick included) on a loaded machine; the wait below runs past it.
+	d.moveBound = time.Second
 	release, ok := d.RouteHere("agent-1")
 	if !ok {
 		t.Fatal("no route lease on a session that routes")
@@ -312,6 +314,7 @@ func TestDrainBoundEndsOnceRoutingStopped(t *testing.T) {
 	received := make(chan error, 1)
 	done := make(chan error, 1)
 	go func() { done <- d.WatchAgentSession(t.Context(), "agent-1", s, inv, received) }()
+	start := time.Now()
 	drain()
 	waitMove(t, "MOVE_RECONNECT", func() bool { return len(sink.steps()) == 1 })
 	mc.Mu.Lock()
@@ -322,7 +325,7 @@ func TestDrainBoundEndsOnceRoutingStopped(t *testing.T) {
 	select {
 	case err := <-done:
 		t.Fatalf("the drain's move bound ended the session (%v) while a request routed here was held", err)
-	case <-time.After(3 * d.moveBound):
+	case <-time.After(time.Until(start.Add(2 * d.moveBound))):
 	}
 	publishTo(t, d, "agent-1", "txn-slow")
 	release()
