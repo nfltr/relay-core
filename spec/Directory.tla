@@ -24,6 +24,7 @@ CONSTANTS Pods,    \* replicas, as strings ("p1")
           Keys,    \* the agent's record keys: "d" dispatcher, "s" streamer
           MaxSess, \* claims in a behaviour
           Loss,    \* the store may restart empty once
+          NoSeq,   \* a claim may get no Seq (ClaimNoSeq)
           Mutant   \* "none", or a bug put back (spec/README.md)
 
 VARIABLES
@@ -43,16 +44,18 @@ Since(i) == i
 \* code was before finding 34's fix, one per agent.
 CK(k) == IF Mutant = "shared-counter" THEN "d" ELSE k
 
-\* Session.newer: by Seq, an equal Seq (a store that restarted empty gave
-\* it twice) by start time (finding R7). "seq-tie" is the code before it.
+\* Session.newer: by Seq when both have one, an equal Seq (a store that
+\* restarted empty gave it twice, finding R7) or none (a claim that got no
+\* Seq: ClaimNoSeq) by start time. "seq-tie" is the code before R7.
 Newer(a, b) ==
-    IF sess[a].seq # sess[b].seq \/ Mutant = "seq-tie"
+    IF (sess[a].seq # sess[b].seq /\ sess[a].seq # 0 /\ sess[b].seq # 0) \/ Mutant = "seq-tie"
     THEN sess[a].seq > sess[b].seq
     ELSE Since(a) > Since(b)
 
 \* The order the invariants judge by (Newer without the mutant).
 After(a, b) ==
-    IF sess[a].seq # sess[b].seq THEN sess[a].seq > sess[b].seq ELSE Since(a) > Since(b)
+    IF sess[a].seq # sess[b].seq /\ sess[a].seq # 0 /\ sess[b].seq # 0
+    THEN sess[a].seq > sess[b].seq ELSE Since(a) > Since(b)
 
 Sess == 1..Len(sess)
 
@@ -85,7 +88,19 @@ Claim(p, k) ==
           /\ act' = [n |-> "Claim", p |-> p, k |-> k, i |-> i]
     /\ UNCHANGED lost
 
-\* PutSession with renew, by live session i.
+\* ClaimSession whose counter step failed (the store unreachable): the
+\* session has no Seq and nothing is written; ConnectTCP goes on with it
+\* (a failed claim is not fatal there: the streamer's record, "s"), so it
+\* renews and ends by its start time alone (finding 37).
+ClaimNoSeq(p, k) ==
+    /\ NoSeq /\ k = "s" /\ Len(sess) < MaxSess
+    /\ sess' = Append(sess, [key |-> k, pod |-> p, seq |-> 0, st |-> "live"])
+    /\ act' = [n |-> "ClaimNoSeq", p |-> p, k |-> k, i |-> Len(sess) + 1]
+    /\ UNCHANGED <<rec, ctr, w, lost>>
+
+\* PutSession with renew, by live session i. A record without a Seq (a
+\* session that got none) does not hide the counter: "seqless-masks-counter"
+\* is the code before finding 37.
 Renew(i) ==
     /\ sess[i].st = "live"
     /\ LET k == sess[i].key
@@ -95,7 +110,8 @@ Renew(i) ==
                THEN /\ sess' = [sess EXCEPT ![i].st = "sup"]
                     /\ UNCHANGED <<rec, w>>
                ELSE UNCHANGED <<sess, rec, w>> \* a newer session here holds it
-          ELSE IF r = 0 /\ ctr[CK(k)] > sess[i].seq /\ Mutant # "renew-resurrects"
+          ELSE IF (r = 0 \/ (sess[r].seq = 0 /\ Mutant # "seqless-masks-counter"))
+                  /\ sess[i].seq # 0 /\ ctr[CK(k)] > sess[i].seq /\ Mutant # "renew-resurrects"
           THEN /\ sess' = [sess EXCEPT ![i].st = "sup"]
                /\ UNCHANGED <<rec, w>>
           ELSE /\ rec' = [rec EXCEPT ![k] = i]
@@ -106,10 +122,13 @@ Renew(i) ==
 
 \* The record r names session i as DeleteSession checks it: its pod and
 \* its session (Seq and start time; "seq-only" compares the Seq alone).
+\* "seqless-by-pod" is the code before finding 37: a session without a Seq
+\* deleted any record of its pod (DeleteIPs).
 OwnRecord(r, i) ==
     /\ sess[r].pod = sess[i].pod
-    /\ sess[r].seq = sess[i].seq
-    /\ (Mutant = "seq-only" \/ Since(r) = Since(i))
+    /\ \/ Mutant = "seqless-by-pod" /\ sess[i].seq = 0
+       \/ /\ sess[r].seq = sess[i].seq
+          /\ (Mutant = "seq-only" \/ Since(r) = Since(i))
 
 \* A session's end (it ended, or was superseded): DeleteSession, which
 \* deletes the record when it names this pod and this session.
@@ -146,7 +165,7 @@ RenewSome == \E i \in Sess : Renew(i)
 EndSome == \E i \in Sess : End(i)
 
 Next ==
-    \/ \E p \in Pods, k \in Keys : Claim(p, k)
+    \/ \E p \in Pods, k \in Keys : Claim(p, k) \/ ClaimNoSeq(p, k)
     \/ RenewSome
     \/ EndSome
     \/ \E k \in Keys : Expire(k)
@@ -164,9 +183,10 @@ SupersededByNewer ==
 
 \* Until the store loses its counters, a record never names a session
 \* older than another claimed session of its key (finding 13: an older
-\* session writing back a record a newer one left).
+\* session writing back a record a newer one left). A session without a
+\* Seq cannot know (finding 37): its records are ordered by start time.
 NoResurrect ==
-    lost \/ \A k \in Keys : rec[k] # 0 =>
+    lost \/ \A k \in Keys : rec[k] # 0 /\ sess[rec[k]].seq # 0 =>
         ~\E j \in Sess : sess[j].key = k /\ sess[j].seq > sess[rec[k]].seq
 
 \* A record goes only with its own session's end, its TTL or the store:

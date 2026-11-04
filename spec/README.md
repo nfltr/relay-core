@@ -571,7 +571,10 @@ session's record on another pod, write nothing under a newer one on its
 own pod, yield when there is no record but the counter is past its Seq,
 else write), `DeleteSession` (`End`: delete the record only while it
 names this pod and this session), a record's TTL passing (`Expire`) and,
-once, the store restarting empty (`StoreLoss`: records and counters gone).
+once, the store restarting empty (`StoreLoss`: records and counters gone);
+and a claim whose counter step fails (`ClaimNoSeq`: the store unreachable;
+ConnectTCP goes on with a session without a Seq, which renews and ends by
+its start time alone, finding 37).
 Both record keys (the dispatcher's, the streamer's) are in it, so finding
 34 is. Every store call is atomic: the get-then-set and get-then-delete
 windows are relay-server `Replicas.tla`'s (its finding 1b); the replicas,
@@ -588,8 +591,10 @@ has a witness TLC must violate (`WitnessSuperseded`,
 `WitnessResurrectSetup`, `WitnessEndKeeps`, `WitnessTie`). Mutants
 (`make spec-mutants`), each caught: `renew-resurrects` (finding 13),
 `shared-counter` (34), `seq-only` (36: the code before its fix),
-`seq-tie` (relay-server finding R7, the Seq compared alone) and
-`delete-any`. `COVERAGE=1` takes every action and every branch of
+`seq-tie` (relay-server finding R7, the Seq compared alone),
+`delete-any`, `seqless-by-pod` and `seqless-masks-counter` (37: the code
+before its fix). `NoResurrect` judges records of sessions with a Seq: a
+session without one cannot know a newer one ended. `COVERAGE=1` takes every action and every branch of
 `Renew` and `End`.
 
 Model-based test: `scripts/spec.sh walks` writes 60 random walks of
@@ -614,7 +619,7 @@ replay found finding 36. Regenerate the walks when the spec changes.
 | A key expires at its TTL after its last write; a counter (`seqTTL`, 30 days) outlives every record | Redis `EXPIRE`; `MemoryCache.liveLocked` |
 | A store that restarts empty loses records and counters together (`StoreLoss`, once) | Redis without persistence; relay-server finding R7 |
 | Start times (`Since`) of an agent's sessions are distinct; their order only breaks a Seq tie, so a skewed clock picks which of two tied sessions yields, never whether one does | `Session.newer` |
-| Every session has a Seq (no older relay's record): the Seq-less paths (`DeleteIPs`, ordering by `Since` alone) are not modelled | `ClaimSession` |
+| A session has a Seq unless its claim's counter step failed (`ClaimNoSeq`, the streamer's record only: ConnectTCP's claim is not fatal); a record with neither Seq nor start time (the relay's own agent's `SetIP`) is not modelled | `ClaimSession`, `dispatcher_tcp.go` |
 
 ### Code map (drift check)
 
@@ -1345,3 +1350,20 @@ relay link connection never outlives every primary holding its token.
     store loss, the same pod and the same Seq; healed at the next
     renewal). Fixed: the start time (`Since`) must match too. Guard:
     `TestDeleteSessionAfterAStoreLossKeepsTheNewerSessionsRecord`.
+37. **A session without a Seq deleted any record of its pod** (code,
+    lane CONFORM-relay-core, the conformance pass's `DeleteIPs` gap; model
+    `ClaimNoSeq`, mutants `seqless-by-pod` (`DeleteOwn`) and
+    `seqless-masks-counter` (`NoResurrect`)). ConnectTCP goes on after a
+    failed claim; when the counter step failed its session has no Seq.
+    `DeleteSession` sent such a session to `DeleteIPs`, which deletes the
+    record whatever session of this pod it names, so its end could unlist
+    a newer session of the agent here; and once that session's renewal
+    wrote a record without a Seq, an older session's renewal no longer saw
+    the counter past it and wrote itself back (finding 13 again). Severity:
+    low (a store unreachable at the claim, then the agent reconnecting to
+    the same pod). Fixed: a session's end deletes only its own record (Seq
+    and start time; a record with neither, the relay's own agent's, by its
+    pod), and a renewal under a record without a Seq checks the counter as
+    with no record. Guards: `TestSeqlessSessionDeletesOnlyItsOwnRecord`
+    (failed before), `TestDirectoryModelWalks` (its `ClaimNoSeq` walks
+    diverge from the code before).

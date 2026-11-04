@@ -322,8 +322,8 @@ mutants)
 	for b in subscriber-stops outbox-stops publish-drop; do
 		expect PresenceLive.cfg Presence.tla "live:$b" -e "$m$b\"/" -e 's/MaxFail = 1/MaxFail = 0/' -e 's/Crash = TRUE/Crash = FALSE/'
 	done
-	# Directory.tla: the session records' bugs (findings 13, 34, 35, R7); witnesses.
-	for b in renew-resurrects shared-counter seq-only seq-tie delete-any; do
+	# Directory.tla: the session records' bugs (findings 13, 34, 35, 37, R7); witnesses.
+	for b in renew-resurrects shared-counter seq-only seq-tie delete-any seqless-by-pod seqless-masks-counter; do
 		expect Directory.cfg Directory.tla "dir:$b" -e "$m$b\"/"
 	done
 	expect Directory.cfg Directory.tla witness:dir-superseded -e 's/^    SupersededByNewer$/    WitnessSuperseded/'
