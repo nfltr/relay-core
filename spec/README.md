@@ -777,14 +777,16 @@ its side while the relay's goes on (a test seam holds the relay's stream:
 its path broke towards the agent only), the next primary resumes the link
 by its token and the session open on it goes on; its `refused` case has
 the relay notice first (finding 5: a new token, the parked link's session
-ends, a new one works). Not taken: `UAdoptRefused` (the relay resumed but
-the agent cannot adopt: its park's TTL passed or a dial of its own is out;
-the agent's side is covered in github.com/nfltr/relay
-`agent_link_park_test.go`), a
-second or refused connection's bind (`UBind`), a wait skipped
-(`USkipWait`), a silence logged after its unbind (`TSilentAfterDrop`), a
-`LinkDrop` of a connection the agent closed (`TLinkDropGone`) and
-`TCarries` (no rebalance test runs with the link on).
+ends, a new one works). `TCarries` is `TestAgentLinkCarriesSessions`'s
+(a session open on the link, then closed; lane CONFORM-relay-core);
+`UAdoptRefused` and `TLinkDropGone` are taken too (`COVERAGE=1`,
+2026-11-04: 18 traces). Not taken, each a race no test can order without
+a seam inside the step: a bind not logged (`UBind`: a second connection
+of a token while its first is still bound, a redial racing the old
+connection's unbind, or a refused one), a wait skipped (`USkipWait`: the
+dial binds between `Arrive` and the wait), a silence logged after its
+unbind (`TSilentAfterDrop`); `TUnknown` is the rejecting step (a line
+that names no action) and never takes a line.
 
 ### Moves (`TraceMove.tla`)
 
@@ -813,7 +815,12 @@ ends its trace there. `make spec-traces` runs the move tests of
 `reject-move-runonce` (a request forwarded after `MOVE_DONE`),
 `reject-move-oneowner` (routing stopped before the new connection took
 the record) and `reject-move-notcp` (a TCP session placed on A's primary
-after it found the move). `COVERAGE=1` lists the move steps no trace took.
+after it found the move). `COVERAGE=1` lists the move steps no trace took
+(2026-11-04, 66 traces: every one but a `Publish` that finds no consumer,
+which only a publish between the consumer's end and the session leaving
+`movedAway` takes, a window no test orders; later the session is gone and
+the publish is not A's step. A `PlaceTCP` that places elsewhere is not
+logged: it is not A's step).
 A peer replica's forward is `ArriveA` (frontend/http `peer` takes the
 lease through `tracehook.RoutePeer`; TLC chooses the peer's unlogged
 `PickRemote`, no more of them than forwards still to arrive). The TCP
