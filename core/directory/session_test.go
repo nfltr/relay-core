@@ -271,3 +271,51 @@ func TestDeleteSessionAfterAStoreLossKeepsTheNewerSessionsRecord(t *testing.T) {
 		t.Fatal("the older session's end deleted the newer session's record")
 	}
 }
+
+// Finding 37 (relay-core spec/README.md, Directory.tla ClaimNoSeq): a
+// ConnectTCP session whose claim got no Seq (the store unreachable) goes
+// on, renewing and ending by its start time. Its end deletes only its own
+// record (seqless-by-pod), and its record does not hide the counter from
+// an older session's renewal (seqless-masks-counter).
+func TestSeqlessSessionDeletesOnlyItsOwnRecord(t *testing.T) {
+	viper.Set("pod_ip.env_var", "POD_IP")
+	t.Cleanup(viper.Reset)
+	t.Setenv("POD_IP", "10.0.0.1")
+	key := GetStreamerCacheKey("agent-1")
+	t1, t2 := time.Unix(100, 0), time.Unix(200, 0)
+	for _, tc := range []struct {
+		name   string
+		record *Value
+		gone   bool
+	}{
+		{"a newer session here", &Value{PodIP: "10.0.0.1", Seq: 5, Since: t2.UnixNano()}, false},
+		{"another session without a Seq here", &Value{PodIP: "10.0.0.1", Since: t2.UnixNano()}, false},
+		{"its own", &Value{PodIP: "10.0.0.1", Since: t1.UnixNano()}, true},
+		{"a renewal without a session here", &Value{PodIP: "10.0.0.1"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := newMockCache()
+			mc.store[key] = tc.record
+			inv, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
+			if err := inv.(*ipInventory).DeleteSession(context.Background(), "agent-1", Session{Since: t1}); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := mc.store[key]; ok == tc.gone {
+				t.Fatalf("record kept = %v, want %v", ok, !tc.gone)
+			}
+		})
+	}
+	t.Run("renewal past the counter under a record without a Seq", func(t *testing.T) {
+		mc := newMockCache()
+		mc.store[key] = &Value{PodIP: "10.0.0.1", Since: t1.UnixNano()}
+		mc.counters = map[string]int64{seqKey(key): 5}
+		inv, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
+		err := inv.(SessionStore).PutSession(context.Background(), "agent-1", Session{Since: t2, Seq: 4}, true, nil, nil, time.Minute)
+		if !errors.Is(err, ErrSuperseded) {
+			t.Fatalf("err %v, want ErrSuperseded", err)
+		}
+		if mc.store[key].Seq != 0 {
+			t.Fatalf("record rewritten: %+v", *mc.store[key])
+		}
+	})
+}

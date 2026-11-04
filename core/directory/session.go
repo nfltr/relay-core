@@ -112,8 +112,9 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 		// Seq: a newer session claimed it and has ended. Writing it back
 		// would list the agent again with nothing announcing it
 		// (relay-core spec/README.md finding 13); this session ends and
-		// the agent's reconnect claims anew.
-		if (errors.Is(err, ErrNotFound) || err == nil && v == nil) && s.Seq != 0 {
+		// the agent's reconnect claims anew. A record without a Seq (a
+		// session whose claim got none) does not hide the counter (finding 37).
+		if (errors.Is(err, ErrNotFound) || err == nil && (v == nil || v.Seq == 0)) && s.Seq != 0 {
 			if n, err := d.inventory.Incr(ctx, seqKey(key), 0, seqTTL); err == nil && n > s.Seq {
 				return ErrSuperseded
 			}
@@ -138,13 +139,11 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 
 // DeleteSession removes the agent's record when it names this pod's
 // session s (its Seq and start time: a store that restarted empty can give
-// a later session here the same Seq, spec/README.md finding 36; s or the
-// record without a Seq: this pod): another session's record, here or on
-// another pod, is kept.
+// a later session here the same Seq, spec/README.md finding 36; s without
+// a Seq, a claim that got none, by its start time alone, finding 37; a
+// record without a session: this pod): another session's record, here or
+// on another pod, is kept.
 func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Session) error {
-	if s.Seq == 0 {
-		return d.DeleteIPs(ctx, agentID)
-	}
 	ctx, cancel := context.WithTimeout(ctx, d.opTimeout)
 	defer cancel()
 	// ponytail: get-then-delete, not atomic; a claim landing between the
@@ -155,9 +154,9 @@ func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Sessi
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err // the record may stay: the caller's release failed (relay-core spec/README.md finding 27)
 	}
-	// A record without a Seq here (a renewal by SetIP: the relay's own
+	// A record without a session here (a renewal by SetIP: the relay's own
 	// agent) is deleted by its pod, as DeleteIPs does.
-	if v == nil || v.PodIP != GetPodIP() || (v.Seq != 0 && (v.Seq != s.Seq || !recordSession(v).Since.Equal(s.Since))) {
+	if v == nil || v.PodIP != GetPodIP() || ((v.Seq != 0 || v.Since != 0) && (v.Seq != s.Seq || !recordSession(v).Since.Equal(s.Since))) {
 		return nil // gone, or another session's
 	}
 	if _, err := d.inventory.SRem(ctx, d.activeAgentSetKey(), agentID); err != nil {

@@ -31,7 +31,7 @@ const walkAgent = "agent-1"
 
 type walkState struct {
 	Act struct {
-		N string `json:"n"` // Init, Claim, Renew, End, Expire, Loss
+		N string `json:"n"` // Init, Claim, ClaimNoSeq, Renew, End, Expire, Loss
 		P string `json:"p"`
 		K string `json:"k"`
 		I int    `json:"i"` // 1-based session
@@ -105,6 +105,16 @@ func replayWalk(t *testing.T, cache Cache, reset func(), walk []walkState) error
 			t.Setenv("POD_IP", walkPod(a.P))
 			var s Session
 			s, err = stores[a.K].ClaimSession(ctx, walkAgent, Session{Since: t0.Add(time.Duration(a.I) * time.Second)}, nil, nil, time.Minute)
+			sess = append(sess, &walkSession{s: s, key: a.K, pod: a.P, st: "live"})
+		case "ClaimNoSeq":
+			// The counter step fails (the store unreachable): no Seq, no
+			// record; ConnectTCP goes on with the session (finding 37).
+			t.Setenv("POD_IP", walkPod(a.P))
+			inv, _ := NewIPInventory(testLogger(), failIncr{cache}, time.Second, "127.0.0.1", walkKeys[a.K])
+			s, cerr := inv.(*ipInventory).ClaimSession(ctx, walkAgent, Session{Since: t0.Add(time.Duration(a.I) * time.Second)}, nil, nil, time.Minute)
+			if cerr == nil || s.Seq != 0 {
+				return fmt.Errorf("step %d: a claim whose counter failed: Seq %d, err %v", n, s.Seq, cerr)
+			}
 			sess = append(sess, &walkSession{s: s, key: a.K, pod: a.P, st: "live"})
 		case "Renew":
 			ws := sess[a.I-1]
@@ -203,11 +213,18 @@ func TestDirectoryModelWalks(t *testing.T) {
 		}
 	}
 	// The walks must take every step and reach a superseded session.
-	for _, a := range []string{"Claim", "Renew", "End", "Expire", "Loss", "sup"} {
+	for _, a := range []string{"Claim", "ClaimNoSeq", "Renew", "End", "Expire", "Loss", "sup"} {
 		if seen[a] == 0 {
 			t.Errorf("no walk takes %s: regenerate spec/testdata/directory-walks.ndjson (scripts/spec.sh walks)", a)
 		}
 	}
+}
+
+// failIncr is a store whose counter step fails.
+type failIncr struct{ Cache }
+
+func (failIncr) Incr(context.Context, string, int64, time.Duration) (int64, error) {
+	return 0, errors.New("store unreachable")
 }
 
 // The replay is not vacuous: a store with the bugs the model's mutants put
