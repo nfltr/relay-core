@@ -29,7 +29,10 @@ connection is a link v2 connection, `dataplane.Conn`); the replicas and
 the directory across replicas (relay-server `spec/Replicas.tla`; the
 records' own semantics are `Directory.tla` here); revocation (relay-server
 `spec/Revocation.tla`); `client/handoff`, which hands a gRPC-only loop's
-frames over without per-session state (no session state machine).
+frames over without per-session state (no session state machine);
+agent-to-agent calls, whose per-call credit ends at the two agents
+(relay `spec/CallCredit.tla`; the relay's part is below, "Agent-to-agent
+calls").
 
 ## AgentLink.tla: one frame stream with credit
 
@@ -1586,3 +1589,32 @@ relay link connection never outlives every primary holding its token.
     (a): `OnLinkOr`'s answer, `LinkOpensAnswered`, mutant
     `park-primary-ctx`, witness `WitnessParkedOpen`; (b) is the environment
     assumption "an agent whose primary ended registers its next one".
+
+## Agent-to-agent calls (relay spec/CallCredit.tla)
+
+An agent-to-agent call's credit is end to end between the two rpcclient
+agents (relay `spec/README.md` "CallCredit.tla", lane CALLCREDIT); the
+relay is the model's `RelayIn`, `RelayOut` and `RelayGrant`: per-call
+pipes that keep a call's frames in order, and the caller's window updates
+(`rpcclient.WindowMessageType`) forwarded also after the call's request
+EOM, since they grant the responses' credit (mutant `CC:drop-after-eom`:
+the relay before, which ended a call's request direction at its EOM).
+They go from the caller's receive loop into a per-call channel of
+`a2aWindowCap` (4: `GrantBound`) without waiting; one past it refuses
+the call. Tests: `TestInternalAgentRouting_StreamsPastTheWindows` (local
+and cross-replica; both stop at 256 responses without the change),
+`TestInternalAgentRouting_SaturatedTransactionDoesNotBlockHealthyTransaction`.
+
+A property of any windowed stream, as of gRPC's: a call whose two sides
+both send past the other's window without reading (a handler sending
+more than 256 responses before reading the requests, a caller sending
+more than 16 requests before reading the responses) waits until its
+deadline; before, the receive loop cut it after `handoff.Stall`.
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `RelayGrant`: `handoffA2AWindow`; `RelayIn`/`RelayOut` of a local call | `core/session/dispatcher_agent_routing.go` |
+| `RelayOut` and `RelayGrant` of a call to another replica | `core/session/dispatcher_agent_routing_remote.go` |
+| `RelayTunnel`: an agent-to-agent call's frames forwarded until its stream ends | `core/session/dispatcher_grpc.go` |

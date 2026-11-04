@@ -265,7 +265,11 @@ func (d *Dispatcher) RelayTunnel(incomingStream relayTunnelStream) (retErr error
 		logger.Debug("errgroup ctx is using next stream ctx")
 		eg, egCtx = errgroup.WithContext(nextStream.Context())
 	}
-	if !firstMessage.GetEom() {
+	// An agent-to-agent call's frames are forwarded until the stream ends:
+	// after its request's EOM the caller's window updates still come (they
+	// grant the responses' credit; relay spec/CallCredit.tla).
+	a2a := targetAgentID != ""
+	if !firstMessage.GetEom() || a2a {
 		eg.Go(func() error {
 			type recvResult struct {
 				msg *pb.TunnelFrame
@@ -327,7 +331,7 @@ func (d *Dispatcher) RelayTunnel(incomingStream relayTunnelStream) (retErr error
 					} else {
 						logger.Debug("sent message to next stream")
 					}
-					if nextMessage.GetEom() {
+					if nextMessage.GetEom() && !a2a {
 						logger.Debug("received request EOM", "agent-connection", agentConnectedToThisPod)
 						return nil
 					}

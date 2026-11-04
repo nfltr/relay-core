@@ -17,6 +17,7 @@ import (
 	"github.com/nfltr/relay-core/internal/platform/txnregistry"
 	"github.com/nfltr/relay-core/platform/metrics"
 	"github.com/nfltr/relay/client/handoff"
+	"github.com/nfltr/relay/client/rpcclient"
 	"github.com/nfltr/relay/proto/pb"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
@@ -29,6 +30,12 @@ const (
 	msgTypeCancel       = "cancel"
 	msgTypeError        = "error"
 	a2aSessionBufferCap = 16
+	// a2aWindowCap is how many window updates (rpcclient.WindowMessageType)
+	// of one call wait for its route: a caller has at most four on the way
+	// (each is at least a quarter of its window: link.Credit.Consumed;
+	// relay spec/CallCredit.tla GrantBound), so a peer that keeps to its
+	// credit never fills it.
+	a2aWindowCap = 4
 )
 
 // a2aSession tracks an active agent-to-agent routing session. The source
@@ -45,7 +52,10 @@ const (
 type a2aSession struct {
 	requestCh  chan *pb.TunnelFrame
 	responseCh chan *pb.TunnelFrame
-	cancelFn   context.CancelFunc // cancels the session context
+	// windows carries the caller's window updates to the route, also after
+	// the request's EOM (they grant the responses' credit); never waited on.
+	windows  chan *pb.TunnelFrame
+	cancelFn context.CancelFunc // cancels the session context
 
 	source *GRPCStream     // the stream that opened it; only it feeds or cancels it
 	done   <-chan struct{} // the session context's: the route ended
@@ -101,6 +111,11 @@ func (d *Dispatcher) dispatchAgentToAgent(ctx context.Context, sourceStream *GRP
 	if loaded && session.source != sourceStream {
 		// Another stream's transaction: neither fed nor cancelled from here.
 		d.Logger.Warn("agent-to-agent frame for another stream's transaction dropped", "AgentID", sourceStream.ID, "transactionID", txnID)
+		return
+	}
+
+	if msg.GetMessageType() == rpcclient.WindowMessageType {
+		d.handoffA2AWindow(sourceStream, session, loaded, msg)
 		return
 	}
 
@@ -160,6 +175,31 @@ func (d *Dispatcher) dispatchAgentToAgent(ctx context.Context, sourceStream *GRP
 	}
 }
 
+// handoffA2AWindow gives a caller's window update to its call's route
+// without waiting. One for no call (it ended) is dropped; one past
+// a2aWindowCap (a caller that broke its credit) refuses the call.
+func (d *Dispatcher) handoffA2AWindow(sourceStream *GRPCStream, session *a2aSession, loaded bool, msg *pb.TunnelFrame) {
+	if !loaded {
+		return
+	}
+	select {
+	case session.windows <- msg:
+		return
+	case <-session.done:
+		return
+	default:
+	}
+	session.cancelFn()
+	metrics.RegisterA2AError("window_overflow")
+	logger := logging.With(d.Logger, "AgentID", sourceStream.ID, "transactionID", msg.GetTransactionId())
+	logger.Warn("agent-to-agent call refused: its caller sent more window updates than its credit allows")
+	go d.sendAgentToAgentError(sourceStream, msg, codes.ResourceExhausted, errA2AWindowOverflow, logger)
+}
+
+// errA2AWindowOverflow refuses a call whose caller sent window updates past
+// its credit.
+const errA2AWindowOverflow = "agent-to-agent call refused: its caller sent more window updates than its credit allows"
+
 // errA2ARequestStalled refuses an agent-to-agent call whose route took none
 // of its request frames for handoff.Stall.
 const errA2ARequestStalled = "agent-to-agent call refused: its route took none of its request for the stall bound"
@@ -189,6 +229,7 @@ func (d *Dispatcher) newA2ASession(ctx context.Context, sourceStream *GRPCStream
 	return &a2aSession{
 		requestCh:  make(chan *pb.TunnelFrame, bufferSize),
 		responseCh: make(chan *pb.TunnelFrame, bufferSize),
+		windows:    make(chan *pb.TunnelFrame, a2aWindowCap),
 		cancelFn:   sessionCancel,
 		source:     sourceStream,
 		done:       sessionCtx.Done(),
@@ -487,8 +528,10 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 
 	agentBoundCtx := bindToAgentStream(ctx, targetStream)
 	eg, egCtx := errgroup.WithContext(agentBoundCtx)
+	responsesDone := make(chan struct{}) // goroutine 3 returned
 
-	// Goroutine 1: forward request messages to the target agent.
+	// Goroutine 1: forward request messages to the target agent, and the
+	// caller's window updates until the responses end.
 	eg.Go(func() error {
 		if err := sendNewCall(targetStream, firstMsg); err != nil {
 			if !errors.Is(err, errAgentDraining) {
@@ -498,16 +541,26 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 		}
 		logger.Debug("sent first request to target agent")
 		session.add(len(firstMsg.GetPayload()), 0)
+		requests := session.requestCh
 		if firstMsg.GetEom() {
-			return nil
+			requests = nil
 		}
 		for {
 			select {
 			case <-egCtx.Done():
 				return egCtx.Err()
-			case msg, ok := <-session.requestCh:
+			case <-responsesDone:
+				return nil
+			case msg := <-session.windows:
+				msg.Timestamps = &pb.Timestamps{RequestAtGrpcServer: time.Now().UnixMilli()}
+				if err := targetStream.Send(msg); err != nil {
+					logger.Error("failed to send window update to target agent", "error", err)
+					return err
+				}
+			case msg, ok := <-requests:
 				if !ok {
-					return nil
+					requests = nil
+					continue
 				}
 				msg.Timestamps = &pb.Timestamps{RequestAtGrpcServer: time.Now().UnixMilli()}
 				if err := targetStream.Send(msg); err != nil {
@@ -517,7 +570,7 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 				logger.Debug("sent request to target agent")
 				session.add(len(msg.GetPayload()), 0)
 				if msg.GetEom() {
-					return nil
+					requests = nil
 				}
 			}
 		}
@@ -554,6 +607,7 @@ func (d *Dispatcher) routeAgentToAgentLocal(
 
 	// Goroutine 3: relay responses from per-session channel back to source.
 	eg.Go(func() error {
+		defer close(responsesDone)
 		for first := true; ; first = false {
 			select {
 			case <-egCtx.Done():

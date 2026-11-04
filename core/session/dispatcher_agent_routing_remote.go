@@ -78,40 +78,54 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 	}()
 
 	eg, egCtx := errgroup.WithContext(ctx)
+	responsesDone := make(chan struct{}) // goroutine 2 returned
 
-	// Goroutine 1: forward request messages to the remote pod.
+	// Goroutine 1: forward request messages to the remote pod, and the
+	// caller's window updates until the responses end (the peer's
+	// RelayTunnel forwards an agent-to-agent call's frames until this
+	// stream's end).
 	eg.Go(func() error {
-		if err := peerStream.Send(firstMsg); err != nil {
-			if err == io.EOF {
-				return nil // the peer ended the stream; Recv surfaces its status
+		send := func(msg *pb.TunnelFrame, what string) (ended bool, err error) {
+			if err := peerStream.Send(msg); err != nil {
+				if err == io.EOF {
+					return true, nil // the peer ended the stream; Recv surfaces its status
+				}
+				logStreamLifecycleWithLogger(logger, "failed to send "+what+" to remote pod", err)
+				return true, fmt.Errorf("%v: %w", err, podToPodStreamErr)
 			}
-			logStreamLifecycleWithLogger(logger, "failed to send first request to remote pod", err)
-			return fmt.Errorf("%v: %w", err, podToPodStreamErr)
+			return false, nil
+		}
+		if ended, err := send(firstMsg, "first request"); ended {
+			return err
 		}
 		logger.Debug("sent first request to remote pod")
 		session.add(len(firstMsg.GetPayload()), 0)
+		requests := session.requestCh
 		if firstMsg.GetEom() {
-			return nil
+			requests = nil
 		}
 		for {
 			select {
 			case <-egCtx.Done():
 				return egCtx.Err()
-			case msg, ok := <-session.requestCh:
-				if !ok {
-					return nil
+			case <-responsesDone:
+				return nil
+			case msg := <-session.windows:
+				if ended, err := send(msg, "window update"); ended {
+					return err
 				}
-				if err := peerStream.Send(msg); err != nil {
-					if err == io.EOF {
-						return nil // the peer ended the stream; Recv surfaces its status
-					}
-					logStreamLifecycleWithLogger(logger, "failed to send request to remote pod", err)
-					return fmt.Errorf("%v: %w", err, podToPodStreamErr)
+			case msg, ok := <-requests:
+				if !ok {
+					requests = nil
+					continue
+				}
+				if ended, err := send(msg, "request"); ended {
+					return err
 				}
 				logger.Debug("sent request to remote pod")
 				session.add(len(msg.GetPayload()), 0)
 				if msg.GetEom() {
-					return nil
+					requests = nil
 				}
 			}
 		}
@@ -119,6 +133,7 @@ func (d *Dispatcher) routeAgentToAgentRemote(
 
 	// Goroutine 2: relay responses from the remote pod back to the source agent.
 	eg.Go(func() error {
+		defer close(responsesDone)
 		for first := true; ; first = false {
 			resp, err := peerStream.Recv()
 			if err != nil {
