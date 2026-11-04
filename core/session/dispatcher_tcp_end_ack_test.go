@@ -299,3 +299,60 @@ func TestTCPTunnelClientResetAbortsAgentSession(t *testing.T) {
 		t.Fatalf("the relay's close after its client's reset: %v, want a whole close with abort", f)
 	}
 }
+
+// A client's reset reaches the agent's target as a reset, never a FIN, on
+// every transport a session takes: the agent link over TCP and QUIC, data
+// connections and the frame streams (spec/README.md finding 15, AgentLink
+// AbortTyped; link GEnds on the link transports).
+func TestTCPTunnelClientResetResetsTargetEndToEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ag   harnessAgent
+	}{{"link-tcp", agentCurrent}, {"link-quic", agentQUIC}, {"data-conns", agentDataConns}, {"frame-streams", agentAuxOnly}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			got, ended := make(chan struct{}), make(chan error, 1)
+			go func() {
+				c, err := ln.Accept()
+				if err != nil {
+					ended <- err
+					return
+				}
+				defer c.Close()
+				if _, err := io.ReadFull(c, make([]byte, 2)); err != nil {
+					ended <- err
+					return
+				}
+				close(got)
+				_, err = io.Copy(io.Discard, c)
+				ended <- err
+			}()
+			h := startTunnelHarnessWith(t, ln.Addr().String(), nil, "", 0, relayCurrent, tc.ag)
+			c := h.Dial(t)
+			if _, err := c.Write([]byte("hi")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-got:
+			case err := <-ended:
+				t.Fatalf("target: %v before the bytes", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("the target got no bytes")
+			}
+			_ = c.(*net.TCPConn).SetLinger(0)
+			_ = c.Close() // an RST
+			select {
+			case err := <-ended:
+				if err == nil || errors.Is(err, io.EOF) {
+					t.Fatalf("the target's read ended with %v after the client's reset, want a reset", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the target's connection did not end after the client's reset")
+			}
+		})
+	}
+}

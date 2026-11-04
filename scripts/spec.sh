@@ -347,7 +347,7 @@ simulate)
 	[ $st = 0 ] || { tail -60 "$work/sim.out"; exit $st; }
 	;;
 traces)
-	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions)$'}
+	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions|TestTCPTunnelClientResetResetsTargetEndToEnd)$'}
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown|TestAgentLinkResumedByTheNextPrimary|TestAgentLinkCarriesSessions)$'}
 	ptests=${PRESENCE_TESTS:-'^(TestPresenceAcrossReplicas|TestPresenceAcrossReplicasFailedWrites)$'}
 	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/ptraces"
