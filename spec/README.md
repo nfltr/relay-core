@@ -1504,3 +1504,12 @@ relay link connection never outlives every primary holding its token.
     once (`TestShareUsesReportsAtOnceNearTheEnd`, which fails without
     it). `compose` sets it; relay-server's `shareReader` still uses `Used`
     until it requires this version.
+41. **A failed share use report lost its uses** (code, low; relay-server
+    `spec/README.md` finding 3, lane RSFOLLOW). `ShareUses.Flush` sent
+    once and dropped the uses on an error, so an issuer outage of one
+    flush let a visited share idle-expire. Design checked in relay-server
+    `spec/Share.tla` (`FailReport`, `Resend`, mutant `drop-on-fail`).
+    Fixed: a failed send's uses are put back (a later use's reservation
+    wins) and the next flush is armed; a kept use whose reservation has
+    passed is not sent again (`TestShareUsesKeepsUsesAFailedSendDid`,
+    which fails without it).

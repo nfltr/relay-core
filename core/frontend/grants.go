@@ -149,10 +149,11 @@ func (r *CachedGrants) ForgetAll() {
 
 // ShareUses reports the share codes a relay granted (Used, a CachedGrants'
 // used hook) to their issuer (Send), in one report per After, so it keeps
-// each reserved for its agent for Reserve after its last use. Best effort:
-// a report the issuer does not take is logged and dropped (a lost report
-// shortens a reservation, never grants access). No goroutine while nothing
-// is used.
+// each reserved for its agent for Reserve after its last use. A report the
+// issuer does not take is logged and its uses kept for the next flush, one
+// After later, until their reservation passes (relay-server spec/Share.tla
+// FailReport, finding 3; a lost report shortens a reservation, never grants
+// access). No goroutine while nothing is used.
 type ShareUses struct {
 	Send    func(ctx context.Context, used []sharecode.Used) error
 	Reserve func() time.Duration // how long a use reserves its code; <= 0: no reports
@@ -194,24 +195,45 @@ func (u *ShareUses) UsedEnding(code string, end time.Time) {
 	}
 }
 
-// Flush reports the uses not yet reported, now.
+// Flush reports the uses not yet reported, now; a failed report's uses are
+// kept for the next flush.
 func (u *ShareUses) Flush() {
 	u.mu.Lock()
 	codes := u.codes
 	u.codes = nil
 	u.soon = false
 	u.mu.Unlock()
-	if len(codes) == 0 {
-		return
-	}
+	now := time.Now()
 	used := make([]sharecode.Used, 0, len(codes))
 	for code, until := range codes {
-		used = append(used, sharecode.Used{Code: code, Until: until})
+		if until.After(now) { // a kept use past its reservation reserves nothing
+			used = append(used, sharecode.Used{Code: code, Until: until})
+		}
+	}
+	if len(used) == 0 {
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := u.Send(ctx, used); err != nil {
-		u.Log("shares: use not reported to the issuer", "shares", len(used), "error", err)
+		u.Log("shares: use not reported to the issuer, kept for the next report", "shares", len(used), "error", err)
+		u.keep(used)
+	}
+}
+
+// keep puts a failed report's uses back, a later use's reservation winning,
+// and arms the next flush if no use since has.
+func (u *ShareUses) keep(used []sharecode.Used) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(u.codes) == 0 {
+		u.codes = map[string]time.Time{}
+		time.AfterFunc(u.After, u.Flush)
+	}
+	for _, x := range used {
+		if until, ok := u.codes[x.Code]; !ok || x.Until.After(until) {
+			u.codes[x.Code] = x.Until
+		}
 	}
 }
 

@@ -4,6 +4,7 @@
 package frontend
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -130,6 +131,66 @@ func TestShareUsesReportsAtOnceNearTheEnd(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a code within the flush interval of its end was not reported at once")
+	}
+}
+
+// TestShareUsesKeepsUsesAFailedSendDid (relay-server spec/Share.tla
+// FailReport/Resend, finding 3): a report the issuer does not take keeps
+// its uses, and the next flush, one After later, sends them again (merged
+// with uses since, the later reservation kept); a use whose reservation has
+// passed is not sent again.
+func TestShareUsesKeepsUsesAFailedSendDid(t *testing.T) {
+	got := make(chan []sharecode.Used, 4)
+	fail := make(chan bool, 4)
+	fail <- true
+	uses := &ShareUses{Send: func(_ context.Context, used []sharecode.Used) error {
+		got <- used
+		select {
+		case <-fail:
+			return errors.New("issuer down")
+		default:
+			return nil
+		}
+	}, Reserve: func() time.Duration { return time.Hour }, After: 20 * time.Millisecond, Log: func(string, ...any) {}}
+	uses.Used("a")
+	recv := func() []sharecode.Used {
+		t.Helper()
+		select {
+		case u := <-got:
+			return u
+		case <-time.After(5 * time.Second):
+			t.Fatal("no report")
+			return nil
+		}
+	}
+	if u := recv(); len(u) != 1 || u[0].Code != "a" {
+		t.Fatalf("first report %+v, want a", u)
+	}
+	u := recv() // the retry, with no use since
+	if len(u) != 1 || u[0].Code != "a" {
+		t.Fatalf("retry %+v, want a again", u)
+	}
+	select {
+	case u := <-got:
+		t.Fatalf("a report after the retry was taken: %+v", u)
+	case <-time.After(100 * time.Millisecond):
+	}
+	// A kept use whose reservation passed while the issuer was down is
+	// dropped (flushes by hand: no timer fires within the test).
+	uses.After = time.Hour
+	uses.Reserve = func() time.Duration { return 30 * time.Millisecond }
+	fail <- true
+	uses.Used("b")
+	uses.Flush()
+	if u := recv(); len(u) != 1 || u[0].Code != "b" {
+		t.Fatalf("report %+v, want b", u)
+	}
+	time.Sleep(50 * time.Millisecond)
+	uses.Flush()
+	select {
+	case u := <-got:
+		t.Fatalf("a use past its reservation sent again: %+v", u)
+	default:
 	}
 }
 
