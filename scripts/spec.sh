@@ -23,7 +23,9 @@
 #             relaytrace; each stream's trace checked against spec/Trace.tla,
 #             each move's (move-*.ndjson) against spec/TraceMove.tla, each
 #             agent's agent-link handoff (handoff-*.ndjson) against
-#             spec/TraceHandoff.tla, each deployment's presence
+#             spec/TraceHandoff.tla, the agent's side of it
+#             (hagent-*.ndjson, relay client/agent's recorder) against
+#             spec/TraceHandoffAgent.tla, each deployment's presence
 #             (presence-*.ndjson) against spec/TracePresence.tla; with
 #             COVERAGE=1 the steps no trace took (weekly).
 #   walks     random walks of spec/Directory.cfg into
@@ -155,6 +157,29 @@ CFG
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
 }
 
+# atrace FILE: TLC on one agent-side Handoff trace (spec/TraceHandoffAgent.tla); 0 when accepted.
+atrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Sess <- TraceSess
+    MaxGen <- TraceMaxGen
+    Mutant = "${AMUTANT:-none}"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TraceNotDone
+    PlacedOnLive
+    NoOrphanLink
+    CarriesExact
+    SilenceOnDeadPath
+    LinkOpensAnswered
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceHandoffAgent.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
 # trace_move FILE: TLC on one recorded move (spec/TraceMove.tla); 0 when accepted.
 trace_move() {
 	cfg=$work/$(basename "$1").cfg
@@ -208,6 +233,7 @@ check_trace() {
 	presence-* | reject-presence-*) ptrace "$1" ;;
 	move-* | reject-move-*) trace_move "$1" ;;
 	handoff-* | reject-handoff-*) htrace "$1" ;;
+	hagent-* | reject-hagent-*) atrace "$1" ;;
 	*) trace "$1" ;;
 	esac
 }
@@ -267,6 +293,11 @@ actions_check() {
 		for e in $(grep -E '\bev\b' "spec/$t.tla" | grep -ohE '"[A-Z][A-Za-z0-9]*"' | sort -u); do
 			echo "$go" | grep -qx "$e" || { echo "spec/$t.tla: event $e is recorded by no Go in core/session"; ok=1; }
 		done
+	done
+	# The agent's side (TraceHandoffAgent.tla) is recorded in relay client/agent.
+	ago=$(grep -v '^//' "$(go list -m -f '{{.Dir}}' github.com/nfltr/relay/client)/agent/trace_handoff_on.go" | grep -ohE '"[A-Za-z0-9]+"' | sort -u)
+	for e in $(grep -E '\bev\b' spec/TraceHandoffAgent.tla | grep -ohE '"[A-Z][A-Za-z0-9]*"' | sort -u); do
+		echo "$ago" | grep -qx "$e" || { echo "spec/TraceHandoffAgent.tla: event $e is recorded by no Go in relay client/agent"; ok=1; }
 	done
 	return $ok
 }
@@ -403,7 +434,7 @@ traces)
 	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions|TestTCPTunnelClientResetResetsTargetEndToEnd|TestTraceWriteAfterFinishIsLeftOut)$'}
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown|TestAgentLinkResumedByTheNextPrimary|TestAgentLinkCarriesSessions)$'}
 	ptests=${PRESENCE_TESTS:-'^(TestPresenceAcrossReplicas|TestPresenceAcrossReplicasFailedWrites)$'}
-	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/ptraces"
+	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces"
 	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests" ./core/session/ >"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
 		exit 1
@@ -412,6 +443,7 @@ traces)
 		case $(basename "$t") in
 		move-*) mv "$t" "$work/mtraces/" ;;
 		handoff-*) mv "$t" "$work/htraces/" ;;
+		hagent-*) mv "$t" "$work/atraces/" ;;
 		presence-*) mv "$t" "$work/ptraces/" ;;
 		*) mv "$t" "$work/traces/" ;;
 		esac
@@ -445,6 +477,8 @@ traces)
 	fi
 	echo "== Handoff (spec/TraceHandoff.tla)"
 	checktraces "$work/htraces" htrace || st=1
+	echo "== Handoff, the agent's side (spec/TraceHandoffAgent.tla)"
+	checktraces "$work/atraces" atrace || st=1
 	echo "== Presence (spec/TracePresence.tla)"
 	checktraces "$work/ptraces" ptrace || st=1
 	if [ -n "${COVERAGE:-}" ]; then

@@ -20,8 +20,8 @@ registry, the session placement, the agent link's relay side
 harness that runs the real agent against the real dispatcher
 (`internal/platform/tcprig`, `go test -run TestTCPTunnel ./core/session/`).
 The agent half is read from relay `client/agent` (`tcp.go`,
-`tcp_dataplane.go`, `agent_link.go`); it is not traced (a recorder there
-would need a release of that module).
+`tcp_dataplane.go`, `agent_link.go`); its Handoff steps are traced by a
+recorder there (`TraceHandoffAgent.tla`, "Agent-side Handoff traces").
 
 Out of scope, each covered elsewhere: the bytes of a session on the agent
 link or on a data connection (link's own `spec/Link.tla`: a data
@@ -330,6 +330,7 @@ of this repository (a path with `/`); another repository's is named
 | `RegisterStream`, `unregister`, `leaveRotationLocked`, `carriesSessions`, `carries`, `yield`, `sendLoop`'s silent and supersede cases | `core/session/dispatcher_tcp_streams.go` |
 | `handleLocalConn`, `onwardLocal`, `attach` | `core/session/dispatcher_tcp.go` |
 | the Handoff trace recorder (`TraceHandoff.tla`) | `core/session/trace_handoff_on.go`, `trace_off.go` |
+| the agent's Handoff trace recorder (`TraceHandoffAgent.tla`) | `relay:client/agent/trace_handoff_on.go`, `trace_handoff_off.go` |
 | `moveAgent`'s `carriesSessions` check | `core/session/agent_rebalance.go` |
 | `lazyLink` (`open`, `end`, `adopt`, `drainNow`), `linkPark`, the resume header | `relay:client/agent/agent_link.go`, `tcp.go` |
 
@@ -796,6 +797,53 @@ dial binds between `Arrive` and the wait), a silence logged after its
 unbind (`TSilentAfterDrop`); `TUnknown` is the rejecting step (a line
 that names no action) and never takes a line.
 
+### Agent-side Handoff traces (`TraceHandoffAgent.tla`)
+
+The other half of the same steps, recorded by the real agent: with
+`-tags relaytrace` and `RELAYTRACE` set, github.com/nfltr/relay
+`client/agent` (`trace_handoff_on.go`; zero cost without the tag) writes
+the agent's steps of `Handoff.tla` for one agent run (its `linkPark`; a
+`lazyLink` without a park is a run of one primary) to
+`<dir>/hagent-<n>.ndjson`:
+
+| line | agent code | `Handoff.tla` |
+|---|---|---|
+| `Register` (g, t) | the primary's header read (`runTCPTunnel`'s header goroutine, or `lazyLink.open` first): its token's number | `Register(g)`, `tok'[g] = t` |
+| `Dial` (g) | `lazyLink.open` starts a dial | `Dial(g)` |
+| `Bind` (t), `GiveUp` | `lazyLink.run`: the dial connected, or failed | `Bind` (bound, or refused) |
+| `AgentEnd` (g) | `lazyLink.end` (parks an up link), or `close` once the primary ended without a park | `AgentEnd(g)` |
+| `Adopt` (t), `AdoptRefused` (t) | `lazyLink.adopt` took the parked link, or drained it | `Adopt`, `AdoptRefused` |
+| `Drain` (t) | the agent closed a link: the park's TTL, a park the next primary did not resume, `lazyLink.close` | `LinkDrop(t)` without a redial; or nothing when the relay closed it first |
+| `Open` (s), `Refused` (s) | `linkSessions.accept` took a session; refused it for want of a context (finding 42) | `Place(s)`/`Wake(s)` on the link; the open refused |
+
+Each line is written under the lock that orders its change
+(`lazyLink.mu`, `linkPark.mu`; the recorder's lock innermost). The
+relay's steps (`PrimEnd`, a bind of the Node's own redial, drops,
+silences), the path's failure and the arrival (and dial wait) of the
+session the agent takes next are not logged: TLC chooses them. `make
+spec-traces` checks every agent trace of the `HANDOFF_TESTS` (the real
+agent against the real relay) with Handoff's five invariants, after
+checking that `spec/testdata/reject-hagent-park-primary-ctx.ndjson` is
+rejected: an open on a parked link refused, finding 42's agent bug (with
+`Mutant = "park-primary-ctx"` the same trace is a behaviour that breaks
+`LinkOpensAnswered`). First run (2026-11-04, lane HANDOFFREC): 18 traces
+(6-45 lines, a few seconds each), all accepted, among them the resume
+(`Adopt`, then a session on the adopted link) and the refused resume
+(the parked link drained, a new dial); `COVERAGE=1`: `AAdoptRefused`,
+`AGiveUp` and `ARefused` are taken by no test (`ARefused` by the reject
+fixture only; `AUnknown` is the rejecting step). nfltr-relay's
+`TestAgentLinkSurvivesReconnect` (relay-server `relaytest`, the
+RECONNFLAKE test), run once by hand with this recorder, gave a trace of
+57 lines with two sessions opened on the parked link between `AgentEnd`
+and the next `Register` (finding 42's case), accepted.
+
+The relay client's own tests (fake relays) are not in `make
+spec-traces`: `TestLazyAgentLink`'s traces are rejected, since its fake
+relay retires the link (`dataplane.AgentLinkClose`) and asks for a new
+dial with no session waiting, which no relay does (finding 4: the
+agent's branch for it is dead against this relay, and `Handoff.tla` has
+no retire).
+
 ### Moves (`TraceMove.tla`)
 
 With the same tag and `RELAYTRACE`, the HTTP session of an agent that
@@ -911,6 +959,7 @@ relay-server's.
 | `PresenceLarge.cfg` (`make spec-nightly`) | `NoSilentStale`, as `Presence.cfg` with a crash | 1,438,047 (244,286) | | 26 s (2026-11-03) |
 | `make spec-mutants` | 9 mutants, each caught (on the CI config) | | 5-11 | 14 s |
 | `make spec-traces` | 16 AgentLink, 64 Move, 12 Handoff traces, all accepted; 14 reject fixtures rejected | | | 6 min 38 s (load 15-35) |
+| `make spec-traces`, agent-side Handoff (2026-11-04) | 18 agent traces accepted; 1 reject fixture rejected | | | 1-5 s a trace |
 | `make spec-traces`, presence only (2026-11-03) | 2 Presence traces accepted; 3 reject fixtures rejected | | | under 10 s at load 120-140 |
 
 `COVERAGE=1 scripts/spec.sh check` takes every action of both models
