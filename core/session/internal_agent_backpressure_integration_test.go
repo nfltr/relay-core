@@ -10,11 +10,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/handoff"
 	"github.com/nfltr/relay/client/rpcclient"
 )
 
+// The source agent's receive loop serves both calls. When the stalled
+// call's 257th frame reaches it before the healthy call's frames (a
+// scheduling order a loaded machine takes), that loop holds it for the
+// SDK's bound (handoff.Stall, 10 s), then isolates the stalled call and
+// the healthy one goes on. So the bound here is that stall plus a margin
+// against a hang, never a fixed time below it (it was 5 s: red under load).
 func TestInternalAgentRouting_SaturatedTransactionDoesNotBlockHealthyTransaction(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), handoff.Stall+30*time.Second)
 	defer cancel()
 
 	d := newTestDispatcherForInternalAgent(t)
