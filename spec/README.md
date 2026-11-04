@@ -668,14 +668,19 @@ inProcConn's `io.EOF`) is logged after `Down` too, and the model takes it
 only for a released half close.
 
 The recorder logs a relay-side `Write` when `Acquire` returns and the
-`SendData` when the frame is enqueued; between the two a session can be
-finished by its reader, and such a trace would be rejected although the
-code did what the model allows (the data is dropped as after a whole
-close). No run hit it; it would show as a rejected trace naming a `Write`
-after its session's `Finish`. Likewise a relay `SendAck` can follow its own
-`Abort` (a client error: the whole close is queued, then `markClosed`):
-the model sends no ack after a whole close; the agent takes the whole
-close first (FIFO) and resets its target, so nothing ends cleanly.
+`SendData` when the frame is enqueued; between `Acquire` and the
+recorder's line a session can be finished by its reader, and a `Write`
+logged after its session's `Finish` would order the `Acquire` after the
+removal it preceded. The recorder leaves such a chunk's `Write` and its
+`SendData` out (`traceWrite`, `traceSent`): the chunk is dropped as after
+the session's end, a stutter of the model's state (its credit is gone).
+Guard: `TestTraceWriteAfterFinishIsLeftOut` (relaytrace; failed before,
+lane CONFORM-relay-core). A relay `SendAck` after its own `Abort` (a
+client error: the whole close is queued, then the ack goroutine's frame)
+is a behaviour of the model: `Abort` keeps the ack already decided
+(`apend`), and the agent takes the whole close first (FIFO), so nothing
+ends cleanly; a trace with it is accepted (checked by hand, lane
+CONFORM-relay-core: an earlier note here said the model rejects it).
 
 ### Handoff traces
 

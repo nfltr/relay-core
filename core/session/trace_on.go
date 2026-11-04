@@ -39,6 +39,14 @@ type (
 type traceStreamState struct {
 	f       *os.File
 	stopped bool // Down was recorded (under traceMu)
+	// Under traceMu: the sessions Finish was recorded for, and per session
+	// the chunks whose Acquire returned before that Finish but reached
+	// traceWrite after it. Such a Write and its SendData are left out: the
+	// chunk is dropped as after the session's end, a stutter of the model's
+	// state (its credit is gone), and logging it after Finish would order
+	// the Acquire after the removal it preceded.
+	finished map[string]bool
+	skip     map[string]int
 }
 
 type traceSessState struct {
@@ -116,7 +124,27 @@ func traceOpenSess(a *tcpAgentStream, id string, s *tcpSession) {
 
 // traceWrite: sendData's Credit.Acquire took n.
 func traceWrite(a *tcpAgentStream, id string, n int) {
-	traceStep(a.tr, traceEvent{Ev: "Write", S: id, N: n})
+	if a.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	if a.tr.finished[id] {
+		a.tr.skip[id]++
+		return
+	}
+	traceLog(a.tr, traceEvent{Ev: "Write", S: id, N: n})
+}
+
+// traceSent logs the step a frame put into the outbox stands for; a
+// skipped Write's SendData is left out with it. Under traceMu.
+func traceSent(t *traceStreamState, f *pb.TCPData) {
+	e := sentEvent(f)
+	if t != nil && e.Ev == "SendData" && t.skip[e.S] > 0 {
+		t.skip[e.S]--
+		return
+	}
+	traceLog(t, e)
 }
 
 // traceRead: n bytes popped from the session's queue (Credit.Consumed
@@ -160,6 +188,12 @@ func traceFinish(a *tcpAgentStream, id string, remove func()) {
 	traceMu.Lock()
 	defer traceMu.Unlock()
 	remove()
+	if a.tr != nil {
+		if a.tr.finished == nil {
+			a.tr.finished, a.tr.skip = map[string]bool{}, map[string]int{}
+		}
+		a.tr.finished[id] = true
+	}
 	traceLog(a.tr, traceEvent{Ev: "Finish", S: id})
 }
 
@@ -174,14 +208,16 @@ func traceEnqueue(a *tcpAgentStream, f *pb.TCPData, stop <-chan struct{}) bool {
 		if len(a.SendCh) < cap(a.SendCh) {
 			a.SendCh <- f
 			metrics.AddTransferBytes(metrics.PathTCPGRPC, len(f.GetData()), 0)
-			traceLog(a.tr, sentEvent(f))
+			traceSent(a.tr, f)
 			traceMu.Unlock()
 			return true
 		}
 		traceMu.Unlock()
 		select {
 		case <-a.Done: // the stream ended: the frame is lost (SendData on a dead stream)
-			traceStep(a.tr, sentEvent(f))
+			traceMu.Lock()
+			traceSent(a.tr, f)
+			traceMu.Unlock()
 			return true
 		case <-stop: // its session ended: not sent (SendData gives the credit back)
 			return false
