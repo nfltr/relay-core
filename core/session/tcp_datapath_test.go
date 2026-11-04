@@ -255,7 +255,12 @@ func TestTCPTunnelE2EEConnectionPerRequest(t *testing.T) {
 
 // Keep-alive vhost connections serve many requests each. The agent's
 // session conn must stop http.Server's background read between requests
-// (a read deadline in the past) and keep every response whole.
+// (a read deadline in the past) and keep every response whole: the server
+// side never ends or asks to end a connection. The client may still redial:
+// net/http's Transport drops a healthy connection when its write loop has
+// not reported the request written within 50 ms of the response
+// (maxWriteWaitBeforeConnReuse), which a loaded machine does, so the number
+// of dials is not the guard.
 func TestTCPTunnelE2EEKeepAlive(t *testing.T) {
 	body := bytes.Repeat([]byte("k"), 1024)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -267,17 +272,18 @@ func TestTCPTunnelE2EEKeepAlive(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := startTunnelHarness(t, "", setup, backend.URL)
-	var dials atomic.Int64
+	var serverEnded atomic.Int64
 	const conns, perConn = 8, 50
-	// One client per connection, each allowed one: keep-alive must carry
-	// all of its requests, so dials == conns exactly.
 	err = runConcurrent(conns, func() error {
 		tr := &http.Transport{
 			MaxConnsPerHost: 1,
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test-only self-signed agent cert
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				dials.Add(1)
-				return (&net.Dialer{}).DialContext(ctx, "tcp", h.RelayLn.Addr().String())
+				c, err := (&net.Dialer{}).DialContext(ctx, "tcp", h.RelayLn.Addr().String())
+				if err != nil {
+					return nil, err
+				}
+				return &endWatchConn{Conn: c, serverEnded: &serverEnded}, nil
 			},
 		}
 		defer tr.CloseIdleConnections()
@@ -292,6 +298,9 @@ func TestTCPTunnelE2EEKeepAlive(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			if resp.Close {
+				return fmt.Errorf("response asks to close the keep-alive connection")
+			}
 			if !bytes.Equal(got, body) {
 				return fmt.Errorf("body %d bytes, want %d", len(got), len(body))
 			}
@@ -301,9 +310,30 @@ func TestTCPTunnelE2EEKeepAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := dials.Load(); n != conns {
-		t.Fatalf("%d requests on %d keep-alive clients took %d connections", conns*perConn, conns, n)
+	if n := serverEnded.Load(); n > 0 {
+		t.Fatalf("%d keep-alive connections ended from the server side", n)
 	}
+}
+
+// endWatchConn counts a connection whose Read fails before the client closed
+// it: the relay or agent ended it.
+type endWatchConn struct {
+	net.Conn
+	closed      atomic.Bool
+	serverEnded *atomic.Int64
+}
+
+func (c *endWatchConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if err != nil && !c.closed.Load() {
+		c.serverEnded.Add(1)
+	}
+	return n, err
+}
+
+func (c *endWatchConn) Close() error {
+	c.closed.Store(true)
+	return c.Conn.Close()
 }
 
 // BenchmarkTCPTunnelThroughput moves data through relay -> gRPC -> agent ->
