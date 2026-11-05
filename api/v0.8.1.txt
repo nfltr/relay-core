@@ -1,0 +1,5 @@
+Compatible changes:
+- ./platform/metrics.AddConnRefusals: added
+- ./platform/connlimit.PacketConfig: added
+- ./platform/connlimit.ReasonPerIPPackets: added
+- ./platform/connlimit.WrapPacketConn: added

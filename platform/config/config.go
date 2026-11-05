@@ -365,6 +365,10 @@ func SetDefaultFlags() {
 	_ = flag.Int("security.conn_limit.per_ip_max", 2000, "open connections one source IP may hold on each public port (0 = no limit)")
 	_ = flag.Float64("security.conn_limit.per_ip_rate", 200, "new connections a second one source IP may open on each public port (0 = no limit)")
 	_ = flag.Int("security.conn_limit.per_ip_burst", 2000, "burst of security.conn_limit.per_ip_rate")
+	_ = flag.Float64("security.conn_limit.per_ip_packet_rate", 20000, "UDP datagrams a second one source (IPv4 address, IPv6 /64) may send to the QUIC agent link (agent_link.quic.listen); the rest are dropped before QUIC parses them (0 = no limit)")
+	_ = flag.Int("security.conn_limit.per_ip_packet_burst", 40000, "burst of security.conn_limit.per_ip_packet_rate")
+	_ = flag.Float64("security.conn_limit.per_ip_handshake_packet_rate", 50, "of those, QUIC long-header datagrams (handshakes, about 3 per connection; version negotiation) a second one source may send: each Initial with a new connection ID makes the relay hold a half-open handshake (~70 KB) until its timeout (15 s), so this bounds a source's (0 = no limit)")
+	_ = flag.Int("security.conn_limit.per_ip_handshake_packet_burst", 1000, "burst of security.conn_limit.per_ip_handshake_packet_rate (~330 handshakes at once: agents behind one NAT reconnecting)")
 
 	// ── Admin API ───────────────────────────────────────────────────────
 	_ = flag.String("admin.message", "", "admin message displayed to agents on connect and on the landing page (empty = no message)")

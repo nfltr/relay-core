@@ -12,6 +12,24 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Per-source limits on the QUIC agent link's UDP socket
+  (`agent_link.quic.listen`), applied by `TCPDispatcher.AgentLinkQUIC`
+  before QUIC parses a datagram: `platform/connlimit.WrapPacketConn`
+  (`PacketConfig`), set by `security.conn_limit.per_ip_packet_rate`
+  (datagrams a second per IPv4 address or IPv6 /64, default 20000, burst
+  `per_ip_packet_burst` 40000) and
+  `security.conn_limit.per_ip_handshake_packet_rate` (of those, QUIC
+  long-header datagrams: handshakes, about 3 each, and version
+  negotiation, default 50, burst `per_ip_handshake_packet_burst` 1000);
+  0 turns one off, loopback
+  is exempt. A `*net.UDPConn` keeps quic-go's batched reads, GSO and ECN
+  (the wrap filters `ReadBatch`). Drops are counted in
+  `rpc_server_proxy_conn_refused_total{listener="quic",reason="per_ip_packets"}`
+  (`metrics.AddConnRefusals`). Measured: an Initial flood from one source
+  no longer grows the relay's half-open handshakes without bound (nfltr
+  docs/decisions/relay-flood-hardening-2026-11-05.md, DDOS2). Migration:
+  none; a deployment whose QUIC clients share one address (NAT, a load
+  balancer without the client address) raises or turns off the limits.
 - `session.(*Dispatcher).RouteArriving` and `AddHTTPSession`: a request
   for an agent whose record names this replica, though its HTTP session
   has not registered here yet (a moving agent's new session claims the

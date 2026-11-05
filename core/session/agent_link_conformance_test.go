@@ -18,6 +18,7 @@ import (
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
 	"github.com/nfltr/relay-core/internal/platform/testcert"
+	"github.com/nfltr/relay-core/platform/connlimit"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
@@ -97,6 +98,10 @@ func TestAgentLinkConformanceQUIC(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = pc.Close() })
+		// Through the per-source packet filter, loopback not exempt, as
+		// AgentLinkQUIC wraps the relay's socket: quic-go keeps its
+		// batched reads through it.
+		pc = connlimit.WrapPacketConn(pc, connlimit.PacketConfig{Listener: "test", Rate: 1e9, Burst: 1e9})
 		if err := l.listenQUIC(pc, &tls.Config{Certificates: []tls.Certificate{cert}}); err != nil {
 			t.Fatal(err)
 		}

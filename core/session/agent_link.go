@@ -41,10 +41,12 @@ import (
 	"github.com/nfltr/quic-go"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/dataplane"
+	"github.com/spf13/viper"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/nfltr/relay-core/platform/connlimit"
 	"github.com/nfltr/relay-core/platform/metrics"
 )
 
@@ -176,6 +178,16 @@ func (d *TCPDispatcher) AgentLinkQUIC(pc net.PacketConn, tc *tls.Config) (serve 
 	if l == nil {
 		return nil, errors.New("agent link: QUIC needs the gRPC port's data plane")
 	}
+	// A source over its packet rate is dropped before QUIC parses its
+	// datagrams (relay-flood-hardening-2026-11-05 in nfltr, DDOS2).
+	pc = connlimit.WrapPacketConn(pc, connlimit.PacketConfig{
+		Listener:       "quic",
+		Rate:           viper.GetFloat64("security.conn_limit.per_ip_packet_rate"),
+		Burst:          viper.GetInt("security.conn_limit.per_ip_packet_burst"),
+		HandshakeRate:  viper.GetFloat64("security.conn_limit.per_ip_handshake_packet_rate"),
+		HandshakeBurst: viper.GetInt("security.conn_limit.per_ip_handshake_packet_burst"),
+		ExemptLoopback: true,
+	})
 	if err := l.listenQUIC(pc, tc); err != nil {
 		return nil, err
 	}
