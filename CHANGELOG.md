@@ -12,6 +12,16 @@ changes listed (from the first tag on).
 
 ### Added
 
+- A typed balance refusal: `identity.ErrBalanceExhausted` (a provider's
+  "balance exhausted"), `(*identity.Authenticator).RevokeCause(key, cause)`
+  (a cut with its cause; `Revoke` is `RevokeCause(key, ErrRevoked)`),
+  `identity.Ended(cause)`, `grpcauth.BalanceExhaustedStatus()`
+  (`FailedPrecondition` + `ERROR_REASON_BALANCE_EXHAUSTED`), `Shares.Refuse`
+  (the product refuses a share visit by the agent's owner) and
+  `connect.ErrNoCredential`. gRPC answers the refusal with the reason, the
+  connect and share paths 402 with it, a cut session aborts with it.
+  Migration: none.
+
 - `(*frontend.ShareUses).UsedEnding(code, end)` and
   `frontend.CachedGrants.UsedEnd`: a grant reports the code's end it read
   (`SharePolicy.ExpiresAt`), and a use within `After` of that end is sent
@@ -307,6 +317,12 @@ changes listed (from the first tag on).
   the response begins, as on the agent link over TCP since v0.4.1.
 
 ### Changed
+
+- `connect.RequestPrincipal` returns `(Principal, header, error)` in place
+  of `(Principal, header, bool)`, and `connect.Frontend.Caller` returns
+  `(Principal, error)`: the provider's error (a balance refusal) reaches
+  the answer. Migration: `ok` is `err == nil`; no credential is
+  `connect.ErrNoCredential`.
 
 - `(*session.Dispatcher).UpdateAgentLabels(agentID, session, labels,
   patch)`: takes the calling connection's number (`rpcclient.SourceSession`
