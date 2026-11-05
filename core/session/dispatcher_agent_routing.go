@@ -345,6 +345,16 @@ func (d *Dispatcher) routeAgentToAgent(ctx context.Context, sourceStream *GRPCSt
 
 	// Resolve target agent — check local pod first, then remote.
 	targetStream, local := d.Upstreams.Load(targetAgentID)
+	selfRecord := false
+	if !local {
+		// Its record may name this replica, its stream registering in a
+		// moment (finding 45): wait for it; never dial this replica itself.
+		if s, self := d.upstreamArriving(txnCtx, targetAgentID); s != nil {
+			targetStream, local = s, true
+		} else {
+			selfRecord = self
+		}
+	}
 	if !local && d.DrainedAway(targetAgentID) {
 		metrics.RegisterA2ARequest("pre_route", "draining")
 		d.sendAgentToAgentError(sourceStream, firstMsg, codes.Unavailable, agentDrainingDetail, logger)
@@ -352,6 +362,12 @@ func (d *Dispatcher) routeAgentToAgent(ctx context.Context, sourceStream *GRPCSt
 	}
 	if local {
 		d.routeAgentToAgentLocal(txnCtx, sourceStream, targetStream, session, firstMsg, txnID, sourceAgentID, targetAgentID, routeStart, logger)
+		return
+	}
+	if selfRecord {
+		metrics.RegisterA2ARequest("local", "target_disconnected")
+		metrics.RegisterA2AError("not_found")
+		d.sendAgentToAgentError(sourceStream, firstMsg, codes.NotFound, errA2ATargetNotConnected, logger)
 		return
 	}
 	logger.Debug("target agent not on local pod, dialing peer")

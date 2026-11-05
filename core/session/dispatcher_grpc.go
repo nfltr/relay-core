@@ -140,10 +140,20 @@ func (d *Dispatcher) RelayTunnel(incomingStream relayTunnelStream) (retErr error
 
 	// find the agent stream using the agentID
 	nextStream, agentConnectedToThisPod := d.Upstreams.Load(agentID)
+	selfRecord := false
+	if !agentConnectedToThisPod {
+		// Its record may name this replica, its stream registering in a
+		// moment (finding 45): wait for it; never dial this replica itself.
+		if s, self := d.upstreamArriving(incomingStreamCtx, agentID); s != nil {
+			nextStream, agentConnectedToThisPod = s, true
+		} else {
+			selfRecord = self
+		}
+	}
 	if !agentConnectedToThisPod && d.DrainedAway(agentID) {
 		return status.Error(codes.Unavailable, agentDrainingDetail)
 	}
-	if !agentConnectedToThisPod && incomingStreamCtx.Value(PeerLinkCaller{}) != nil {
+	if !agentConnectedToThisPod && (selfRecord || incomingStreamCtx.Value(PeerLinkCaller{}) != nil) {
 		// A peer forwarded it here (the record named this replica): served
 		// here only, never forwarded again, as ServeLinkTCP; a record
 		// flapping between replicas, or naming this one with no stream

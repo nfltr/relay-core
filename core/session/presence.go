@@ -295,6 +295,7 @@ func (d *Dispatcher) notifyUpstreamRegistered(agentID string) {
 			d.Presence.up(agentID, l, c)
 		}
 	}
+	d.wakeArrivals() // upstreamArriving
 	if d.UpstreamRegCond == nil {
 		return
 	}

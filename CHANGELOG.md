@@ -147,6 +147,16 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- An agent-to-agent call whose target's record names this replica while
+  the target's stream here has not registered yet (it claims the record
+  first) waits up to 1.5 s for it, as HTTP requests do (`RouteArriving`):
+  the call was dialled to this replica itself over the replica link, and a
+  peer's `RelayTunnel` refused NotFound. A stale record of this replica
+  answers NotFound, never a dial to itself (spec/README.md finding 45).
+- `scripts/spec.sh traces` checks relay client/rpcclient's
+  `calllifecycle-*.ndjson` against relay's `spec/TraceCallLifecycle.tla`;
+  it sorted them into the AgentLink checker, which rejected them.
+
 - Two sessions of an agent with the same Seq (a store that restarted
   empty gave a new claim the Seq of a session still live elsewhere) are
   ordered by their start times, so one yields; before, neither did and

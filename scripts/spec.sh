@@ -30,7 +30,9 @@
 #             (presence-*.ndjson) against spec/TracePresence.tla, each
 #             agent-to-agent call's credit (callcredit-*.ndjson, relay
 #             client/rpcclient's recorder, TestInternalAgentRouting_*)
-#             against relay's spec/TraceCallCredit.tla (relayspec); with
+#             against relay's spec/TraceCallCredit.tla (relayspec), each
+#             call's lifecycle (calllifecycle-*.ndjson, the same recorder)
+#             against relay's spec/TraceCallLifecycle.tla; with
 #             COVERAGE=1 the steps no trace took (weekly).
 #   walks     random walks of spec/Directory.cfg into
 #             spec/testdata/directory-walks.ndjson (core/directory
@@ -155,7 +157,7 @@ relayspec() {
 	*-0.*-*) rev=${v##*-} ;; # a pseudo-version: its commit
 	*) rev=client/$v ;;
 	esac
-	for f in scripts/spec.sh scripts/fetch-tla.sh spec/CallCredit.tla spec/TraceCallCredit.tla; do
+	for f in scripts/spec.sh scripts/fetch-tla.sh spec/CallCredit.tla spec/TraceCallCredit.tla spec/CallLifecycle.tla spec/TraceCallLifecycle.tla; do
 		mkdir -p "$work/relay/$(dirname "$f")"
 		curl -fsSL --retry 3 -o "$work/relay/$f" "https://raw.githubusercontent.com/nfltr/relay/$rev/$f"
 	done
@@ -265,6 +267,38 @@ check_trace() {
 	hagent-* | reject-hagent-*) atrace "$1" ;;
 	*) trace "$1" ;;
 	esac
+}
+
+# cltrace FILE: each agent's call in one recorded CallLifecycle trace
+# (calllifecycle-*.ndjson, relay client/rpcclient's recorder) checked
+# against relay's spec/TraceCallLifecycle.tla ($rs, relayspec); 0 when all
+# are accepted. The config is relay scripts/spec.sh's cltrace (which takes
+# no trace files from elsewhere: relay's cltraces mode records its own).
+cltrace() {
+	: >"$1.out"
+	for ac in $(sed -E 's/.*"a":"([^"]+)","c":"([^"]+)".*/\1:\2/' "$1" | sort -u); do
+		ag=${ac%%:*} call=${ac#*:} m=none
+		grep "\"a\":\"$ag\",\"c\":\"$call\"" "$1" | grep -q '"cont":true' || m=old-caller
+		cat >"$1.$ag.$call.cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Agent = "$ag"
+    Call = "$call"
+    Txns <- TraceTxns
+    N <- TraceLen
+    Mutant = "$m"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    AtMostOneCall
+    NoEndedEntry
+    TraceNotDone
+CFG
+		META=$work/states-$(basename "$1").$ag.$call tlc "$1.$ag.$call.cfg" "$rs/spec/TraceCallLifecycle.tla" >>"$1.out" 2>&1 || true
+		grep -q '^Error: Invariant TraceNotDone is violated' "$1.out" || return 1
+		: >"$1.out"
+	done
 }
 
 # checktraces DIR CHECKER: check each DIR/*.ndjson; fails on a rejected one or none.
@@ -484,7 +518,7 @@ traces)
 	# steps the real relay pair leaves to chance (an open on the parked link,
 	# a refused adoption, a dial that gives up).
 	ctests=${CLIENT_TESTS:-'^(TestLazyAgentLink|TestLazyAgentLinkGivesUp|TestAgentLinkUpOnlyWhileBound|TestTCPTunnelReturnsAfterTheLinkIsParked|TestTCPTunnelAdoptRefusedWhileDialling)$'}
-	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces" "$work/cctraces"
+	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces" "$work/cctraces" "$work/cltraces"
 	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests|$cctests" ./core/session/ >"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
 		exit 1
@@ -504,6 +538,7 @@ traces)
 		hagent-*) mv "$t" "$work/atraces/" ;;
 		presence-*) mv "$t" "$work/ptraces/" ;;
 		callcredit-*) mv "$t" "$work/cctraces/" ;;
+		calllifecycle-*) mv "$t" "$work/cltraces/" ;;
 		*) mv "$t" "$work/traces/" ;;
 		esac
 	done
@@ -541,8 +576,11 @@ traces)
 	echo "== Presence (spec/TracePresence.tla)"
 	checktraces "$work/ptraces" ptrace || st=1
 	echo "== CallCredit, agent-to-agent calls (relay spec/TraceCallCredit.tla)"
+	rs=$(relayspec)
 	ls "$work"/cctraces/*.ndjson >/dev/null 2>&1 || { echo "no CallCredit trace"; st=1; }
-	"$(relayspec)/scripts/spec.sh" cctraces "$work"/cctraces/*.ndjson || st=1
+	"$rs/scripts/spec.sh" cctraces "$work"/cctraces/*.ndjson || st=1
+	echo "== CallLifecycle, agent-to-agent calls (relay spec/TraceCallLifecycle.tla)"
+	checktraces "$work/cltraces" cltrace || st=1
 	if [ -n "${COVERAGE:-}" ]; then
 		# Presence.tla's steps no presence trace took: test gaps.
 		cat "$work"/ptraces/presence-*.ndjson 2>/dev/null |

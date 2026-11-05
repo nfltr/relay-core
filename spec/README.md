@@ -449,7 +449,7 @@ with it. The agent's next connection is a new session, outside the model.
 | `relayRequestsToAgent`, `moveDone` | `core/session/dispatcher_subscribe.go` |
 | `sendLoop`'s superseded renewal (`movingAway`, `yield`), `streamFor` | `core/session/dispatcher_tcp_streams.go` |
 | `dispatcherURL`, `peer`, `routeLease`, the first publish | `frontend/http/dispatch.go`, `frontend.go`, `proxy.go` |
-| `RouteArriving`, the claim before the registration (`RegisterB`) | `core/session/route_arriving.go`, `core/session/dispatcher_subscribe.go` |
+| `RouteArriving`, `upstreamArriving` (the A2A paths), the claim before the registration (`RegisterB`) | `core/session/route_arriving.go`, `core/session/dispatcher_subscribe.go`, `core/session/dispatcher_grpc.go`, `core/session/dispatcher_agent_routing.go` |
 | the recorder of A's steps (`TraceMove.tla`, "Trace validation") | `core/session/trace_move_on.go` |
 | `moveConnect`, `waitIdle`, `closeWhenAnswered` | `relay:client/agent/move.go`, `connect.go`, `run.go` |
 
@@ -1696,6 +1696,17 @@ relay link connection never outlives every primary holding its token.
     never forwarded to this replica itself. Guards
     `TestDispatchWaitsForAnArrivingAgent`,
     `TestPeerForwardWaitsForAnArrivingAgent`.
+    The agent-to-agent paths had the same gap on the gRPC stream (its
+    claim in `ConnectAgentTunnel` before `Upstreams.Store`): a call
+    (`routeAgentToAgent`) dialled this replica itself over the replica
+    link, a peer's `RelayTunnel` was refused NotFound (lane DRAIN2,
+    2026-11-06). Same abstraction in `Move.tla` (a request at B while the
+    record names B's session not yet registered: `ArriveB`, `RegisterB`
+    on `Upstreams`), so no model change: `upstreamArriving` waits as
+    `RouteArriving` does; a stale record of this replica is NotFound,
+    never a dial to itself. Guards `TestA2ACallWaitsForAnArrivingTarget`,
+    `TestA2ACallToAStaleRecordOfThisReplicaIsNotDialled`,
+    `TestRelayTunnelWaitsForAnArrivingAgent`.
 
 ## Agent-to-agent calls (relay spec/CallCredit.tla)
 
