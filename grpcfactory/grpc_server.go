@@ -169,6 +169,14 @@ func NewGRPCServer(logger *slog.Logger, opts ...GRPCServerOption) *grpc.Server {
 		grpcOpts = append(grpcOpts, grpc.Creds(grpcauth.TLSStateCredentials()))
 	}
 
+	// A connection that has not finished its TLS handshake and HTTP/2
+	// preface by then is closed: grpc-go's 120 s default let a stalled-
+	// handshake flood hold about 32 KiB a connection until the relay ran
+	// out of memory (relay-flood-hardening-2026-11-05).
+	if d := viper.GetDuration("grpc.connection_timeout"); d > 0 {
+		grpcOpts = append(grpcOpts, grpc.ConnectionTimeout(d))
+	}
+
 	// Limit concurrent streams per connection to prevent stream-explosion DoS.
 	if maxStreams := viper.GetUint32("grpc.max_concurrent_streams"); maxStreams > 0 {
 		grpcOpts = append(grpcOpts, grpc.MaxConcurrentStreams(maxStreams))

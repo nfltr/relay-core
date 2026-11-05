@@ -12,6 +12,24 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Per-source-IP connection limits on the public ports (proxy, gRPC, SNI
+  router), checked at accept before any byte is read: `platform/connlimit`
+  (`Wrap`, `Config`), set by `security.conn_limit.per_ip_max` (open
+  connections, default 2000), `security.conn_limit.per_ip_rate` (new
+  connections a second, default 200) and `security.conn_limit.per_ip_burst`
+  (default 2000); 0 turns one off, loopback peers are exempt. Refusals are
+  `rpc_server_proxy_conn_refused_total{listener,reason}`. And
+  `grpc.connection_timeout` (default 10s; grpc-go's own is 120s): a gRPC
+  connection must finish its TLS handshake and HTTP/2 preface by then. One
+  machine's stalled-handshake flood ran a 1 GiB relay out of memory in
+  12 s before (nfltr `docs/decisions/relay-flood-hardening-2026-11-05.md`).
+  `ratelimit.visitor_rate` (default 20) and `ratelimit.visitor_burst`
+  (default 100): one visitor IP's share and site visits to one agent, which
+  relay-server checks before the agent's `ratelimit.rate`.
+  Migration: a deployment whose clients reach the relay through a NAT or
+  proxy that hides their addresses (one source IP for all) raises or turns
+  off the per-IP limits.
+
 - A typed balance refusal: `identity.ErrBalanceExhausted` (a provider's
   "balance exhausted"), `(*identity.Authenticator).RevokeCause(key, cause)`
   (a cut with its cause; `Revoke` is `RevokeCause(key, ErrRevoked)`),

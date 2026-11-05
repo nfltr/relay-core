@@ -330,3 +330,35 @@ func TestListenHostBindsPrivatePortsToTheirAddress(t *testing.T) {
 		}
 	}
 }
+
+// The per-source-IP connection limits sit in front of the public ports
+// (proxy, gRPC) and not the internal or metrics ones
+// (relay-flood-hardening-2026-11-05).
+func TestListenLimitsOnlyPublicPorts(t *testing.T) {
+	viper.Set("http.server.enable", true)
+	viper.Set("rpc.server.enable", true)
+	viper.Set("internal.enable", true)
+	for _, key := range []string{config.ProxyServerPort, config.GrpcServerPort, "internal.port", "metrics.port"} {
+		viper.Set(key, "0")
+	}
+	viper.Set("internal.address", "127.0.0.1")
+	viper.Set("security.conn_limit.per_ip_max", 5)
+	defer viper.Reset()
+
+	listeners, _, err := Listen(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, l := range listeners {
+			_ = l.Close()
+		}
+	}()
+	for key, port := range BoundPorts(false) {
+		_, plain := listeners[port].(*net.TCPListener)
+		public := key == config.ProxyServerPort || key == config.GrpcServerPort
+		if plain == public {
+			t.Errorf("%s: limited=%v, want %v", key, !plain, public)
+		}
+	}
+}

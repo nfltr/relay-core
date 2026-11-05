@@ -345,6 +345,7 @@ func SetDefaultFlags() {
 	_ = flag.Duration("grpc.keepalive.server_parameters.time", 30*time.Second, "interval between server-initiated keepalive pings to clients")
 	_ = flag.Duration("grpc.keepalive.server_parameters.timeout", 10*time.Second, "time to wait for a keepalive ping ack from client")
 	_ = flag.Uint32("grpc.max_concurrent_streams", 250, "max concurrent gRPC streams per connection (0 = unlimited)")
+	_ = flag.Duration("grpc.connection_timeout", 10*time.Second, "time a new gRPC connection has to finish its TLS handshake and HTTP/2 preface (grpc-go's default is 120s, which let stalled handshakes hold memory)")
 
 	// ── Behavior Flags ──────────────────────────────────────────────────
 	_ = flag.Bool("on_downstream_errors.drop_agent_connection", defaultOnDownstreamErrorsDropAgentConn, "disconnect the agent when a downstream gRPC call fails")
@@ -353,6 +354,17 @@ func SetDefaultFlags() {
 	_ = flag.Bool("ratelimit.enable", true, "enable per-AgentID request rate limiting")
 	_ = flag.Float64("ratelimit.rate", 100, "tokens added per second per AgentID")
 	_ = flag.Int("ratelimit.burst", 200, "max token capacity (burst size) per AgentID")
+	_ = flag.Float64("ratelimit.visitor_rate", 20, "share and site visits a second one visitor IP may make to one agent, checked before the agent's ratelimit.rate so one visitor cannot spend it (0 = no per-visitor limit)")
+	_ = flag.Int("ratelimit.visitor_burst", 100, "burst of ratelimit.visitor_rate (a page and its assets)")
+
+	// ── Connection limits per source IP (platform/connlimit) ────────────
+	// Checked at accept on the public ports, before any byte is read: a
+	// single machine's handshake or slow-connection flood stops there
+	// (docs/decisions/relay-flood-hardening-2026-11-05.md in nfltr). Loopback
+	// peers are exempt. 0 turns a limit off.
+	_ = flag.Int("security.conn_limit.per_ip_max", 2000, "open connections one source IP may hold on each public port (0 = no limit)")
+	_ = flag.Float64("security.conn_limit.per_ip_rate", 200, "new connections a second one source IP may open on each public port (0 = no limit)")
+	_ = flag.Int("security.conn_limit.per_ip_burst", 2000, "burst of security.conn_limit.per_ip_rate")
 
 	// ── Admin API ───────────────────────────────────────────────────────
 	_ = flag.String("admin.message", "", "admin message displayed to agents on connect and on the landing page (empty = no message)")

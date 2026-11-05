@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/nfltr/relay-core/platform/config"
+	"github.com/nfltr/relay-core/platform/connlimit"
 	"github.com/nfltr/relay-core/platform/util"
 	"github.com/spf13/viper"
 )
@@ -141,7 +142,30 @@ func Listen(muxOnGRPC bool) (listeners map[string]net.Listener, forget func(), e
 		forget()
 		return nil, nil, err
 	}
+	limitPublicPorts(listeners, portKeys(muxOnGRPC))
 	return listeners, forget, nil
+}
+
+// limitPublicPorts puts the per-source-IP connection limits
+// (security.conn_limit.*) in front of the proxy, gRPC and SNI router ports,
+// before TLS and the SNI peek; the internal and metrics ports stay as they
+// are.
+func limitPublicPorts(listeners map[string]net.Listener, keys []string) {
+	names := map[string]string{config.ProxyServerPort: "proxy", config.GrpcServerPort: "grpc", config.SNIRouterPort: "sni"}
+	for _, key := range keys {
+		name, public := names[key]
+		if !public {
+			continue
+		}
+		port := viper.GetString(key)
+		listeners[port] = connlimit.Wrap(listeners[port], connlimit.Config{
+			Listener:       name,
+			MaxPerIP:       viper.GetInt("security.conn_limit.per_ip_max"),
+			Rate:           viper.GetFloat64("security.conn_limit.per_ip_rate"),
+			Burst:          viper.GetInt("security.conn_limit.per_ip_burst"),
+			ExemptLoopback: true,
+		})
+	}
 }
 
 // listenOnExtraHosts binds the proxy, gRPC and SNI router ports on every listen.address

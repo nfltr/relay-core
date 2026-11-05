@@ -85,3 +85,12 @@ func SetTLSCertExpiry(name string, unixSeconds int64) {
 
 // IncrTLSCertRenewals counts an issuance/renewal attempt ("ok" or "error"). allow:wrapper
 func IncrTLSCertRenewals(name, result string) { tlsCertRenewals.WithLabelValues(name, result).Inc() }
+
+var connRefusals = auto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: proxyNamespace,
+	Name:      "conn_refused_total",
+	Help:      "Connections the relay closed at accept, before reading them, by listener and reason (per_ip_conns: the source IP held its limit of open connections; per_ip_rate: it opened connections faster than its rate). platform/connlimit.",
+}, []string{"listener", "reason"})
+
+// IncrConnRefusals counts a connection platform/connlimit refused. allow:wrapper
+func IncrConnRefusals(listener, reason string) { connRefusals.WithLabelValues(listener, reason).Inc() }

@@ -1,0 +1,3 @@
+Compatible changes:
+- ./platform/metrics.IncrConnRefusals: added
+- package github.com/nfltr/relay-core/platform/connlimit: added
