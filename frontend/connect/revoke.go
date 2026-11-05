@@ -58,11 +58,16 @@ func (o *sessionSet) abort(a *link.Abort) {
 }
 
 // credentialAbort is the end of a session whose connection's hold ended
-// with cause: ERROR_REASON_UNAUTHENTICATED when its credential was revoked
-// or expired, nil otherwise (the client left: nothing to tell it).
+// with cause: ERROR_REASON_BALANCE_EXHAUSTED when its account's prepaid
+// balance is exhausted, ERROR_REASON_UNAUTHENTICATED when its credential
+// was revoked or expired, nil otherwise (the client left: nothing to tell
+// it).
 func credentialAbort(cause error) *link.Abort {
-	if !errors.Is(cause, identity.ErrRevoked) && !errors.Is(cause, identity.ErrExpired) {
-		return nil
+	switch {
+	case errors.Is(cause, identity.ErrBalanceExhausted):
+		return &link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED), Msg: cause.Error()}
+	case identity.Ended(cause):
+		return &link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED), Msg: cause.Error()}
 	}
-	return &link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED), Msg: cause.Error()}
+	return nil
 }

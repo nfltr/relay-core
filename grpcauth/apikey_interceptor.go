@@ -25,9 +25,9 @@ import (
 	"strings"
 
 	"github.com/nfltr/relay-core/core/identity"
+	"github.com/nfltr/relay-core/core/relaystatus"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/agentwire"
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -51,7 +51,8 @@ func AuthUnaryInterceptor(auth *identity.Authenticator) grpc.UnaryServerIntercep
 // AuthStreamInterceptor authenticates a stream's key with auth and holds
 // the stream under the credential until it ends. A stream its credential's
 // revocation or expiry ended answers Unauthenticated, reason
-// ERROR_REASON_UNAUTHENTICATED.
+// ERROR_REASON_UNAUTHENTICATED; one its account's exhausted balance ended
+// answers BalanceExhaustedStatus.
 func AuthStreamInterceptor(auth *identity.Authenticator) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		p, err := MetadataPrincipal(ss.Context(), auth)
@@ -64,7 +65,7 @@ func AuthStreamInterceptor(auth *identity.Authenticator) grpc.StreamServerInterc
 		held := auth.Hold(ss.Context(), p) // carries p
 		defer held.Release()
 		err = handler(srv, &wrappedStream{ServerStream: ss, ctx: held})
-		if cause := context.Cause(held); errors.Is(cause, identity.ErrRevoked) || errors.Is(cause, identity.ErrExpired) {
+		if cause := context.Cause(held); identity.Ended(cause) {
 			return CredentialEndedStatus(cause).Err()
 		}
 		return err
@@ -103,6 +104,9 @@ func MetadataPrincipal(ctx context.Context, auth *identity.Authenticator) (ident
 		if errors.Is(err, identity.ErrUnavailable) {
 			return p, status.Error(codes.Unavailable, "credential store unavailable, retry")
 		}
+		if errors.Is(err, identity.ErrBalanceExhausted) {
+			return p, BalanceExhaustedStatus().Err()
+		}
 		return p, status.Error(codes.Unauthenticated, "invalid API key or fleet token")
 	}
 	return p, nil
@@ -124,11 +128,20 @@ type wrappedStream struct {
 func (w *wrappedStream) Context() context.Context { return w.ctx }
 
 // CredentialEndedStatus is the typed answer of a connection its
-// credential's revocation or expiry ended.
+// credential's revocation or expiry ended (identity.Ended), or its
+// account's exhausted balance (BalanceExhaustedStatus).
 func CredentialEndedStatus(cause error) *status.Status {
-	st := status.New(codes.Unauthenticated, cause.Error())
-	if d, err := st.WithDetails(&errdetails.ErrorInfo{Reason: relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED.String(), Domain: "relay.nfltr.xyz"}); err == nil {
-		return d
+	if errors.Is(cause, identity.ErrBalanceExhausted) {
+		return BalanceExhaustedStatus()
 	}
-	return st
+	return relaystatus.New(codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED, cause.Error())
+}
+
+// BalanceExhaustedStatus is the answer to a credential whose account's
+// prepaid balance is exhausted (identity.ErrBalanceExhausted), at
+// admission and at the cut: FailedPrecondition with reason
+// ERROR_REASON_BALANCE_EXHAUSTED, which clients retry (slowly), never
+// Unauthenticated, which they stop on.
+func BalanceExhaustedStatus() *status.Status {
+	return relaystatus.New(codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, identity.ErrBalanceExhausted.Error())
 }

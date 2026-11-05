@@ -25,6 +25,7 @@ import (
 	"github.com/nfltr/relay-core/core/directory"
 	"github.com/nfltr/relay-core/core/frontend"
 	"github.com/nfltr/relay-core/core/identity"
+	"github.com/nfltr/relay-core/core/relaystatus"
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/core/sharecode"
 	"github.com/nfltr/relay-core/frontend/connect"
@@ -34,7 +35,9 @@ import (
 	"github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay-core/platform/ratelimit"
 	"github.com/nfltr/relay-core/services"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc/codes"
 )
 
 // Ports are a composition's listeners: proxy (clients' /connect, keys' own
@@ -119,9 +122,9 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 	front := &connect.Frontend{Core: c, Logger: logger, Config: func() connect.Config {
 		return connect.Config{Enabled: viper.GetBool("tcp.enabled"), MinClientGeneration: clientgen.Min(), E2EEPolicy: rules.E2EEPolicy}
 	}}
-	front.Caller = func(r *http.Request) identity.Principal {
-		p, _, _ := connect.RequestPrincipal(auth, r, identity.Credential{})
-		return p
+	front.Caller = func(r *http.Request) (identity.Principal, error) {
+		p, _, err := connect.RequestPrincipal(auth, r, identity.Credential{})
+		return p, err
 	}
 	front.Hold = func(ctx context.Context, p identity.Principal) (context.Context, func(), bool) {
 		held := auth.Hold(ctx, p)
@@ -231,8 +234,12 @@ func ownRequests(auth *identity.Authenticator, serve http.Handler, visits *httpi
 			visits.Serve(w, r, serve, code)
 			return
 		}
-		p, header, ok := connect.RequestPrincipal(auth, r, identity.Credential{Name: r.Header.Get("X-Agent-Id")})
-		if !ok || p.AgentID == "" {
+		p, header, err := connect.RequestPrincipal(auth, r, identity.Credential{Name: r.Header.Get("X-Agent-Id")})
+		if errors.Is(err, identity.ErrBalanceExhausted) {
+			relaystatus.WriteHTTP(w, http.StatusPaymentRequired, codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, err.Error())
+			return
+		}
+		if err != nil || p.AgentID == "" {
 			http.Error(w, "missing authentication credentials", http.StatusUnauthorized)
 			return
 		}

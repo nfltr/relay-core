@@ -21,6 +21,13 @@ var (
 	ErrExpired = errors.New("credential expired")
 )
 
+// Ended reports whether cause ended a held connection for its credential
+// (a cut: ErrRevoked, ErrBalanceExhausted; or its expiry), which the
+// transports answer typed; any other cause is the connection's own end.
+func Ended(cause error) bool {
+	return errors.Is(cause, ErrRevoked) || errors.Is(cause, ErrExpired) || errors.Is(cause, ErrBalanceExhausted)
+}
+
 // Live holds the live connections of each credential subject: a
 // transport holds every connection it authenticated for as long as it
 // serves it (Authenticator.Hold); Cut ends them all with a cause. The zero
@@ -33,7 +40,13 @@ type Live struct {
 	// ponytail: cut keeps one entry per subject ever cut (revocations are
 	// rare); bound it by age if a relay ever revokes millions of keys.
 	gen uint64
-	cut map[string]uint64
+	cut map[string]cutMark
+}
+
+// cutMark is a subject's last Cut: its generation and cause.
+type cutMark struct {
+	gen   uint64
+	cause error
 }
 
 // Held is one held connection: its context, which carries the principal
@@ -61,14 +74,14 @@ func (h *Held) Value(key any) any {
 // hold holds a connection p opened under subject; it also ends at
 // p.NotAfter (ErrExpired) unless that is zero. A p read before subject's
 // last Cut (Authenticator.Authenticate's generation) is ended at once with
-// ErrRevoked: the revocation raced its authentication.
+// that Cut's cause: the revocation raced its authentication.
 func (l *Live) hold(ctx context.Context, subject string, p Principal) *Held {
 	ctx, cancel := context.WithCancelCause(ctx)
 	h := &Held{Context: ctx, p: p, cancel: cancel, live: l}
 	l.mu.Lock()
-	if l.cut[subject] > p.gen {
+	if m := l.cut[subject]; m.gen > p.gen {
 		l.mu.Unlock()
-		cancel(ErrRevoked)
+		cancel(m.cause)
 		return h
 	}
 	if l.held == nil {
@@ -93,7 +106,7 @@ func (l *Live) generation() uint64 {
 func (l *Live) cutSince(subject string, gen uint64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.cut[subject] > gen
+	return l.cut[subject].gen > gen
 }
 
 // Release ends the hold: the connection ended.
@@ -115,9 +128,9 @@ func (l *Live) Cut(subject string, cause error) int {
 	l.mu.Lock()
 	l.gen++
 	if l.cut == nil {
-		l.cut = make(map[string]uint64)
+		l.cut = make(map[string]cutMark)
 	}
-	l.cut[subject] = l.gen
+	l.cut[subject] = cutMark{l.gen, cause}
 	for h, s := range l.held {
 		if s == subject {
 			cut = append(cut, h)

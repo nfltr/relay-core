@@ -98,6 +98,13 @@ var (
 	// credential: it is not cached, and callers answer it as retryable
 	// (HTTP 503, gRPC Unavailable), never as a bad credential.
 	ErrUnavailable = errors.New("credential store unavailable")
+	// ErrBalanceExhausted: a provider refuses a credential it knows because
+	// its account's prepaid balance is exhausted (and its grace is over),
+	// and is the cause of a cut that ends its connections for it
+	// (RevokeCause). Not a verdict on the credential: callers answer it
+	// typed (ERROR_REASON_BALANCE_EXHAUSTED: gRPC FailedPrecondition, HTTP
+	// 402) and clients keep retrying, so a top-up brings them back.
+	ErrBalanceExhausted = errors.New("balance exhausted: top up on the dashboard to continue")
 )
 
 // cacheSize bounds the cached answers; cacheCeiling bounds any one's age
@@ -303,10 +310,14 @@ func (a *Authenticator) Hold(ctx context.Context, p Principal) *Held {
 // its cached answers (and only its), so it is asked of its provider again.
 // An authentication that read the provider before it is neither cached nor
 // held (relay-server spec/README.md finding 5).
-func (a *Authenticator) Revoke(key string) int {
+func (a *Authenticator) Revoke(key string) int { return a.RevokeCause(key, ErrRevoked) }
+
+// RevokeCause is Revoke with the cause the connections end with (Ended):
+// ErrBalanceExhausted for a prepaid account whose grace is over.
+func (a *Authenticator) RevokeCause(key string, cause error) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	n := a.live.Cut(key, ErrRevoked)
+	n := a.live.Cut(key, cause)
 	a.cache.RemoveIf(func(_ cacheKey, p Principal) bool { return p.Key() == key })
 	return n
 }

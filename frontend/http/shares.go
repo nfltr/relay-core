@@ -12,11 +12,15 @@ import (
 	"time"
 
 	"github.com/nfltr/relay-core/core/frontend"
+	"github.com/nfltr/relay-core/core/identity"
+	"github.com/nfltr/relay-core/core/relaystatus"
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/core/sharesecret"
 	"github.com/nfltr/relay-core/platform/metrics"
 	"github.com/nfltr/relay-core/platform/ratelimit"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/agentservices"
+	"google.golang.org/grpc/codes"
 )
 
 // Shares serves a share's visitor (<code>.<share domain>) in every
@@ -50,7 +54,15 @@ type Shares struct {
 	// (e.g. "noindex, nofollow", so search engines do not index what an
 	// agent serves); "": none.
 	RobotsTag string
+	// Refuse refuses a visit to the shared agent's account (the relay's
+	// prepaid enforcement: identity.ErrBalanceExhausted, answered 402
+	// typed) after the share's policy passed; nil: none.
+	Refuse func(agentID string) error
 }
+
+// shareBalanceMessage is what a visitor of a share whose account's
+// prepaid balance is exhausted reads (no prices, no account).
+const shareBalanceMessage = "this account's balance is exhausted"
 
 // Serve answers the visitor of share label code, or hands r to next with
 // the agent named (session.AgentIDKey).
@@ -93,6 +105,12 @@ func (s *Shares) Serve(w http.ResponseWriter, r *http.Request, next http.Handler
 	}) {
 		s.miss(clientIP)
 		return
+	}
+	if s.Refuse != nil {
+		if err := s.Refuse(agentID); errors.Is(err, identity.ErrBalanceExhausted) {
+			relaystatus.WriteHTTP(w, http.StatusPaymentRequired, codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, shareBalanceMessage)
+			return
+		}
 	}
 
 	requestPath := r.URL.Path

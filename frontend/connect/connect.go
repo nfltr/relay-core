@@ -23,6 +23,7 @@ import (
 
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/identity"
+	"github.com/nfltr/relay-core/core/relaystatus"
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/internal/platform/logging"
 	"github.com/nfltr/relay-core/internal/platform/wsconn"
@@ -32,6 +33,7 @@ import (
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentwire"
 	"github.com/nfltr/relay/proto/wire/dataplane"
+	"google.golang.org/grpc/codes"
 )
 
 // Path is the route's prefix: /connect/{agentID}/{port or service}, and
@@ -51,8 +53,10 @@ type Frontend struct {
 	Logger *slog.Logger
 	Config func() Config
 	// Caller is the principal r's sessions open as (Core.Open's caller):
-	// zero when r carries no credential the composition accepts.
-	Caller func(r *http.Request) identity.Principal
+	// zero when r carries no credential the composition accepts. An
+	// identity.ErrBalanceExhausted error is answered 402 typed
+	// (ERROR_REASON_BALANCE_EXHAUSTED); any other is as no credential.
+	Caller func(r *http.Request) (identity.Principal, error)
 	// Hold holds a session under caller's credential: a revocation or the
 	// credential's expiry ends the returned context; nil, or ok false: the
 	// session is not held.
@@ -99,7 +103,11 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, agentwire.ClientGenerationTooOld, http.StatusUpgradeRequired)
 		return
 	}
-	caller := f.Caller(r)
+	caller, err := f.Caller(r)
+	if errors.Is(err, identity.ErrBalanceExhausted) {
+		relaystatus.WriteHTTP(w, http.StatusPaymentRequired, codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, err.Error())
+		return
+	}
 	if caller.Provider == "" {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
@@ -240,6 +248,8 @@ func Status(reason relayv1.ErrorReason) int {
 		return http.StatusNotFound
 	case relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED, relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE:
 		return http.StatusUpgradeRequired
+	case relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED:
+		return http.StatusPaymentRequired
 	}
 	return http.StatusServiceUnavailable
 }
@@ -324,17 +334,21 @@ func RequestKey(r *http.Request) (key, header string) {
 	return "", ""
 }
 
+// ErrNoCredential: the request presents no key and no client certificate.
+var ErrNoCredential = errors.New("no credential")
+
 // RequestPrincipal authenticates the key r presents (RequestKey), else
-// its TLS client certificate, with a; ok is false when it presents none or
-// no provider accepts it.
-func RequestPrincipal(a *identity.Authenticator, r *http.Request, c identity.Credential) (p identity.Principal, header string, ok bool) {
+// its TLS client certificate, with a; err is ErrNoCredential when it
+// presents none, else the provider chain's refusal (identity.Authenticate:
+// e.g. identity.ErrBalanceExhausted, which a caller answers typed).
+func RequestPrincipal(a *identity.Authenticator, r *http.Request, c identity.Credential) (p identity.Principal, header string, err error) {
 	c.Token, header = RequestKey(r)
 	if c.Token == "" {
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-			return identity.Principal{}, "", false
+			return identity.Principal{}, "", ErrNoCredential
 		}
 		c.PeerCerts = r.TLS.PeerCertificates
 	}
-	p, err := a.Authenticate(r.Context(), c)
-	return p, header, err == nil
+	p, err = a.Authenticate(r.Context(), c)
+	return p, header, err
 }
