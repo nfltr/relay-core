@@ -372,6 +372,7 @@ github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
 | `StartDrain`, `DrainBound` | `stopping`; `stopNow` (`moveBound` from `MOVE_RECONNECT`, disarmed once A stopped routing): the agent let go (`errServerRestarting`) |
 | `RecvA`, `EndA` | `receiveFromHTTPAgent`; the agent's EOF ends the session (`failInflight`, `failQueued`) |
 | `ServeB`, `FailB` | B serving a request that reached it (its own session, not modelled); B's new session ending after it took the record (MV-5) |
+| `PickB`, `ArriveB`, `RegisterB` | B's own `dispatcherURL` (B when B routes, else the record: A, or B itself); a request for B at B (B's own pick, or a peer's forward at `Ingress.peer`): `RouteArriving` waits while the record names B's session that has not registered; B's session registering (`d.Agents.Store` after `claimAgentRecord`, `dispatcher_subscribe.go`) (finding 45) |
 | `TCPSupersede`, `PlaceTCP` | `sendLoop`'s superseded renewal of the agent's TCP primary (`yield` when `movingAway`); `streamFor` placing a TCP session |
 | `RecvAgent`, `ConnectB`, `DialFails`, `Answer`, `CloseOld` | `processStream`, `moveConnect`, a handler's answer, `closeWhenAnswered` |
 
@@ -381,7 +382,10 @@ record: `lg`, the documented bounded loss), `RunOnce` (no request runs on
 the agent without its answer reaching the visitor; the same bound),
 `OneOwner` (once A stopped routing the record names B),
 `NoTCPAfterMove` (no TCP session is placed on A's TCP primary once it
-found the agent's record moved). Liveness (`MoveLive.cfg`, no drain, weak
+found the agent's record moved), `OwnerServes` (the replica the record
+names never refuses a request while that session lives: between B's claim
+and its registration a request at B waits for the registration; finding
+45). Liveness (`MoveLive.cfg`, no drain, weak
 fairness on every step but the `GiveUp` timer and a peer's pick): every
 request answered, and A's old session ends once the agent connected B.
 `COVERAGE=1` takes every action.
@@ -405,13 +409,15 @@ finding 6), `race:supersede-ends` (finding 7), `done-ignores-leases`,
 `done-overtakes` (`MOVE_DONE` sent past the channel), `close-early` (the
 agent closes the old stream with requests unanswered), `peer-no-lease`
 (finding 20), `drain-bound-after-stop` (finding 21),
-`tcp-stays-in-rotation` (finding 22). Witnesses, each violated:
+`tcp-stays-in-rotation` (finding 22), `no-arrival-wait` (finding 45: the
+code before `RouteArriving`). Witnesses, each violated:
 `WitnessHeld` (requests held as A stops routing), `WitnessLetGo` (the
 bounded loss is reachable), `WitnessRemote` (a peer's forward in flight
 after A stopped routing), `WitnessOwner`, `WitnessTCP` (a TCP session on
 A after the record moved: the window before the renewal finds it, which
 the agent's `waitIdle` bounds), `WitnessBGone` (A stopped routing while
-the record names B's session that ended: MV-5).
+the record names B's session that ended: MV-5), `WitnessArriving` (a
+request at B while the record names B and B does not route yet: finding 45).
 
 `FailB` (MV-5, lane W5-RCORE; `FailBOn`, off in `MoveLive.cfg`, whose
 `AllAnswered` it would break by design): B's new session ends after it
@@ -429,6 +435,7 @@ with it. The agent's next connection is a new session, outside the model.
 | The directory fences records by Seq; the newest session wins; a read may be stale by one write | relay-server `spec/Replicas.tla` |
 | A peer replica routes by the record it read; its forward can arrive any time later | `dispatcherURL`, the replica link (relay-server `core/replicas`) |
 | B's session may fail after taking the record (`FailB`): the agent reconnects elsewhere, as a new session; requests answer 503 meanwhile (not loss) | finding MV-5 (review) |
+| B's session registers within `agentStreamWait` (1.5 s) of its claim, unless it ends: only local steps (the topic, the subscription, the claim's own `SAdd`) lie between; so `ArriveB` has no timeout step while the record names B's live session | `dispatcher_subscribe.go`, `RouteArriving` (finding 45) |
 | HTTP requests on the agent link do not ride the topic: MOVE_DONE does not order them; they end with the old connection (park TTL 10 s) | `dispatch.go` (link branch releases the lease), relay `client/agent/agent_link.go` |
 | A rebalancing move skips an agent the relay counts as carrying TCP sessions (`carriesSessions`, exact by `Handoff.tla` `CarriesExact`); sessions placed after that check are bounded by the agent's `waitIdle` (30 s) | `moveAgent`; relay `client/agent/move.go` |
 
@@ -442,6 +449,7 @@ with it. The agent's next connection is a new session, outside the model.
 | `relayRequestsToAgent`, `moveDone` | `core/session/dispatcher_subscribe.go` |
 | `sendLoop`'s superseded renewal (`movingAway`, `yield`), `streamFor` | `core/session/dispatcher_tcp_streams.go` |
 | `dispatcherURL`, `peer`, `routeLease`, the first publish | `frontend/http/dispatch.go`, `frontend.go`, `proxy.go` |
+| `RouteArriving`, the claim before the registration (`RegisterB`) | `core/session/route_arriving.go`, `core/session/dispatcher_subscribe.go` |
 | the recorder of A's steps (`TraceMove.tla`, "Trace validation") | `core/session/trace_move_on.go` |
 | `moveConnect`, `waitIdle`, `closeWhenAnswered` | `relay:client/agent/move.go`, `connect.go`, `run.go` |
 
@@ -686,6 +694,7 @@ GOAWAY drain), not its internals.
 | A link's silence ends a primary only when the agent's TCP path is dead | `SilenceOnDeadPath`; `SilentEnds` (live) | yes |
 | A make-before-break move loses no request except the documented drain bound; no request runs without its answer reaching the visitor; once A stops routing the record names B | `Move` `NoLoss`, `RunOnce`, `OneOwner`; `AllAnswered` (live) | yes (`TraceMove.tla`) |
 | After a move, no TCP session is placed on A's old primary | `NoTCPAfterMove` | yes |
+| The replica an agent's record names never refuses (nor forwards to itself) a request while that session lives; it waits for its registration | `OwnerServes` | no (B's steps are not recorded; guards `TestDispatchWaitsForAnArrivingAgent`, `TestPeerForwardWaitsForAnArrivingAgent`) |
 | A presence watcher whose snapshot is stale is owed a wake, and is woken (or the listing returns to its snapshot) | `Presence` `NoSilentStale`; `Woken` (live) | yes (`TracePresence.tla`) |
 | A label update lands only on the session it came on | `OwnUpdate` | yes (the update; the fence by `TestUpdateAgentLabelsFromAReplacedConnection`) |
 | A session yields only to a newer session of its own record; a record never names a session older than a claimed one (until the store loses its counters); a record goes only with its own session, its TTL or the store | `Directory` `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong` | by model-based test (`TestDirectoryModelWalks`) |
@@ -983,7 +992,7 @@ accepted, 4-6 s each.
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 341,113 (81,647) | | 2-4 s |
-| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5) | 135,307 (29,460) | | 3 s before MV-5; 2 min 34 s at load 170 (2026-11-03) |
+| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5), B's arrival (finding 45) | 271,505 (51,545) | 25 | 5 s at load 30 (2026-11-05; 135,307 states before finding 45) |
 | `Presence.cfg` (CI) | `NoSilentStale`, `OwnUpdate`, 2 replicas, 1 watcher, 2 sessions, 1 update in flight, 1 resubscription, 1 failed write | 953,324 (159,269) | | 8 s (2026-11-04, `InFlight`; 607,118 states before) |
 | `Directory.cfg` (CI) | `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong`, 2 pods, 2 record keys, 3 claims, a store loss, claims without a Seq | 492,852 (129,090) | | 4 s (2026-11-04; 186,958 states before `ClaimNoSeq`) |
 | `DirectoryHeal.cfg` (CI) | `Heals`, the renew and delete as two store calls, no store loss | 1,126,085 (320,277) | | 7 s (2026-11-04) |
@@ -1650,6 +1659,32 @@ relay link connection never outlives every primary holding its token.
     began, `runTCPTunnel` waits for one that already took it, and
     `adopt` puts the link back in the park when its primary ended
     (`TestTCPTunnelLeavesTheParkToTheNextPrimary`).
+45. **A request at the replica an agent was moving to failed in the moment
+    between its claim and its registration** (code, fixed; medium; TLC,
+    `no-arrival-wait`; lane DRAINFIX, 2026-11-05, from VMSCALE1's rolling
+    deploy: 1 failed visit, nfltr `docs/decisions/multi-vm-scaleout-2026-11-05.md`
+    follow-up 4). The new session on B claims the agent's record
+    (`claimAgentRecord`) before it registers in B's `Agents`
+    (`dispatcher_subscribe.go`). A visit at B in between found no route
+    (`RouteHere`), then a record naming B itself, which `GetIP` returns as
+    the loopback address: `dispatcherURL` forwarded the request to
+    `<loopback>:<peer link port>`, B's own replica link, and failed (the
+    replica's certificate names its pod address, not the loopback one:
+    "no route; try again"); a peer's forward arriving at B in the same
+    moment was refused by `Ingress.peer` (503). The VM log read as a drain
+    ordering gap (the draining replica's link stopped early); it is not:
+    A routes until the record names B (`WaitAgentsMoved` before `Leave`).
+    `Move.tla` modelled B as `ServeB` alone; it now has B's claim and
+    registration apart (`RegisterB`), B's own ingress (`PickB`) and a
+    request's arrival at B (`ArriveB`), `OwnerServes`, mutant
+    `no-arrival-wait`, witness `WitnessArriving`. Fixed: `RouteArriving`
+    (the TCP path's `streamFor` already waited for an arriving stream):
+    when the record names this replica, the request waits up to
+    `agentStreamWait` for the session's registration, woken by it, then
+    is served, or answered as an offline agent (503 `Retry-After`); it is
+    never forwarded to this replica itself. Guards
+    `TestDispatchWaitsForAnArrivingAgent`,
+    `TestPeerForwardWaitsForAnArrivingAgent`.
 
 ## Agent-to-agent calls (relay spec/CallCredit.tla)
 

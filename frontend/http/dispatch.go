@@ -155,6 +155,15 @@ func (ing *Ingress) dispatcherURL(ctx context.Context, agentID string) (u *url.U
 	if err != nil {
 		return nil, nil, err
 	}
+	if podIP != "" && podIP == ing.core.Dispatcher.Config.LoopbackAddr {
+		// The record names this replica: the agent's session here claimed
+		// it and has not registered yet (finding 45). Wait for it; never
+		// forward to this replica itself.
+		if release, ok := ing.core.Dispatcher.RouteArriving(ctx, agentID); ok {
+			return ing.loopbackURL, release, nil
+		}
+		return nil, nil, fmt.Errorf("%w: %s", directory.ErrAgentNotConnected, agentID)
+	}
 	dispatcherURL, err := url.Parse(fmt.Sprintf("http://%s:%s", podIP, ing.peerLinkPort))
 	if err != nil {
 		return nil, nil, err

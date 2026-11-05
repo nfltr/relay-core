@@ -89,6 +89,10 @@ type Dispatcher struct {
 	// admitted under the limit and not ended yet (validateAgentConnection).
 	admitMu   sync.Mutex
 	admitting map[string]int
+	// arrival is closed at the next HTTP session's registration here
+	// (AddHTTPSession; RouteArriving waits on it).
+	arrivalMu sync.Mutex
+	arrival   chan struct{}
 
 	broker              broker.MessageBroker
 	IPInventory         directory.IPInventory

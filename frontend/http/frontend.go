@@ -108,12 +108,26 @@ func New(ctx context.Context, h frontend.Host) *Ingress {
 func (ing *Ingress) peer(w http.ResponseWriter, r *http.Request) {
 	release, ok := tracehook.RoutePeer(ing.core.Dispatcher, r.Header.Get(session.AgentIDKey), ing.core.Dispatcher.RouteHere)
 	if !ok {
+		release, ok = ing.routeArriving(r.Context(), r.Header.Get(session.AgentIDKey))
+	}
+	if !ok {
 		w.Header().Set("Retry-After", "1")
 		relaystatus.WriteHTTP(w, http.StatusServiceUnavailable, codes.Unavailable, relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE, agentOfflineMessage)
 		return
 	}
 	defer release()
 	ing.proxy.ServeHTTP(w, r.WithContext(withRouteLease(r.Context(), release)))
+}
+
+// routeArriving routes a peer's forward for an agent whose record names
+// this replica though it does not route here yet: its session claimed the
+// record and registers in a moment (finding 45, Move.tla ArriveB).
+func (ing *Ingress) routeArriving(ctx context.Context, agentID string) (func(), bool) {
+	ip, err := ing.core.DispatcherIPInventory.GetIP(ctx, agentID)
+	if err != nil || ip == "" || ip != ing.core.Dispatcher.Config.LoopbackAddr {
+		return nil, false
+	}
+	return ing.core.Dispatcher.RouteArriving(ctx, agentID)
 }
 
 // Mount is the ingress as the relay mounts it.
