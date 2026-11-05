@@ -770,6 +770,17 @@ is a behaviour of the model: `Abort` keeps the ack already decided
 ends cleanly; a trace with it is accepted (checked by hand, lane
 CONFORM-relay-core: an earlier note here said the model rejects it).
 
+Every trace check lists `TraceNotDone` last under `INVARIANTS`: TLC
+reports the first violated invariant in listed order, and a trace is
+accepted when that is `TraceNotDone`, so with it first a trace whose
+last step broke a real invariant was accepted (relay finding CL3, lane
+TRACEORDER). `make spec-mutants` checks
+`spec/testdata/mutant-hagent-park-primary-ctx-last.ndjson` (an open on
+the parked link as its last line) with `Mutant = "park-primary-ctx"`:
+rejected for `LinkOpensAnswered`; with `TraceNotDone` first it was
+accepted. With `Mutant = "none"` it is a behaviour (the open answered),
+so it is no `reject-*` fixture.
+
 ### Handoff traces
 
 With the same tag, a TCPDispatcher whose agent link is on records each

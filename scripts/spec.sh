@@ -119,13 +119,13 @@ CONSTANTS
 INIT TraceInit
 NEXT TraceNext
 INVARIANTS
-    TraceNotDone
     NoProtocolError
     CreditBounds
     BufferBound
     Conservation
     NoHOL
     TypedEnd
+    TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" Trace.tla >"$1.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
@@ -175,11 +175,11 @@ CONSTANTS
 INIT TraceInit
 NEXT TraceNext
 INVARIANTS
-    TraceNotDone
     PlacedOnLive
     NoOrphanLink
     CarriesExact
     SilenceOnDeadPath
+    TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TraceHandoff.tla >"$1.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
@@ -197,13 +197,13 @@ CONSTANTS
 INIT TraceInit
 NEXT TraceNext
 INVARIANTS
-    TraceNotDone
     PlacedOnLive
     NoOrphanLink
     CarriesExact
     SilenceOnDeadPath
     LinkOpensAnswered
     ParkOffered
+    TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TraceHandoffAgent.tla >"$1.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
@@ -247,10 +247,10 @@ CONSTANTS
 INIT TraceInit
 NEXT TraceNext
 INVARIANTS
-    TraceNotDone
     TypeOK
     NoSilentStale
     SupersededByNewer
+    TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TracePresence.tla >"$1.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
@@ -399,6 +399,20 @@ mutants)
 	expect Handoff.cfg Handoff.tla witness:silent -e 's/^    SilenceOnDeadPath$/    WitnessSilent/'
 	expect Handoff.cfg Handoff.tla witness:parked-open -e 's/^    LinkOpensAnswered$/    WitnessParkedOpen/'
 	expect Handoff.cfg Handoff.tla witness:end-unparked -e 's/^    ParkOffered$/    WitnessEndUnparked/'
+	# A trace whose last step breaks an invariant is rejected: every trace
+	# cfg lists TraceNotDone last, since TLC reports the first violated
+	# invariant in listed order (spec/README.md "Trace validation"). The
+	# fixture ends at the open park-primary-ctx refuses on the parked link.
+	t=$work/hagent-mutant-last.ndjson
+	cp spec/testdata/mutant-hagent-park-primary-ctx-last.ndjson "$t"
+	if [ -z "${MUTANTS:-}" ] || echo "trace park-primary-ctx-last" | grep -qE "$MUTANTS"; then
+		if AMUTANT=park-primary-ctx atrace "$t"; then
+			echo "trace:park-primary-ctx-last: accepted, want rejected"
+			fail=1
+		else
+			echo "trace:park-primary-ctx-last: caught: $(grep -m1 '^Error: Invariant' "$t.out" | sed 's/^Error: //')"
+		fi
+	fi
 	# The code's races (spec/README.md "Findings").
 	expect AgentLink.cfg MCAgentLink.tla inproc-closewrite -e "$m"'inproc-closewrite"/'
 	expect AgentLinkWrite.cfg MCAgentLink.tla inproc-enqueue-blocks -e "$m"'inproc-enqueue-blocks"/'
