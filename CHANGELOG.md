@@ -12,6 +12,16 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `session.(*Dispatcher).RouteArriving` and `AddHTTPSession`: a request
+  for an agent whose record names this replica, though its HTTP session
+  has not registered here yet (a moving agent's new session claims the
+  record first), waits up to 1.5 s for that registration instead of being
+  forwarded to this replica's own replica-link port (HTTP ingress) or
+  refused 503 (a peer's forward). A rolling restart lost a visit to it
+  (spec/README.md finding 45). `AddHTTPSession` is how a session registers
+  (it wakes the waiters); code that stored into `Dispatcher.Agents`
+  directly keeps working, its waiters woken by the 1.5 s bound only.
+  Migration: none.
 - Per-source-IP connection limits on the public ports (proxy, gRPC, SNI
   router), checked at accept before any byte is read: `platform/connlimit`
   (`Wrap`, `Config`), set by `security.conn_limit.per_ip_max` (open

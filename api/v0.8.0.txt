@@ -1,3 +1,5 @@
 Compatible changes:
+- ./core/session.(*Dispatcher).AddHTTPSession: added
+- ./core/session.(*Dispatcher).RouteArriving: added
 - ./platform/metrics.IncrConnRefusals: added
 - package github.com/nfltr/relay-core/platform/connlimit: added
