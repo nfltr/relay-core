@@ -164,8 +164,8 @@ github.com/nfltr/link/peerlink/quiclink v0.5.9 h1:ov1Lg2TZrPz7pvNxCx1zd6U6xoZB6B
 github.com/nfltr/link/peerlink/quiclink v0.5.9/go.mod h1:LInNFB5+BT3kII56l0LxaQnBqh5B+c1+DFBuXrz24Qc=
 github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261104164830-88368f5b9ba4 h1:wNqbvNyagi8JqD0xxdMU473/lj75O7U0+CfkHpieZFU=
 github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261104164830-88368f5b9ba4/go.mod h1:KlJwkQMVhFf/rlYdkm18TkxbgyKn1UO4AtWyo/hOj10=
-github.com/nfltr/relay/client v0.21.5 h1:HlneMfLQyKTLSksahGZEzXjgzXD1yVldVNZqskY7hgM=
-github.com/nfltr/relay/client v0.21.5/go.mod h1:3xvdve+5/ILpp/kKqe1gpsCXSmzcBlrSUZkdmRcOYiM=
+github.com/nfltr/relay/client v0.21.6 h1:2eN8Q9sBCFjVD/TUneB7weCoaptXTtogSHe4OQk23qk=
+github.com/nfltr/relay/client v0.21.6/go.mod h1:3xvdve+5/ILpp/kKqe1gpsCXSmzcBlrSUZkdmRcOYiM=
 github.com/nfltr/relay/proto v0.19.13 h1:svxCsJzQLhvSsYJ/1sMl4PyOmY9CKRYjvDrDJOxCLuI=
 github.com/nfltr/relay/proto v0.19.13/go.mod h1:gdRtVh6BN/lPEsd3/7AlLPkC9Iz0wLb+QbqJvYKFfEQ=
 github.com/opentracing/opentracing-go v1.1.0/go.mod h1:UkNAQd3GIcIGf0SeVgPpRdFStlNbqXla1AfSYxPUl2o=
