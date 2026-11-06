@@ -4,8 +4,11 @@
 package ratelimit
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestAllow_UnderLimit(t *testing.T) {
@@ -184,4 +187,43 @@ func TestBlocked_DoesNotConsume(t *testing.T) {
 	if l.Blocked("k") {
 		t.Fatal("want unblocked after refill")
 	}
+}
+
+// TestKeysAreBounded (F-26): a limiter holds at most its cap of keys, so
+// callers with ever new keys (IPv6 addresses, unknown principals) cannot
+// grow it without bound. The least recently used key goes first, each
+// eviction is counted, and a key in use keeps its state.
+func TestKeysAreBounded(t *testing.T) {
+	now := time.Now()
+	l := New(0, 1, 0, time.Hour, WithNowFunc(func() time.Time { return now }), WithMaxKeys(3))
+	before := evictions(t)
+	if !l.Allow("hot") {
+		t.Fatal("first request of hot refused")
+	}
+	for _, k := range []string{"a", "b", "hot", "c", "hot", "d"} {
+		l.Allow(k)
+	}
+	if n := l.Len(); n != 3 {
+		t.Fatalf("holds %d keys, want the cap 3", n)
+	}
+	if got := evictions(t) - before; got != 2 {
+		t.Fatalf("counted %v evictions, want 2 (a, then b)", got)
+	}
+	if l.Allow("hot") {
+		t.Fatal("hot, used throughout, was evicted and got a fresh burst")
+	}
+}
+
+func evictions(t *testing.T) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range families {
+		if strings.HasSuffix(f.GetName(), "ratelimit_evictions_total") {
+			return f.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	return 0
 }

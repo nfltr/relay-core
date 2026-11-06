@@ -10,6 +10,21 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Added
+
+- `platform/ratelimit`: a limiter holds at most `DefaultMaxKeys` keys
+  (`WithMaxKeys(n)` sets another cap); past it the least recently used
+  key is evicted and counted by `platform/metrics.IncrRateLimitEvictions`
+  (`proxy_ratelimit_evictions_total`). Buckets are `golang.org/x/time/rate`
+  limiters in a `hashicorp/golang-lru/v2` LRU (audit F-26). No migration:
+  `New` keeps its signature.
+
+### Fixed
+
+- `grpcauth`: under `security.trust_loopback` a loopback call carrying a
+  forwarding header (`forwarded`, `x-forwarded-for`, `x-real-ip`) is not
+  trusted: it came through a proxy on the relay's host (audit F-33).
+
 ### Changed (breaking)
 
 - A share revocation names the share's id (`sharecode.ID`), never its code

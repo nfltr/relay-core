@@ -23,3 +23,14 @@ var (
 func IncrRateLimitRejections() {
 	rateLimitRejections.Inc()
 }
+
+var rateLimitEvictions = auto.NewCounter(
+	prometheus.CounterOpts{
+		Namespace: proxyNamespace,
+		Name:      "ratelimit_evictions_total",
+		Help:      "Rate-limit buckets evicted because a limiter held its cap of keys (audit F-26); the evicted key starts again with a full burst.",
+	},
+)
+
+// IncrRateLimitEvictions counts a bucket a full limiter evicted.
+func IncrRateLimitEvictions() { rateLimitEvictions.Inc() }

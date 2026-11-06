@@ -12,8 +12,9 @@
 // and the operator run `nfltr orch` locally with zero auth setup.
 //
 // Loopback-only (the peer address is the kernel-reported TCP peer, not a
-// spoofable header), so production (non-loopback ingress) is unaffected. Off by
-// default; installed only when security.trust_loopback is set.
+// spoofable header), so production (non-loopback ingress) is unaffected; a
+// call carrying a forwarding header (a proxy on this host) is not trusted.
+// Off by default; installed only when security.trust_loopback is set.
 package grpcauth
 
 import (
@@ -32,10 +33,21 @@ import (
 // peers under security.trust_loopback (mirrors the relay HTTP path).
 const grpcLoopbackTrustPrincipal = "local-dev"
 
+// grpcPeerIsLoopback reports whether ctx's call comes from this host and
+// not through a proxy: a reverse proxy on the relay's host connects from
+// loopback too, and says so with a forwarding header (audit F-33). A proxy
+// that adds none is still trusted, so trust_loopback stays off on any relay
+// behind one.
 func grpcPeerIsLoopback(ctx context.Context) bool {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p.Addr == nil {
 		return false
+	}
+	md, _ := metadata.FromIncomingContext(ctx)
+	for _, h := range []string{"forwarded", "x-forwarded-for", "x-real-ip"} {
+		if len(md.Get(h)) > 0 {
+			return false
+		}
 	}
 	host := p.Addr.String()
 	if h, _, err := net.SplitHostPort(host); err == nil {
