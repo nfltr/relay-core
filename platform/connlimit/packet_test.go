@@ -9,10 +9,13 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nfltr/quic-go"
+	"github.com/nfltr/quic-go/qlog"
+	"github.com/nfltr/quic-go/qlogwriter"
 	"golang.org/x/net/ipv4"
 
 	"github.com/nfltr/relay-core/internal/platform/testcert"
@@ -187,40 +190,104 @@ func TestPacketHandshakeRate(t *testing.T) {
 	}
 }
 
-// TestPacketHandshakeFitsItsBurst: a whole QUIC handshake (quic-go's,
-// with its post-quantum ClientHello) passes a source whose long-header
-// bucket holds 8 datagrams and does not refill, so the burst a source is
-// given counts handshakes at about this many datagrams each.
+// handshakeDatagrams bounds the long-header datagrams one QUIC handshake
+// (quic-go's, with its post-quantum ClientHello) sends the server when
+// nothing is retransmitted: 3 on loopback (the ClientHello's two
+// Initials, then the Finished with its ACKs), up to 5 when the client
+// ACKs the server's flight in datagrams of their own. The handshake burst
+// counts handshakes at 3 to this many datagrams each (the flags' help in
+// platform/config). A retransmission (a PTO or a loss on either side, as
+// on a slow or lossy path) sends more, which the bucket's rate refills.
+const handshakeDatagrams = 8
+
+// retransmits records whether a connection's loss recovery sent anything
+// again (a PTO fired or a packet was declared lost).
+type retransmits struct{ seen atomic.Bool }
+
+func (r *retransmits) AddProducer() qlogwriter.Recorder { return r }
+func (r *retransmits) SupportsSchemas(string) bool      { return true }
+func (r *retransmits) Close() error                     { return nil }
+func (r *retransmits) RecordEvent(e qlogwriter.Event) {
+	switch e := e.(type) {
+	case qlog.PTOCountUpdated:
+		if e.PTOCount > 0 {
+			r.seen.Store(true)
+		}
+	case qlog.PacketLost:
+		r.seen.Store(true)
+	}
+}
+
+// TestPacketHandshakeFitsItsBurst: the long-header datagrams a client
+// sends the server in one handshake, counted by the filter itself (a
+// bucket that never refills, too large to refuse any), are at most
+// handshakeDatagrams. A handshake whose loss recovery retransmitted
+// (seen by qlog on either side: a loaded machine) is not the claim and
+// is measured again, so the count is the handshake's own, not the
+// machine's load.
 func TestPacketHandshakeFitsItsBurst(t *testing.T) {
 	cert := testcert.Generate(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // a hang bound only
+	defer cancel()
+	for attempt := 1; ; attempt++ {
+		n, retransmitted := handshakeLongDatagrams(ctx, t, cert)
+		if !retransmitted {
+			t.Logf("a handshake sent %d long-header datagrams", n)
+			if n == 0 || n > handshakeDatagrams {
+				t.Fatalf("a handshake sent %d long-header datagrams, want 1..%d: resize the handshake burst", n, handshakeDatagrams)
+			}
+			return
+		}
+		t.Logf("attempt %d retransmitted (%d long-header datagrams): measuring again", attempt, n)
+		if attempt == 20 {
+			t.Fatal("no handshake without a retransmission in 20 attempts")
+		}
+	}
+}
+
+// handshakeLongDatagrams runs one handshake over loopback and returns the
+// long-header datagrams the server read from the client up to it, and
+// whether either side retransmitted.
+func handshakeLongDatagrams(ctx context.Context, t *testing.T, cert tls.Certificate) (int, bool) {
+	t.Helper()
+	const burst = 1 << 20
 	u, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pc := WrapPacketConn(u, PacketConfig{Listener: "test", HandshakeRate: 1e-9, HandshakeBurst: 8})
+	pc := WrapPacketConn(u, PacketConfig{Listener: "test", HandshakeRate: 1e-9, HandshakeBurst: burst})
 	tr := &quic.Transport{Conn: pc}
 	defer tr.Close() //nolint:errcheck
-	ln, err := tr.Listen(&tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"t"}, MinVersion: tls.VersionTLS13}, nil)
+	var srv, cli retransmits
+	ln, err := tr.Listen(&tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"t"}, MinVersion: tls.VersionTLS13},
+		&quic.Config{Tracer: func(context.Context, bool, quic.ConnectionID) qlogwriter.Trace { return &srv }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close() //nolint:errcheck
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	accepted := make(chan error, 1)
+	accepted := make(chan *quic.Conn, 1)
 	go func() {
 		q, err := ln.Accept(ctx)
-		if err == nil {
-			_ = q.CloseWithError(0, "")
+		if err != nil {
+			t.Error(err)
 		}
-		accepted <- err
+		accepted <- q
 	}()
-	q, err := quic.DialAddr(ctx, u.LocalAddr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"t"}}, nil) //nolint:gosec // test-only self-signed cert
+	q, err := quic.DialAddr(ctx, u.LocalAddr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"t"}}, //nolint:gosec // test-only self-signed cert
+		&quic.Config{Tracer: func(context.Context, bool, quic.ConnectionID) qlogwriter.Trace { return &cli }})
 	if err != nil {
-		t.Fatalf("a handshake through 8 long-header datagrams: %v", err)
-	}
-	_ = q.CloseWithError(0, "")
-	if err := <-accepted; err != nil {
 		t.Fatal(err)
 	}
+	defer q.CloseWithError(0, "") //nolint:errcheck
+	sq := <-accepted              // the server read the client's Finished: the handshake's datagrams are counted
+	if sq == nil {
+		t.FailNow()
+	}
+	defer sq.CloseWithError(0, "") //nolint:errcheck
+	f := pc.(*udpConn).f
+	f.mu.Lock()
+	s := f.sources[netip.MustParseAddr("127.0.0.1")]
+	n := burst - int(s.long.tokens+0.5)
+	f.mu.Unlock()
+	return n, srv.seen.Load() || cli.seen.Load()
 }

@@ -12,6 +12,15 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- `platform/connlimit` `TestPacketHandshakeFitsItsBurst` no longer fails
+  on a loaded machine: it counts the long-header datagrams one handshake
+  sends (3 on loopback, up to 5 when the client ACKs the server's flight
+  in separate datagrams) and measures again when qlog shows a
+  retransmission, instead of running a handshake through a bucket of 8
+  that a few PTO retransmissions emptied. The flags' help now sizes
+  `per_ip_handshake_packet_burst` at 3 to 8 datagrams a handshake
+  (125 to 330 at once), retransmissions spending tokens the rate refills.
+  No API change.
 - A request a peer replica forwarded that reaches the replica an agent
   just moved off goes on, once, to the replica the agent's record names
   (`Ingress.peer`; the hop is marked `X-Nfltr-Peer-Hop`), instead of 503
@@ -34,7 +43,7 @@ changes listed (from the first tag on).
   (datagrams a second per IPv4 address or IPv6 /64, default 20000, burst
   `per_ip_packet_burst` 40000) and
   `security.conn_limit.per_ip_handshake_packet_rate` (of those, QUIC
-  long-header datagrams: handshakes, about 3 each, and version
+  long-header datagrams: handshakes, 3 to 8 each, and version
   negotiation, default 50, burst `per_ip_handshake_packet_burst` 1000);
   0 turns one off, loopback
   is exempt. A `*net.UDPConn` keeps quic-go's batched reads, GSO and ECN
