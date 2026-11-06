@@ -5,6 +5,8 @@ package httpingress
 
 import (
 	"context"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -96,4 +98,58 @@ func registerLater(d *session.Dispatcher, agentID string, delay time.Duration) <
 		at <- time.Now()
 	}()
 	return at
+}
+
+// TestPeerForwardAfterMoveGoesOnToTheAgentsReplica: a request a peer
+// forwarded here (it read the agent's record before the agent moved off
+// this replica) that arrives once this replica stopped routing to the
+// agent goes on, once, to the replica the record now names, never
+// answered 503 while the agent is connected there (Move.tla ArriveA,
+// MovedForwards, mutant peer-refuses-moved; spec/README.md finding 46).
+// A request that already went on once is refused, not forwarded again.
+func TestPeerForwardAfterMoveGoesOnToTheAgentsReplica(t *testing.T) {
+	viper.Set("http.server.producers.cache_size", 10)
+	viper.Set("http.server.producers.cache_expiry", time.Minute)
+	viper.Set("default.request.timeout", time.Second)
+	defer viper.Reset()
+	hops := make(chan string, 2)
+	newReplica := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hops <- r.Header.Get(peerHopHeader)
+		_, _ = io.WriteString(w, "served by the agent's new replica")
+	}))
+	defer newReplica.Close()
+	_, port, _ := net.SplitHostPort(newReplica.Listener.Addr().String())
+	b := broker.NewInMemoryMessageBroker()
+	_ = b.SetTopicAutoCreation("", true)
+	inv := &podInventory{IPInventory: directory.NewNoOpInventory(), podIP: "127.0.0.1"} // the record names the new replica
+	ing := newTestIngress(&session.Core{Broker: b, DispatcherIPInventory: inv})
+	ing.peerLinkPort = port
+	ing.core.Dispatcher = session.NewDispatcher(context.Background(), testLogger(), b, &testProducer{}, inv, directory.NewNoOpInventory(), 5*time.Second,
+		session.DispatcherConfig{ConnectedAgentsThreshold: 100, LoopbackAddr: "10.9.9.9"})
+
+	req := func(hop string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/x", nil)
+		r.Header.Set(session.AgentIDKey, "agent-1")
+		r.Header.Set(session.TransactionIDHeader, "txn-1")
+		if hop != "" {
+			r.Header.Set(peerHopHeader, hop)
+		}
+		w := httptest.NewRecorder()
+		ing.Mount().Peer.ServeHTTP(w, r)
+		return w
+	}
+	if w := req(""); w.Code != http.StatusOK || w.Body.String() != "served by the agent's new replica" {
+		t.Fatalf("forward after the agent moved: %d %q; want it served by the replica the record names", w.Code, w.Body.String())
+	}
+	if hop := <-hops; hop == "" {
+		t.Error("the onward forward does not say it went on once")
+	}
+	if w := req("1"); w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+		t.Errorf("a forward that already went on once: %d; want 503 Retry-After, not a second hop", w.Code)
+	}
+	select {
+	case <-hops:
+		t.Error("a forward that already went on once was forwarded again")
+	default:
+	}
 }

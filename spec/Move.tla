@@ -48,11 +48,12 @@ VARIABLES
     ts,      \* TCP session -> new, onA, onB
     late,    \* TCP session -> placed on A's TCP primary after it found the move
     bR,      \* B routes the agent: its new session registered (Agents), after its claim
-    ref      \* requests B refused while the record named B's live session
+    ref,     \* requests B refused while the record named B's live session
+    refA     \* peers' forwards A refused while the record named B's live session
 
-vars == <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg, tin, tsup, ts, late, bR, ref>>
+vars == <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg, tin, tsup, ts, late, bR, ref, refA>>
 tcpVars == <<tin, tsup, ts, late>>
-bVars == <<bR, ref>>
+bVars == <<bR, ref, refA>>
 
 Init ==
     /\ rel = "routing" /\ routes = TRUE /\ conn = FALSE /\ rec = "A"
@@ -60,7 +61,7 @@ Init ==
     /\ cq = <<>> /\ chA = <<>> /\ upA = <<>>
     /\ drn = FALSE /\ lg = FALSE
     /\ tin = TRUE /\ tsup = FALSE /\ ts = [s \in TSess |-> "new"] /\ late = [s \in TSess |-> FALSE]
-    /\ bR = FALSE /\ ref = {}
+    /\ bR = FALSE /\ ref = {} /\ refA = {}
 
 Pending(s) == {s[i] : i \in 1..Len(s)}
 
@@ -95,16 +96,26 @@ PickRemote(r) ==
     /\ UNCHANGED tcpVars /\ UNCHANGED bVars
 
 \* The forwarded request reaches A (Ingress.peer): it takes a route lease
-\* (RouteHere) as A's own ingress does; refused (A no longer routes to the
-\* agent), it is answered 503 Retry-After before it reached any agent, and
-\* the visitor sends it again (new). Without the lease (the bug, finding
-\* MV-1) it is published whenever it arrives (fwd).
+\* (RouteHere) as A's own ingress does. Refused (A no longer routes to the
+\* agent) while the record names B's live session, it goes on to B, once
+\* (ArriveB: B serves it or waits for its registration; finding 46): no
+\* agent ran it. The bug ("peer-refuses-moved", the code before): A
+\* answered it 503 Retry-After although the agent was connected to B.
+\* Otherwise (A let the agent go, or B's session ended) it is answered 503
+\* Retry-After before it reached any agent, and the visitor sends it again
+\* (new). Without the lease (the bug, finding MV-1) it is published
+\* whenever it arrives (fwd).
 ArriveA(r) ==
     /\ rq[r] = "remote"
-    /\ rq' = [rq EXCEPT ![r] = IF Mutant = "peer-no-lease" THEN "fwd"
-                                ELSE IF routes THEN "picked" ELSE "new"]
+    /\ \/ Mutant = "peer-no-lease" /\ rq' = [rq EXCEPT ![r] = "fwd"] /\ UNCHANGED refA
+       \/ Mutant # "peer-no-lease" /\ routes /\ rq' = [rq EXCEPT ![r] = "picked"] /\ UNCHANGED refA
+       \/ Mutant # "peer-no-lease" /\ ~routes /\ rec = "B" /\ Mutant # "peer-refuses-moved"
+          /\ rq' = [rq EXCEPT ![r] = "toB"] /\ UNCHANGED refA
+       \/ Mutant # "peer-no-lease" /\ ~routes /\ (rec # "B" \/ Mutant = "peer-refuses-moved")
+          /\ rq' = [rq EXCEPT ![r] = "new"]
+          /\ refA' = IF rec = "B" THEN refA \cup {r} ELSE refA
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED <<bR, ref>>
 
 \* The first message published to the agent's topic on A.
 Publish(r) ==
@@ -168,13 +179,13 @@ ArriveB(r) ==
           /\ rq' = [rq EXCEPT ![r] = "new"] /\ ref' = ref \cup {r}
        \/ ~bR /\ rec # "B" /\ rq' = [rq EXCEPT ![r] = "new"] /\ UNCHANGED ref
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bR
+    /\ UNCHANGED tcpVars /\ UNCHANGED <<bR, refA>>
 
 \* B's new session registers (d.Agents.Store): B routes the agent.
 RegisterB ==
     /\ rec = "B" /\ ~bR /\ bR' = TRUE
     /\ UNCHANGED <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED ref
+    /\ UNCHANGED tcpVars /\ UNCHANGED <<ref, refA>>
 
 (* ---------------- replica A (WatchAgentSession) ------------------------- *)
 
@@ -322,7 +333,7 @@ ConnectB ==
 FailB ==
     /\ FailBOn /\ rec = "B" /\ rec' = "Bgone" /\ bR' = FALSE
     /\ UNCHANGED <<rel, routes, conn, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED ref
+    /\ UNCHANGED tcpVars /\ UNCHANGED <<ref, refA>>
 
 \* Every try refused: the agent stays on the old connection.
 DialFails ==
@@ -369,7 +380,7 @@ TypeOK ==
     /\ ag \in {"old", "dialing", "failed", "both", "closing", "closed"}
     /\ \A r \in Req : rq[r] \in {"new", "picked", "remote", "fwd", "onA", "agentA", "toB", "atB", "answered", "failed", "gone"}
     /\ \A s \in TSess : ts[s] \in {"new", "onA", "onB"}
-    /\ bR \in BOOLEAN /\ ref \subseteq Req
+    /\ bR \in BOOLEAN /\ ref \subseteq Req /\ refA \subseteq Req
 
 \* The agent stays connected throughout, so no request fails; unless a
 \* drain let it go before its new connection took the record (lg).
@@ -391,6 +402,11 @@ NoTCPAfterMove == \A s \in TSess : ts[s] = "onA" => ~late[s]
 \* (finding DF-1). A refusal is only ever a stale read's (ArriveA), or
 \* an ended session's (Bgone).
 OwnerServes == ref = {}
+
+\* A peer's forward that reaches A after A stopped routing to the agent
+\* goes on to B while the record names B's live session: a visit during a
+\* move is never refused while the agent is connected (finding 46).
+MovedForwards == refA = {}
 
 \* Every request is answered, and A's old session ends once the agent
 \* moved (liveness: MoveLive.cfg, without the drain's bound).

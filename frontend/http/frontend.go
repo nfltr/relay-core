@@ -100,15 +100,32 @@ func New(ctx context.Context, h frontend.Host) *Ingress {
 
 // peer serves a request a peer replica forwarded over the replica link (it
 // read the agent's record naming this replica): it takes the route lease
-// as dispatch does, so a move's MOVE_DONE waits for its first message;
-// refused (this replica no longer routes to the agent: it moved or left),
-// it is answered 503 Retry-After before it reaches any agent, which would
-// run it after MOVE_DONE with its answer lost (spec/README.md finding 20,
-// Move.tla ArriveA).
+// as dispatch does, so a move's MOVE_DONE waits for its first message.
+// Refused (this replica no longer routes to the agent), it is not yet at
+// any agent: the record names this replica (the agent's session here
+// registers in a moment: it waits, finding 45, Move.tla ArriveB), or
+// another replica, the agent's after a move (it goes on there, once:
+// finding 46, Move.tla ArriveA, MovedForwards), else it is answered 503
+// Retry-After before it reaches any agent, which would run it after
+// MOVE_DONE with its answer lost (spec/README.md finding 20).
 func (ing *Ingress) peer(w http.ResponseWriter, r *http.Request) {
-	release, ok := tracehook.RoutePeer(ing.core.Dispatcher, r.Header.Get(session.AgentIDKey), ing.core.Dispatcher.RouteHere)
+	agentID := r.Header.Get(session.AgentIDKey)
+	wentOn := r.Header.Get(peerHopHeader) != ""
+	r.Header.Del(peerHopHeader)
+	release, ok := tracehook.RoutePeer(ing.core.Dispatcher, agentID, ing.core.Dispatcher.RouteHere)
 	if !ok {
-		release, ok = ing.routeArriving(r.Context(), r.Header.Get(session.AgentIDKey))
+		ip, err := ing.core.DispatcherIPInventory.GetIP(r.Context(), agentID)
+		switch {
+		case err != nil || ip == "":
+		case ip == ing.core.Dispatcher.Config.LoopbackAddr:
+			release, ok = ing.core.Dispatcher.RouteArriving(r.Context(), agentID)
+		case !wentOn:
+			if u, err := ing.peerURL(ip); err == nil {
+				r.Header.Set(peerHopHeader, "1")
+				ing.peers.Get(u).ServeHTTP(w, r)
+				return
+			}
+		}
 	}
 	if !ok {
 		w.Header().Set("Retry-After", "1")
@@ -117,17 +134,6 @@ func (ing *Ingress) peer(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	ing.proxy.ServeHTTP(w, r.WithContext(withRouteLease(r.Context(), release)))
-}
-
-// routeArriving routes a peer's forward for an agent whose record names
-// this replica though it does not route here yet: its session claimed the
-// record and registers in a moment (finding 45, Move.tla ArriveB).
-func (ing *Ingress) routeArriving(ctx context.Context, agentID string) (func(), bool) {
-	ip, err := ing.core.DispatcherIPInventory.GetIP(ctx, agentID)
-	if err != nil || ip == "" || ip != ing.core.Dispatcher.Config.LoopbackAddr {
-		return nil, false
-	}
-	return ing.core.Dispatcher.RouteArriving(ctx, agentID)
 }
 
 // Mount is the ingress as the relay mounts it.
@@ -141,3 +147,8 @@ func (ing *Ingress) Mount() frontend.AgentHTTP {
 		AgentGone: ing.proxy.producers.Remove,
 	}
 }
+
+// peerHopHeader marks a peer's forward this replica sent on to the replica
+// the agent's record names (Ingress.peer): that replica serves it or
+// refuses it, never forwards it again.
+const peerHopHeader = "X-Nfltr-Peer-Hop"

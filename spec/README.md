@@ -360,7 +360,7 @@ github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
 | action | Go |
 |---|---|
 | `Pick` | `dispatcherURL`: A while `RouteHere` gives a route lease, else the record |
-| `PickRemote`, `ArriveA` | a peer's `dispatcherURL` reading the record (A); the forward arriving at A: `Ingress.peer` takes `RouteHere` too, refused: 503 `Retry-After`, the request reached no agent (the visitor's retry is `new` again) |
+| `PickRemote`, `ArriveA` | a peer's `dispatcherURL` reading the record (A); the forward arriving at A: `Ingress.peer` takes `RouteHere` too; refused while the record names B's session, it goes on to B once (`peerHopHeader`, finding 46); else 503 `Retry-After`, the request reached no agent (the visitor's retry is `new` again) |
 | `Publish` | `Proxy.publishRequest` of a transaction's first message (on the consumer's channel, or `ErrNoConsumer`), then the lease's release |
 | `Unlease` | the lease ends with no message published: the visitor went away first, or the request went over the agent link (`dispatch.go`); it reached no agent here (`gone`) |
 | `Forward` | `relayRequestsToAgent`: the channel's next message onto the stream |
@@ -385,7 +385,9 @@ the agent without its answer reaching the visitor; the same bound),
 found the agent's record moved), `OwnerServes` (the replica the record
 names never refuses a request while that session lives: between B's claim
 and its registration a request at B waits for the registration; finding
-45). Liveness (`MoveLive.cfg`, no drain, weak
+45), `MovedForwards` (a peer's forward that reaches A after A stopped
+routing goes on to B while the record names B's session, never refused;
+finding 46). Liveness (`MoveLive.cfg`, no drain, weak
 fairness on every step but the `GiveUp` timer and a peer's pick): every
 request answered, and A's old session ends once the agent connected B.
 `COVERAGE=1` takes every action.
@@ -1003,7 +1005,7 @@ accepted, 4-6 s each.
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 341,113 (81,647) | | 2-4 s |
-| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5), B's arrival (finding 45) | 271,505 (51,545) | 25 | 5 s at load 30 (2026-11-05; 135,307 states before finding 45) |
+| `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5), B's arrival (finding 45), onward forwards (finding 46) | 271,505 (51,545) | 25 | 6 s at load 25 (2026-11-06; 135,307 states before finding 45) |
 | `Presence.cfg` (CI) | `NoSilentStale`, `OwnUpdate`, 2 replicas, 1 watcher, 2 sessions, 1 update in flight, 1 resubscription, 1 failed write | 953,324 (159,269) | | 8 s (2026-11-04, `InFlight`; 607,118 states before) |
 | `Directory.cfg` (CI) | `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong`, 2 pods, 2 record keys, 3 claims, a store loss, claims without a Seq | 492,852 (129,090) | | 4 s (2026-11-04; 186,958 states before `ClaimNoSeq`) |
 | `DirectoryHeal.cfg` (CI) | `Heals`, the renew and delete as two store calls, no store loss | 1,126,085 (320,277) | | 7 s (2026-11-04) |
@@ -1707,6 +1709,29 @@ relay link connection never outlives every primary holding its token.
     never a dial to itself. Guards `TestA2ACallWaitsForAnArrivingTarget`,
     `TestA2ACallToAStaleRecordOfThisReplicaIsNotDialled`,
     `TestRelayTunnelWaitsForAnArrivingAgent`.
+46. **A peer's forward that reached the replica an agent had just moved
+    off was refused** (model gap, code, fixed; medium; TLC,
+    `peer-refuses-moved`; lane DRAIN3, 2026-11-06, from relay-server's
+    rolling-drain e2e: 1 site visit answered offline in 4,960). A visitor's
+    replica read the record naming A and forwarded the request; A stopped
+    routing the moment the record named B (`stopRouting`), and
+    `Ingress.peer` answered the forward 503 `Retry-After` although the
+    agent was connected to B. `Move.tla` let `ArriveA` refuse it ("the
+    visitor sends it again"): `NoLoss` held, a visitor still saw a 503.
+    Now `ArriveA` sends it on to B (`toB`, then `ArriveB`) while the record
+    names B's session, `MovedForwards` (`refA = {}`), mutant
+    `peer-refuses-moved` (8 states deep). Fixed: `Ingress.peer`, refused,
+    reads the record once: this replica: `RouteArriving` (finding 45);
+    another replica: the request goes on there, once (`peerHopHeader`
+    marks it; that replica serves it or refuses it, never forwards it
+    again); none: 503 as before. No agent ran it on A, so it runs at most
+    once (`RunOnce`). Guard
+    `TestPeerForwardAfterMoveGoesOnToTheAgentsReplica`. relay-server's site
+    path had the same gap twice: its `siteRecheck` on A answered the
+    offline page, and its visitor's replica read the record twice (naming
+    A, then B before B's session registered) and answered offline
+    (`TestSiteHostReadsTheRecordOnce`,
+    `TestSiteRecheckPassesAMovedAgentsVisitOn` there).
 
 ## Agent-to-agent calls (relay spec/CallCredit.tla)
 

@@ -458,8 +458,8 @@ mutants)
 	expect Move.cfg Move.tla close-early -e "$m"'close-early"/'
 	expect Move.cfg Move.tla race:settle-timer -e 's/Lease = TRUE/Lease = FALSE/'
 	expect Move.cfg Move.tla race:supersede-ends -e "$m"'supersede-ends"/'
-	# Findings MV-1 (peer forwards), MV-2 (the drain's bound), MV-4 (TCP rotation); witnesses.
-	for b in peer-no-lease drain-bound-after-stop tcp-stays-in-rotation no-arrival-wait; do
+	# Findings MV-1 (peer forwards), MV-2 (the drain's bound), MV-4 (TCP rotation), 45 (arrival), 46 (onward); witnesses.
+	for b in peer-no-lease drain-bound-after-stop tcp-stays-in-rotation no-arrival-wait peer-refuses-moved; do
 		expect Move.cfg Move.tla "$b" -e "$m$b\"/"
 	done
 	expect Move.cfg Move.tla witness:held -e 's/^    NoLoss$/    WitnessHeld/'

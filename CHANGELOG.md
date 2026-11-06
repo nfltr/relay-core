@@ -10,6 +10,14 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Fixed
+
+- A request a peer replica forwarded that reaches the replica an agent
+  just moved off goes on, once, to the replica the agent's record names
+  (`Ingress.peer`; the hop is marked `X-Nfltr-Peer-Hop`), instead of 503
+  while the agent is connected there (spec/Move.tla `MovedForwards`,
+  spec/README.md finding 46). No API change.
+
 ### Added
 
 - Per-source limits on the QUIC agent link's UDP socket

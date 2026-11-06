@@ -164,12 +164,17 @@ func (ing *Ingress) dispatcherURL(ctx context.Context, agentID string) (u *url.U
 		}
 		return nil, nil, fmt.Errorf("%w: %s", directory.ErrAgentNotConnected, agentID)
 	}
-	dispatcherURL, err := url.Parse(fmt.Sprintf("http://%s:%s", podIP, ing.peerLinkPort))
+	dispatcherURL, err := ing.peerURL(podIP)
 	if err != nil {
 		return nil, nil, err
 	}
 	logger.Debug("dispatcher URL resolved", "url", dispatcherURL.String())
 	return dispatcherURL, nil, nil
+}
+
+// peerURL names the replica at podIP by its replica link port.
+func (ing *Ingress) peerURL(podIP string) (*url.URL, error) {
+	return url.Parse(fmt.Sprintf("http://%s:%s", podIP, ing.peerLinkPort))
 }
 
 // routeLeaseKey carries a request's route lease from dispatch to the
