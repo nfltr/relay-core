@@ -20,6 +20,13 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Usage by share: the meter carries a share's id (`sharecode.ID`, a hash
+  of the code; the code itself is never metered or logged) and counts one
+  visit each time a share meter opens (`platform/metrics.OpenShareMeter`,
+  `Usage.Share`, `Usage.ShareVisits`; `session.(*Dispatcher).OpenShareMeter`,
+  `session.(*TCPDispatcher).OpenShareMeter`; the HTTP share path passes it
+  with `frontend.WithShare` / `frontend.Share`). Additions only: no
+  migration.
 - Per-source limits on the QUIC agent link's UDP socket
   (`agent_link.quic.listen`), applied by `TCPDispatcher.AgentLinkQUIC`
   before QUIC parses a datagram: `platform/connlimit.WrapPacketConn`
