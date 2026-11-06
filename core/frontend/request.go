@@ -36,3 +36,18 @@ func WithSiteRequest(ctx context.Context) context.Context {
 func SiteRequest(ctx context.Context) bool {
 	return ctx.Value(siteRequestKey{}) != nil
 }
+
+type shareKey struct{}
+
+// WithShare marks ctx's request as a visit through the share whose id
+// (core/sharecode.ID, never its code) is share: its meter counts the
+// visit and its bytes under it.
+func WithShare(ctx context.Context, share string) context.Context {
+	return context.WithValue(ctx, shareKey{}, share)
+}
+
+// Share is ctx's request's share id (WithShare); "" for none.
+func Share(ctx context.Context) string {
+	s, _ := ctx.Value(shareKey{}).(string)
+	return s
+}

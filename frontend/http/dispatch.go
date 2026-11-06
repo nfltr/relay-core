@@ -106,10 +106,12 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 		// sees are the ones a peer's forward over the replica link sends
 		// (httputil.ReverseProxy strips hop-by-hop headers). An agent
 		// that serves HTTP sessions gets it on one (agent_http_link.go).
-		// The agent's owner pays for the request, whoever sent it.
+		// The agent's owner pays for the request, whoever sent it; a
+		// share's visit is metered under the share too (frontend.Share).
+		share := frontend.Share(r.Context())
 		if ing.link != nil && ing.core.TCPDispatcher.ServesHTTP(agentID) {
 			metrics.RecordAgentHTTPRequest("link")
-			meter := ing.core.Dispatcher.OpenMeter(metrics.PathHTTPLink, agentID)
+			meter := ing.core.Dispatcher.OpenShareMeter(metrics.PathHTTPLink, agentID, share)
 			defer meter.End()
 			release() // its session on the agent link: no message on the topic
 			ing.link.ServeHTTP(metrics.CountHTTP(w, r, metrics.PathHTTPLink, meter, time.Now()), r)
@@ -118,7 +120,7 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(withRouteLease(r.Context(), release))
 		metrics.RecordAgentHTTPRequest("grpc")
 		stripHopByHopHeaders(r.Header)
-		meter := ing.core.Dispatcher.OpenMeter(metrics.PathHTTPGRPC, agentID)
+		meter := ing.core.Dispatcher.OpenShareMeter(metrics.PathHTTPGRPC, agentID, share)
 		defer meter.End()
 		ing.proxy.ServeHTTP(metrics.CountHTTP(w, r, metrics.PathHTTPGRPC, meter, time.Now()), r)
 		return

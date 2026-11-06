@@ -242,3 +242,49 @@ func TestUsageAgentSeconds(t *testing.T) {
 		t.Errorf("%d agent clocks left", n)
 	}
 }
+
+// TestUsageByShare (METER3): a share's meter (OpenShareMeter) reports its
+// bytes under its share id and counts one visit at its open; a meter
+// without a share reports "" and no visit. Visits are reported once: the
+// next take has none.
+func TestUsageByShare(t *testing.T) {
+	EnableUsage()
+	p := PathSNI
+	TakeUsage(func(Usage) {}) // what earlier tests counted
+	s1 := OpenShareMeter(p, "owner", "agent", "s1")
+	s2 := OpenShareMeter(p, "owner", "agent", "s1")
+	plain := OpenMeter(p, "owner", "agent")
+	AddBytes(p, s1, 5, 1)
+	AddBytes(p, s2, 2, 0)
+	AddBytes(p, plain, 3, 0)
+	s1.End()
+	s2.End()
+	plain.End()
+	bytes := map[string][2]uint64{}
+	visits := map[string]uint64{}
+	TakeUsage(func(u Usage) {
+		if u.Account != "owner" {
+			return
+		}
+		if u.ShareVisits > 0 {
+			if u.Path != 0 || u.ToAgent != 0 || u.FromAgent != 0 || u.AgentSeconds != 0 || u.AgentID != "agent" {
+				t.Fatalf("visit row %+v carries more than visits", u)
+			}
+			visits[u.Share] += u.ShareVisits
+			return
+		}
+		v := bytes[u.Share]
+		bytes[u.Share] = [2]uint64{v[0] + u.ToAgent, v[1] + u.FromAgent}
+	})
+	if bytes["s1"] != [2]uint64{7, 1} || bytes[""] != [2]uint64{3, 0} || len(bytes) != 2 {
+		t.Fatalf("bytes by share %v, want s1 [7 1], \"\" [3 0]", bytes)
+	}
+	if visits["s1"] != 2 || len(visits) != 1 {
+		t.Fatalf("visits %v, want s1: 2", visits)
+	}
+	TakeUsage(func(u Usage) {
+		if u.ShareVisits > 0 {
+			t.Fatalf("visit reported twice: %+v", u)
+		}
+	})
+}

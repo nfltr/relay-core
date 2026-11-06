@@ -13,6 +13,7 @@ import (
 
 	"github.com/nfltr/relay-core/core/frontend"
 	"github.com/nfltr/relay-core/core/session"
+	"github.com/nfltr/relay-core/core/sharecode"
 	"github.com/nfltr/relay-core/core/sharesecret"
 	"github.com/nfltr/relay-core/platform/ratelimit"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -118,6 +119,24 @@ func TestSharesRealmAndRobotsTag(t *testing.T) {
 		s.Serve(w, httptest.NewRequest(http.MethodGet, "/", nil), next, "open")
 		if got := w.Header().Get("X-Robots-Tag"); got != tc.robots {
 			t.Errorf("X-Robots-Tag %q, want %q", got, tc.robots)
+		}
+	}
+}
+
+// TestSharesServeMarksTheShare (METER3): a visit through a share reaches
+// next with the share's id (sharecode.ID, not its code) in its context,
+// for its meter; a Direct agent subdomain is no share and carries none.
+func TestSharesServeMarksTheShare(t *testing.T) {
+	s := &Shares{
+		Grants: grantsByCode{"open": {AgentID: "alice.web"}}, Verified: NewShareVerified(), Log: slog.New(slog.DiscardHandler),
+		Direct: func(_ *http.Request, label string) (string, bool) { return "alice." + label, label == "web" },
+	}
+	for code, want := range map[string]string{"open": sharecode.ID("open"), "web": ""} {
+		got := "unreached"
+		s.Serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil),
+			http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = frontend.Share(r.Context()) }), code)
+		if got != want {
+			t.Fatalf("%s: share %q, want %q", code, got, want)
 		}
 	}
 }

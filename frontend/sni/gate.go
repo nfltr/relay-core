@@ -19,6 +19,7 @@ import (
 	"net"
 
 	"github.com/nfltr/relay-core/core/session"
+	"github.com/nfltr/relay-core/core/sharecode"
 	"github.com/nfltr/relay-core/platform/metrics"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 )
@@ -71,7 +72,7 @@ func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher
 		return
 	}
 	if err := target.admitClient(remoteIP(conn.RemoteAddr())); err != nil {
-		logger.Info("sni: share connection refused", "share", target.Share, "agent_id", target.AgentID, "remote", conn.RemoteAddr(), "reason", err)
+		logger.Info("sni: share connection refused", "share", sharecode.ID(target.Share), "agent_id", target.AgentID, "remote", conn.RemoteAddr(), "reason", err)
 		metrics.TransferOpened(metrics.PathSNI, relayv1.ErrorReason_ERROR_REASON_SHARE_IP_REFUSED.String())
 		_ = conn.Close()
 		return
@@ -82,7 +83,8 @@ func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher
 	defer metrics.TransferEnd(metrics.PathSNI, began)
 	// The agent sees the complete ClientHello, then the rest of the handshake.
 	// The share's agent's owner pays, whoever the visitor is.
-	meter := d.OpenMeter(metrics.PathSNI, target.AgentID)
+	// Metered under the share's id, never its code (sharecode.ID).
+	meter := d.OpenShareMeter(metrics.PathSNI, target.AgentID, sharecode.ID(target.Share))
 	defer meter.End()
 	visitor := metrics.CountConn(&session.PrefixConn{Conn: conn, Prefix: peeked}, metrics.PathSNI, meter, began, false, true)
 	d.RouteConnection(ctx, visitor, target.AgentID, target.Service, target.enforcedShare())

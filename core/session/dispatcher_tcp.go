@@ -17,6 +17,7 @@ import (
 
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/directory"
+	"github.com/nfltr/relay-core/core/sharecode"
 	"github.com/nfltr/relay-core/internal/platform/acceptloop"
 	"github.com/nfltr/relay-core/internal/platform/auth"
 	"github.com/nfltr/relay-core/internal/platform/logging"
@@ -293,7 +294,7 @@ var errTCPSessionRefused = errors.New("tcp session refused")
 func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAgentStream) error {
 	if ep.Share != "" && !as.enforcesShare(ep.Share) {
 		d.logger.Warn("tcp tunnel: share connection refused: its stream does not enforce the share's policy",
-			"agent_id", ep.AgentID, "share", ep.Share, "remote", conn.RemoteAddr())
+			"agent_id", ep.AgentID, "share", sharecode.ID(ep.Share), "remote", conn.RemoteAddr())
 		shareUnenforced()
 		return errTCPSessionRefused
 	}
@@ -327,7 +328,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 	// attach may have moved the session to another of the agent's streams.
 	if ep.Share != "" && !as.enforcesShare(ep.Share) {
 		d.logger.Warn("tcp tunnel: share connection refused: its stream does not enforce the share's policy",
-			"agent_id", ep.AgentID, "share", ep.Share, "remote", conn.RemoteAddr())
+			"agent_id", ep.AgentID, "share", sharecode.ID(ep.Share), "remote", conn.RemoteAddr())
 		shareUnenforced()
 		return errTCPSessionRefused
 	}
@@ -458,7 +459,7 @@ func (d *TCPDispatcher) RouteConnection(ctx context.Context, conn net.Conn, agen
 	// A share whose agent is on another replica is checked there (serveLinkTCP).
 	if share != "" && as != nil && !as.enforcesShare(share) {
 		d.logger.Warn("sni route: share connection refused: its agent does not enforce the share's policy",
-			"agent_id", agentID, "share", share, "remote", conn.RemoteAddr())
+			"agent_id", agentID, "share", sharecode.ID(share), "remote", conn.RemoteAddr())
 		shareUnenforced()
 		return
 	}

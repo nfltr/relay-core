@@ -23,17 +23,23 @@ import (
 // and AgentID are "" for bytes no meter counted; Account alone is "" for a
 // session whose agent had no known owner. A row with AgentSeconds is an
 // agent's connected time instead (AgentUp): its Path and bytes are zero.
+// Share is the share id (never its code) of sessions through a share
+// (OpenShareMeter), "" for none; a row with ShareVisits is that share's
+// visits (one per OpenShareMeter) instead: its Path and bytes are zero.
 type Usage struct {
 	Account, AgentID   string
+	Share              string
 	Path               Path
 	ToAgent, FromAgent uint64
 	AgentSeconds       uint64
+	ShareVisits        uint64
 }
 
 // Meter counts one session's bytes on its path for its payer.
 type Meter struct {
 	p                Path
 	account, agentID string
+	share            string
 	n                [2]atomic.Uint64 // to_agent, from_agent
 	ended            atomic.Bool
 	taken            [2]uint64 // usage.mu
@@ -49,7 +55,8 @@ var frontendPaths = [numPaths]bool{
 }
 
 var usage = &usageMeters{live: map[*Meter]struct{}{}, rows: map[usageRow][2]uint64{},
-	agents: map[string]*agentClock{}, agentSecs: map[usageRow]uint64{}, spareSecs: map[usageRow]uint64{}, now: time.Now}
+	agents: map[string]*agentClock{}, agentSecs: map[usageRow]uint64{}, spareSecs: map[usageRow]uint64{},
+	visits: map[usageRow]uint64{}, spareVisits: map[usageRow]uint64{}, now: time.Now}
 
 type usageMeters struct {
 	enabled atomic.Bool
@@ -68,7 +75,10 @@ type usageMeters struct {
 	// whose last session ended, and a take's scratch.
 	agentSecs map[usageRow]uint64
 	spareSecs map[usageRow]uint64 // takeMu: the other one, swapped at each take
-	now       func() time.Time    // tests
+	// visits: share visits (account, agentID, share) not yet taken;
+	// spareVisits as spareSecs.
+	visits, spareVisits map[usageRow]uint64
+	now                 func() time.Time // tests
 }
 
 // agentClock is a connected agent's time (usage.mu).
@@ -80,8 +90,8 @@ type agentClock struct {
 }
 
 type usageRow struct {
-	account, agentID string
-	p                Path
+	account, agentID, share string
+	p                       Path
 }
 
 // EnableUsage makes OpenMeter meter sessions from now on. Its caller takes
@@ -97,12 +107,22 @@ func UsageEnabled() bool { return usage.enabled.Load() }
 // its agent; nil (count without one) before EnableUsage or on a transport
 // path. End it when the session ends.
 func OpenMeter(p Path, account, agentID string) *Meter {
+	return OpenShareMeter(p, account, agentID, "")
+}
+
+// OpenShareMeter is OpenMeter of a session through a share: share is the
+// share's id (core/sharecode.ID, never its code), "" for none. Each one
+// with a share counts one visit of it (Usage.ShareVisits).
+func OpenShareMeter(p Path, account, agentID, share string) *Meter {
 	if !usage.enabled.Load() || !frontendPaths[p] {
 		return nil
 	}
-	m := &Meter{p: p, account: account, agentID: agentID}
+	m := &Meter{p: p, account: account, agentID: agentID, share: share}
 	usage.mu.Lock()
 	usage.live[m] = struct{}{}
+	if share != "" {
+		usage.visits[usageRow{account: account, agentID: agentID, share: share}]++
+	}
 	usage.mu.Unlock()
 	return m
 }
@@ -250,22 +270,29 @@ func TakeUsage(f func(Usage)) {
 	}
 	agentSecs := u.agentSecs
 	u.agentSecs = u.spareSecs
+	visits := u.visits
+	u.visits = u.spareVisits
 	u.mu.Unlock()
 	for r, n := range u.rows {
-		f(Usage{Account: r.account, AgentID: r.agentID, Path: r.p, ToAgent: n[0], FromAgent: n[1]})
+		f(Usage{Account: r.account, AgentID: r.agentID, Share: r.share, Path: r.p, ToAgent: n[0], FromAgent: n[1]})
 	}
 	for r, n := range agentSecs {
 		f(Usage{Account: r.account, AgentID: r.agentID, AgentSeconds: n})
 	}
+	for r, n := range visits {
+		f(Usage{Account: r.account, AgentID: r.agentID, Share: r.share, ShareVisits: n})
+	}
 	clear(agentSecs)
 	u.spareSecs = agentSecs
+	clear(visits)
+	u.spareVisits = visits
 }
 
 // take adds m's bytes since its last take to rows (u.mu held).
 func (u *usageMeters) take(m *Meter) {
 	to, from := m.counts()
 	to, from = max(to, m.taken[0]), max(from, m.taken[1]) // never back
-	u.add(usageRow{m.account, m.agentID, m.p}, [2]uint64{to - m.taken[0], from - m.taken[1]})
+	u.add(usageRow{m.account, m.agentID, m.share, m.p}, [2]uint64{to - m.taken[0], from - m.taken[1]})
 	m.taken = [2]uint64{to, from}
 }
 

@@ -43,3 +43,15 @@ func TestValid(t *testing.T) {
 		}
 	}
 }
+
+// TestID (METER3): a share's id is stable for its code, differs between
+// codes, and does not contain the code.
+func TestID(t *testing.T) {
+	a, b := New(), New()
+	if ID(a) != ID(a) || ID(a) == ID(b) {
+		t.Fatalf("ID(%q)=%q, ID(%q)=%q: want stable and distinct", a, ID(a), b, ID(b))
+	}
+	if len(ID(a)) != 16 || strings.Contains(ID(a), a) || strings.Contains(a, ID(a)) {
+		t.Fatalf("ID(%q) = %q: want 16 hex characters, not the code", a, ID(a))
+	}
+}

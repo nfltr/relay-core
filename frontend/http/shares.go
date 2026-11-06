@@ -15,6 +15,7 @@ import (
 	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/core/relaystatus"
 	"github.com/nfltr/relay-core/core/session"
+	"github.com/nfltr/relay-core/core/sharecode"
 	"github.com/nfltr/relay-core/core/sharesecret"
 	"github.com/nfltr/relay-core/platform/metrics"
 	"github.com/nfltr/relay-core/platform/ratelimit"
@@ -144,6 +145,9 @@ func (s *Shares) Serve(w http.ResponseWriter, r *http.Request, next http.Handler
 	}
 
 	ctx := r.Context()
+	if grantErr == nil { // a share's visit, not a Direct agent subdomain: metered under its id
+		ctx = frontend.WithShare(ctx, sharecode.ID(code))
+	}
 	if s.Context != nil {
 		ctx = s.Context(ctx, agentID)
 	}

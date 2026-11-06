@@ -10,7 +10,9 @@ package sharecode
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"time"
@@ -109,4 +111,13 @@ type Used struct {
 // FactsPath (one field of the issuer's facts).
 type UsedReport struct {
 	SharesUsed []Used `json:"shares_used,omitempty"`
+}
+
+// ID is a share's id: what usage rows, logs and APIs name a share by
+// instead of its code, which is its secret. The first 8 bytes of SHA-256
+// over a fixed prefix and code, in hex: stable for the code, and a code's
+// 128 random bits make it impossible to go back from the id to the code.
+func ID(code string) string {
+	h := sha256.Sum256([]byte("nfltr share id\x00" + code))
+	return hex.EncodeToString(h[:8])
 }
