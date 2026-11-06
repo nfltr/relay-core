@@ -51,10 +51,12 @@ type CachedGrants struct {
 	mu      sync.Mutex
 	hits    map[string]cachedGrant // code -> grant
 	miss    map[string]time.Time   // code -> until
+	gen     uint64                 // forgets so far: a lookup that saw one start caches no grant
 }
 
 type cachedGrant struct {
 	grant Grant
+	id    string // sharecode.ID of the code (ForgetID)
 	until time.Time
 }
 
@@ -91,6 +93,7 @@ func (r *CachedGrants) grant(code string, now time.Time) (Grant, error) {
 		r.mu.Unlock()
 		return Grant{}, ErrNoGrant
 	}
+	gen := r.gen
 	r.mu.Unlock()
 
 	subject, policy, err := r.lookup(code)
@@ -107,7 +110,16 @@ func (r *CachedGrants) grant(code string, now time.Time) (Grant, error) {
 	if exp, perr := time.Parse(time.RFC3339, policy.ExpiresAt); perr == nil && exp.Before(until) {
 		until = exp
 	}
-	r.remember(func() { r.hits[code] = cachedGrant{grant: g, until: until} })
+	id := sharecode.ID(code)
+	r.remember(func() {
+		// A forget since the lookup started may be this code's revocation,
+		// read after the store answered: caching the answer would undo it.
+		// ponytail: any forget skips caching every lookup in flight (each
+		// read once more), not only its own code's.
+		if r.gen == gen {
+			r.hits[code] = cachedGrant{grant: g, id: id, until: until}
+		}
+	})
 	return g, nil
 }
 
@@ -128,11 +140,17 @@ func (r *CachedGrants) remember(put func()) {
 	put()
 }
 
-// Forget drops code's cached answer (the issuer revoked it).
-func (r *CachedGrants) Forget(code string) {
+// ForgetID drops the cached grant of the code whose share id
+// (sharecode.ID) is id: the issuer revoked it. A revocation names the id,
+// never the code (a secret). A cached miss is kept: it grants nothing.
+func (r *CachedGrants) ForgetID(id string) {
 	r.mu.Lock()
-	delete(r.hits, code)
-	delete(r.miss, code)
+	r.gen++
+	for code, e := range r.hits {
+		if e.id == id {
+			delete(r.hits, code)
+		}
+	}
 	r.mu.Unlock()
 }
 
@@ -142,6 +160,7 @@ func (r *CachedGrants) Forget(code string) {
 // are frequent.
 func (r *CachedGrants) ForgetAll() {
 	r.mu.Lock()
+	r.gen++
 	clear(r.hits)
 	clear(r.miss)
 	r.mu.Unlock()

@@ -207,3 +207,41 @@ func TestCachedGrantsForgetAll(t *testing.T) {
 		t.Fatalf("%d reads, want 2 (cached, then read again after ForgetAll)", reads)
 	}
 }
+
+// TestCachedGrantsForgetID: a revocation names the share's id, never its
+// code (lane RSPOST); the id's grant is read again, another code's stays
+// cached.
+func TestCachedGrantsForgetID(t *testing.T) {
+	reads := map[string]int{}
+	g := NewCachedGrants(func(code string) (string, SharePolicy, error) { reads[code]++; return "alice.web", SharePolicy{}, nil }, nil)
+	for _, c := range []string{"a", "b", "a", "b"} {
+		_, _ = g.Grant(c)
+	}
+	g.ForgetID(sharecode.ID("a"))
+	_, _ = g.Grant("a")
+	_, _ = g.Grant("b")
+	if reads["a"] != 2 || reads["b"] != 1 {
+		t.Fatalf("reads %v, want a read again after ForgetID, b still cached", reads)
+	}
+}
+
+// TestCachedGrantsForgetDuringLookup: a revocation applied while a lookup
+// of the code is in flight is not undone by that lookup caching what it
+// read before the revoke (the cached grant would outlive the revocation by
+// up to ShareReadTTL on the replica that applied it).
+func TestCachedGrantsForgetDuringLookup(t *testing.T) {
+	reads := 0
+	var g *CachedGrants
+	g = NewCachedGrants(func(code string) (string, SharePolicy, error) {
+		reads++
+		if reads == 1 {
+			g.ForgetID(sharecode.ID(code)) // the revocation lands mid-lookup
+		}
+		return "alice.web", SharePolicy{}, nil
+	}, nil)
+	_, _ = g.Grant("a")
+	_, _ = g.Grant("a")
+	if reads != 2 {
+		t.Fatalf("%d reads, want 2: a grant read before a revocation was cached after it", reads)
+	}
+}

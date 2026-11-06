@@ -10,8 +10,26 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- A share revocation names the share's id (`sharecode.ID`), never its code
+  (a secret the issuer's revocation journal and the relays' revocation bus
+  carried): `core/frontend.(*CachedGrants).ForgetID(id)` and
+  `core/sharesecret.(*VerifiedCache).ForgetID(id)` drop the cached grant
+  and verified credentials of the code with that id. `Forget(code)` on
+  both is removed. Migration: call `ForgetID(sharecode.ID(code))`.
+  `VerifiedCache` keeps the id in place of the code (no plaintext code in
+  the cache). relay-server spec/Share.tla `Forget`, mutant
+  `forget-by-key`.
+
 ### Fixed
 
+- `core/frontend.CachedGrants`: a revocation applied while a lookup of the
+  code was in flight was undone when that lookup cached what it read
+  before the revoke (up to `ShareReadTTL` on the replica that applied it).
+  A forget now bumps a generation; a lookup that saw one start caches
+  nothing (`TestCachedGrantsForgetDuringLookup`; relay-server
+  spec/Share.tla `CacheFill`, mutant `fill-after-forget`).
 - `platform/connlimit` `TestPacketHandshakeFitsItsBurst` no longer fails
   on a loaded machine: it counts the long-header datagrams one handshake
   sends (3 on loopback, up to 5 when the client ACKs the server's flight

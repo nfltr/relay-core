@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
+
+	"github.com/nfltr/relay-core/core/sharecode"
 )
 
 // VerifiedCache answers a share credential that already matched its sealed
@@ -24,7 +26,8 @@ import (
 // digest is useless outside this process. Only matches are cached. Keying on
 // the sealed value means a reissued share (fresh salt) never hits an old
 // entry. Entries are bounded by count and TTL, end no later than the share's
-// ExpiresAt, and Forget drops a code's entries on revoke. The request path
+// ExpiresAt, and ForgetID drops a share's entries on revoke (by its id,
+// sharecode.ID: a revocation never carries the code). The request path
 // validates the share code before any credential check, so an entry of a
 // revoked or expired share is never consulted even before it is dropped.
 // Concurrent cold checks of one credential share a single evaluation; cold
@@ -41,7 +44,7 @@ type VerifiedCache struct {
 }
 
 type verifiedEntry struct {
-	code  string
+	id    string // sharecode.ID of the share's code (ForgetID)
 	until time.Time
 }
 
@@ -87,19 +90,20 @@ func (c *VerifiedCache) Matches(code, sealed, presented, expiresAt string) bool 
 	if _, ok := c.entries[d]; !ok && len(c.entries) >= c.max {
 		c.evictLocked(now)
 	}
-	c.entries[d] = verifiedEntry{code: code, until: until}
+	c.entries[d] = verifiedEntry{id: sharecode.ID(code), until: until}
 	return true
 }
 
-// Forget drops every entry of code (the share was revoked).
-func (c *VerifiedCache) Forget(code string) {
+// ForgetID drops every entry of the share whose id (sharecode.ID) is id:
+// the share was revoked.
+func (c *VerifiedCache) ForgetID(id string) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for d, e := range c.entries {
-		if e.code == code {
+		if e.id == id {
 			delete(c.entries, d)
 		}
 	}

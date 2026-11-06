@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nfltr/relay-core/core/sharecode"
 )
 
 // saturateHashes holds every hash slot so any cold verify fails closed;
@@ -68,7 +70,7 @@ func TestVerifiedCacheForgetTTLAndShareExpiry(t *testing.T) {
 			t.Fatal("cold verify failed")
 		}
 	}
-	c.Forget("a-revoked")
+	c.ForgetID(sharecode.ID("a-revoked"))
 	saturateHashes(t)
 	if c.Matches("a-revoked", sealed, "tok", "") {
 		t.Fatal("a revoked share's credential was answered from the cache")
