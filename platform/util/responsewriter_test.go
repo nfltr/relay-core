@@ -120,3 +120,23 @@ func TestFinalStatusAfter1xx(t *testing.T) {
 		t.Fatalf("status %d (recorded %d), X-Internal %q; want 404 and the header removed", res.StatusCode, got, res.Header.Get("X-Internal"))
 	}
 }
+
+// TestFinishRemovesHeadersWithoutWriteHeader: a handler that wrote no
+// status still has its headers to remove taken off by Finish, before
+// net/http sends the implicit 200 with the header map as it is.
+func TestFinishRemovesHeadersWithoutWriteHeader(t *testing.T) {
+	w := httptest.NewRecorder()
+	rw := NewResponseWriter(w, []string{"Set-Cookie"})
+	rw.Header().Set("Set-Cookie", "a=1")
+	rw.Finish()
+	if got := w.Result().Header.Get("Set-Cookie"); got != "" {
+		t.Errorf("Set-Cookie went out: %q", got)
+	}
+	if rw.GetStatusCode() != http.StatusOK || rw.GetRemovedHeaders().Get("Set-Cookie") != "a=1" {
+		t.Errorf("status %d, removed %v", rw.GetStatusCode(), rw.GetRemovedHeaders())
+	}
+	rw.Finish() // written: does nothing
+	if w.Code != http.StatusOK {
+		t.Errorf("code %d", w.Code)
+	}
+}

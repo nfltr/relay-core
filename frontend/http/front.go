@@ -54,6 +54,7 @@ func (ing *Ingress) front(next http.Handler) http.Handler {
 		r.Header.Set(session.RequestAtProxyHeader, strconv.FormatInt(start.UnixMilli(), 10))
 
 		next.ServeHTTP(rw, r)
+		rw.Finish() // TestFrontDropsMetadataWithoutWriteHeader
 		finish := time.Now()
 		elapsed := finish.Sub(start)
 		ing.logger.Debug("request completed", "type", "proxy", "transaction_id", UUID, "elapsed", elapsed)

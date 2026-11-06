@@ -77,6 +77,16 @@ func (rw *ResponseWriter) WriteHeader(statusCode int) {
 	rw.wroteHeader = true
 }
 
+// Finish writes the implicit 200 when the handler wrote no status, so the
+// headers to remove go: net/http would send the header map as it is
+// (TestFinishRemovesHeadersWithoutWriteHeader). Call it once the handler
+// returns, before reading the status or the removed headers.
+func (rw *ResponseWriter) Finish() {
+	if !rw.wroteHeader {
+		rw.WriteHeader(http.StatusOK)
+	}
+}
+
 // informational reports whether code is a 1xx a response may send before
 // its final status (101 Switching Protocols is final).
 func informational(code int) bool {

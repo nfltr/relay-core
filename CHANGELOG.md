@@ -21,6 +21,15 @@ changes listed (from the first tag on).
   `per_ip_handshake_packet_burst` at 3 to 8 datagrams a handshake
   (125 to 330 at once), retransmissions spending tokens the rate refills.
   No API change.
+- A response whose handler writes no status (net/http sends the implicit
+  200 with the header map as it is) no longer carries the headers
+  `util.ResponseWriter` removes: front's agent metadata header went out
+  with it, and the request was counted with status 0. The new
+  `platform/util.(*ResponseWriter).Finish` writes that 200 through the
+  writer; front calls it once its handler returns
+  (`TestFrontDropsMetadataWithoutWriteHeader`). A caller that removes
+  headers (relay-server's Set-Cookie on site hosts and mailbox routes)
+  calls it the same way. Addition only: no migration.
 - A request a peer replica forwarded that reaches the replica an agent
   just moved off goes on, once, to the replica the agent's record names
   (`Ingress.peer`; the hop is marked `X-Nfltr-Peer-Hop`), instead of 503

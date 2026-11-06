@@ -1,13 +1,14 @@
 Compatible changes:
-- ./core/session.(*Dispatcher).OpenShareMeter: added
-- ./core/session.(*TCPDispatcher).OpenShareMeter: added
-- ./core/sharecode.ID: added
 - ./platform/connlimit.PacketConfig: added
 - ./platform/connlimit.ReasonPerIPPackets: added
 - ./platform/connlimit.WrapPacketConn: added
-- ./core/frontend.Share: added
-- ./core/frontend.WithShare: added
+- ./platform/util.(*ResponseWriter).Finish: added
 - ./platform/metrics.AddConnRefusals: added
 - ./platform/metrics.OpenShareMeter: added
 - ./platform/metrics.Usage.Share: added
 - ./platform/metrics.Usage.ShareVisits: added
+- ./core/frontend.Share: added
+- ./core/frontend.WithShare: added
+- ./core/sharecode.ID: added
+- ./core/session.(*Dispatcher).OpenShareMeter: added
+- ./core/session.(*TCPDispatcher).OpenShareMeter: added
