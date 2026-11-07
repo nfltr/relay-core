@@ -1,0 +1,107 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   e2ee_share.pv: Track A, E2EE share URLs on the SNI port and the share
+   gate. spec/proverif/README.md "e2ee_share.pv".
+
+   Part 1 (the gate): the relay is honest; the attacker is every visitor
+   and the network. A share whose policy carries a credential (Basic auth,
+   Bearer token, required headers) reaches only an agent stream that names
+   it in x-nfltr-share-policy, on the replica that holds the stream, also
+   when the visitor came in on another replica (the replica link carries
+   the share; the link is mutually authenticated, so private here). The
+   agent checks the credential on every E2EE session. A passthrough or
+   older agent (names no share, checks nothing) must never get such a
+   connection.
+
+   Part 2 (a hostile relay): what a share's E2EE URL is worth against the
+   relay itself. The relay owns the share domain, its DNS and the route of
+   every ACME challenge, so a WebPKI certificate (an ACME certificate at
+   the agent) does not keep the relay out; it also returned the policy, so
+   it knows the credential. Only a certificate the visitor checks against
+   the agent's own fingerprint does (e2ee_tcp.pv's pin, in github.com/nfltr/relay).
+
+   Code (github.com/nfltr/relay-core unless named):
+     core/session/e2ee_share_gate.go:35-40   enforcesShare: the stream (its primary) names the share
+     core/session/dispatcher_tcp.go:295,329,460,735  the gate on each local path
+     core/session/peer_link_tcp.go:50        the gate on a session the replica link brought
+     relay-server core/replicas/peer_link.go:563,576  Share carried on the replica link
+     relay client/agent/e2ee_share_policy.go:121-153  the agent's check: SHA-256 digests, constant time
+     relay client/agent/session_plan.go:78-80          every E2EE session of the certificate, whatever SNI
+     nfltr cmd/nfltr/internal/tunnelcli/main_tunnel_routes.go:179-196  the policy as the relay returned it *)
+
+free c: channel.
+free link: channel [private].       (* the replica link: mTLS between replicas *)
+free toEnf, toPass, toPassY: channel [private].  (* an agent's ConnectTCP streams *)
+
+fun h(bitstring): bitstring.        (* SHA-256 *)
+const shareP, noShare: bitstring.
+const hereEnf, herePass, onY: bitstring.   (* where the directory says the agent stream is *)   (* a share with a credential; none *)
+free pw: bitstring [private].       (* the share's credential *)
+free backend: bitstring [private].  (* what the agent's backend serves *)
+
+(* An agent stream: enforcing (names shareP, checks the credential) or a
+   passthrough/older one (names none, checks nothing). *)
+let AgentEnforcing(ch: channel) =
+  !in(ch, (share: bitstring, cred: bitstring));
+  if h(cred) = h(pw) then out(c, backend).         (* e2ee_share_policy.go:121-153 *) (* NOT:agent-skips-credential *)
+  out(c, backend). (* ONLY:agent-skips-credential *)
+let AgentPassthrough(ch: channel) =
+  !in(ch, (share: bitstring, cred: bitstring));
+  out(c, backend).
+
+(* The gate (enforcesShare) in front of one stream. *)
+let Gate(share: bitstring, cred: bitstring, names: bitstring, ch: channel) =
+  if share = shareP && names <> shareP then 0      (* SHARE_POLICY_UNENFORCED *)
+  else out(ch, (share, cred)).
+
+(* Replica X: the SNI front a visitor reached; holds an enforcing and a
+   passthrough stream of the agent (it may run either), or forwards to
+   replica Y on the link. *)
+let ReplicaX =
+  !in(c, (cred: bitstring, route: bitstring));
+  let share = shareP in                            (* the SNI names the share's code *)
+  if route = hereEnf then Gate(share, cred, shareP, toEnf)
+  else if route = herePass then Gate(share, cred, noShare, toPass) (* NOT:gate-skipped-here *)
+  else if route = herePass then out(toPass, (share, cred)) (* ONLY:gate-skipped-here *)
+  else out(link, (share, cred)).                   (* forwardToPod: the open carries Share *) (* NOT:share-not-carried-on-link *)
+  else out(link, (noShare, cred)). (* ONLY:share-not-carried-on-link *)
+(* Replica Y: a session the link brought; holds a passthrough stream. *)
+let ReplicaY =
+  !in(link, (share: bitstring, cred: bitstring));
+  Gate(share, cred, noShare, toPassY).             (* peer_link_tcp.go:50 *) (* NOT:gate-skipped-on-link *)
+  out(toPassY, (share, cred)). (* ONLY:gate-skipped-on-link *)
+
+(* Part 2: a browser visiting the share host with an ACME certificate. The
+   CA signs (host, key) for whoever answers the challenge for host: the
+   relay owns the domain, so the attacker gets one for its own key. *)
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+fun aenc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
+const shareHost: bitstring.
+free browserData: bitstring [private].
+
+let CA(ca: skey) =
+  !in(c, k: pkey);                                 (* an ACME order whose challenge the relay answers *)
+  out(c, sign((shareHost, k), ca)).
+let Browser(caPk: pkey) =
+  in(c, (k: pkey, cert: bitstring));
+  if checksign(cert, caPk) = (shareHost, k) then   (* WebPKI: the name and the chain *)
+  out(c, aenc(browserData, k)).
+
+(* 1. the gate: no passthrough stream gets the share, here or on Y *)
+(* expect true *)
+query attacker(backend).
+(* 2. a hostile relay: a WebPKI certificate keeps it out of nothing *)
+(* expect false *)
+query attacker(browserData).
+
+process
+  new ca: skey;
+  ( AgentEnforcing(toEnf) | AgentPassthrough(toPass) | AgentPassthrough(toPassY)
+  | ReplicaX | ReplicaY
+  | out(c, pk(ca)) | CA(ca) | !Browser(pk(ca)) )

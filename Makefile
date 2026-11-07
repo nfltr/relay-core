@@ -89,6 +89,12 @@ spec:
 spec-mutants:
 	./scripts/spec.sh mutants
 
+# The ProVerif model of the E2EE share gate (spec/proverif/README.md):
+# every line of spec/proverif/expect.txt, mutants included (in make ci, seconds).
+.PHONY: spec-proverif
+spec-proverif:
+	./spec/proverif/run.sh
+
 # spec-nightly: AgentLink's invariants at larger sizes (minutes; not in make ci).
 spec-nightly:
 	./scripts/spec.sh nightly
