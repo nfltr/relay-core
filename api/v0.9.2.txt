@@ -53,6 +53,7 @@ Compatible changes:
 - ./core/session.Dial: added
 - ./core/session.Dispatcher.MachineOwner: added
 - ./core/session.Dispatcher.Policy: added
+- ./core/session.Dispatcher.PrimaryProvider: added
 - ./core/session.List: added
 - ./core/session.Policy: added
 - ./core/session.TCPEndpoint.Caller: added

@@ -372,3 +372,32 @@ func TestReachOwnerFromMachine(t *testing.T) {
 		t.Errorf("service principal of an offline agent: owner %q", p.Owner)
 	}
 }
+
+// providerPolicy records the provider each decision was asked with.
+type providerPolicy struct{ asked []string }
+
+func (p *providerPolicy) Allowed(c identity.Principal, _ identity.AgentRef, _ Action) (bool, error) {
+	p.asked = append(p.asked, c.Provider)
+	return c.Provider != "", nil
+}
+
+// TestA2ASourceStatesItsProvider: an A2A source's principal (agentPrincipal,
+// read from its owner) carries the provider of its owner form, the
+// primary's for an unqualified owner, so a policy that decides by provider
+// (relay-server's reach.Policy refuses one none stated) answers A2A as it
+// answers the same machine's own dials. Before, the source's provider was
+// "": every A2A call within an account refused.
+func TestA2ASourceStatesItsProvider(t *testing.T) {
+	pol := &providerPolicy{}
+	d := newTwoAccountDispatcher(t, pol)
+	d.PrimaryProvider = "accounts"
+	carolHub, carolNode := testRef("carol", "hub"), testRef("carol", "node")
+	d.RegisterAgent(carolHub, "oidc:ab12:carol", "")
+	d.RegisterAgent(carolNode, "oidc:ab12:carol", "")
+	if !mustReach(t, d.A2AReaches, aliceHub, aliceNode) || !mustReach(t, d.A2AReaches, carolHub, carolNode) {
+		t.Fatalf("A2A within an account refused; providers asked %q", pol.asked)
+	}
+	if want := []string{"accounts", "oidc:ab12"}; len(pol.asked) != 2 || pol.asked[0] != want[0] || pol.asked[1] != want[1] {
+		t.Fatalf("providers asked %q, want %q", pol.asked, want)
+	}
+}

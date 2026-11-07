@@ -4,6 +4,8 @@
 package session
 
 import (
+	"strings"
+
 	"github.com/nfltr/relay-core/core/identity"
 )
 
@@ -93,7 +95,17 @@ func (d *Dispatcher) agentPrincipal(agentID string) (identity.Principal, bool, e
 	if err != nil || owner == "" {
 		return identity.Principal{}, false, err
 	}
-	return identity.Principal{Owner: owner, Machine: ref.Machine, Subject: agentID, AgentID: agentID}, true, nil
+	return identity.Principal{Provider: d.ownerProvider(owner), Owner: owner, Machine: ref.Machine, Subject: agentID, AgentID: agentID}, true, nil
+}
+
+// ownerProvider is the provider whose principals carry owner, read from
+// the owner form (identity.Authenticator.Owner): "<provider>:<owner>"
+// (an owner holds no ':', a provider name may), else the primary's.
+func (d *Dispatcher) ownerProvider(owner string) string {
+	if i := strings.LastIndexByte(owner, ':'); i >= 0 {
+		return owner[:i]
+	}
+	return d.PrimaryProvider
 }
 
 // A2AReaches is Reach for agent-to-agent traffic, which also carries relay

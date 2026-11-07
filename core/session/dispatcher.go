@@ -199,6 +199,12 @@ type Dispatcher struct {
 	// the machine row, one lookup), so an agent not connected yet (a held
 	// open) or between sessions has its owner; else from the directory.
 	MachineOwner func(identity.MachineID) (string, error)
+	// PrimaryProvider is the Authenticator's primary provider, whose
+	// owners are unqualified (identity.Authenticator.Owner): the provider
+	// an A2A source's principal is stated with when its owner has no
+	// "<provider>:" (agentPrincipal). "": none stated (a Policy that
+	// decides by provider refuses it).
+	PrimaryProvider string
 	// agentStateMu orders registerAgent's writes of the state an agent's
 	// sessions share (agentOwners) with forgetAgent's removal.
 	agentStateMu sync.Mutex
