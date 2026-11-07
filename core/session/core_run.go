@@ -10,6 +10,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/nfltr/relay-core/platform/connlimit"
+	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
@@ -61,6 +63,10 @@ func (c *Core) WireTCP(ctx context.Context, logger *slog.Logger, grace time.Dura
 	t.DrainBy = c.DrainBy // its agent link drains until then (agent_link.go)
 	d.ConfigureTCPRenew(t)
 	t.ownerOf = d.OwnerForAgent
+	t.Visitors = connlimit.NewAccounts(connlimit.Limits{
+		Max: viper.GetInt("security.conn_limit.account_max"), Rate: viper.GetFloat64("security.conn_limit.account_rate"), Burst: viper.GetInt("security.conn_limit.account_burst"),
+		SourceMax: viper.GetInt("security.conn_limit.account_source_max"), SourceRate: viper.GetFloat64("security.conn_limit.account_source_rate"), SourceBurst: viper.GetInt("security.conn_limit.account_source_burst"),
+	})
 	t.reach = d.Reach
 	d.TCPDispatcher = t
 	d.tcpAgents.Store(t)

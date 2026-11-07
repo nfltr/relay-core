@@ -17,6 +17,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/core/sharecode"
@@ -77,6 +78,15 @@ func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher
 		_ = conn.Close()
 		return
 	}
+	release, reason := d.AdmitVisitor(target.AgentID, remoteIP(conn.RemoteAddr()))
+	if reason != "" {
+		logger.Debug("sni: e2ee connection over its account's limits", "agent_id", target.AgentID, "remote", conn.RemoteAddr(), "reason", reason)
+		metrics.IncrConnRefusals("sni", reason)
+		metrics.TransferOpened(metrics.PathSNI, relayv1.ErrorReason_ERROR_REASON_LIMIT_EXCEEDED.String())
+		refuseTLS(conn)
+		return
+	}
+	defer release()
 	logger.Debug("sni: routing e2ee connection", "sni", sni, "agent_id", target.AgentID, "service", target.Service, "remote", conn.RemoteAddr())
 
 	began := metrics.TransferBegin(metrics.PathSNI)
@@ -88,4 +98,18 @@ func routeE2EE(ctx context.Context, resolver *resolver, d *session.TCPDispatcher
 	defer meter.End()
 	visitor := metrics.CountConn(&session.PrefixConn{Conn: conn, Prefix: peeked}, metrics.PathSNI, meter, began, false, true)
 	d.RouteConnection(ctx, visitor, target.AgentID, target.Service, target.enforcedShare())
+}
+
+// alertAccessDenied is a TLS fatal alert record, access_denied (RFC 8446
+// 6.2), in plaintext: the relay holds no key of an E2EE share, so it
+// answers a ClientHello over the account's limits with it, and the client
+// reports an alert rather than a reset.
+var alertAccessDenied = []byte{21, 3, 3, 0, 2, 2, 49}
+
+// refuseTLS writes the alert (bounded: a client that reads nothing does not
+// hold the goroutine) and closes conn.
+func refuseTLS(conn net.Conn) {
+	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, _ = conn.Write(alertAccessDenied)
+	_ = conn.Close()
 }

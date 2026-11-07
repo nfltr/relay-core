@@ -108,16 +108,39 @@ func (l *Limiter) Blocked(key string) bool {
 	return l.bucketLocked(key, now).TokensAt(now) < 1
 }
 
+// Ready gives key's bucket rate r and burst b, replacing the bucket's own
+// (a plan's new limits reach buckets made under the old ones: AccountLimit
+// mutant cache-stale-plan), and reports whether it holds a whole token,
+// consuming none. A key with no bucket gets a full one.
+func (l *Limiter) Ready(key string, r float64, b int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.nowFn()
+	lim := l.bucketWith(key, now, rate.Limit(r), b)
+	if lim.Limit() != rate.Limit(r) {
+		lim.SetLimitAt(now, rate.Limit(r))
+	}
+	if lim.Burst() != b {
+		lim.SetBurstAt(now, b) // the tokens past it go at the next read
+	}
+	return lim.TokensAt(now) >= 1
+}
+
 // bucketLocked returns key's token bucket, made full when key has none.
 // l.mu must be held.
 func (l *Limiter) bucketLocked(key string, now time.Time) *rate.Limiter {
+	return l.bucketWith(key, now, l.rate, l.burst)
+}
+
+// bucketWith is bucketLocked with a new bucket's rate and burst.
+func (l *Limiter) bucketWith(key string, now time.Time, r rate.Limit, burst int) *rate.Limiter {
 	if l.cleanupEvery > 0 && now.Sub(l.lastCleanup) >= l.cleanupEvery {
 		l.cleanupLocked(now)
 		l.lastCleanup = now
 	}
 	b, ok := l.buckets.Get(key)
 	if !ok {
-		b = &bucket{lim: rate.NewLimiter(l.rate, l.burst)}
+		b = &bucket{lim: rate.NewLimiter(r, burst)}
 		if l.buckets.Add(key, b) {
 			metrics.IncrRateLimitEvictions()
 		}

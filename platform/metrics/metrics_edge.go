@@ -89,7 +89,7 @@ func IncrTLSCertRenewals(name, result string) { tlsCertRenewals.WithLabelValues(
 var connRefusals = auto.NewCounterVec(prometheus.CounterOpts{
 	Namespace: proxyNamespace,
 	Name:      "conn_refused_total",
-	Help:      "Connections the relay closed at accept, before reading them, by listener and reason (per_ip_conns: the source IP held its limit of open connections; per_ip_rate: it opened connections faster than its rate; per_ip_packets: a UDP datagram over its source's packet rate, listener quic). platform/connlimit.",
+	Help:      "Connections the relay closed at accept, before reading them, by listener and reason (per_ip_conns: the source IP held its limit of open connections; per_ip_rate: it opened connections faster than its rate; per_ip_packets: a UDP datagram over its source's packet rate, listener quic; account_conns, account_rate, account_source_conns, account_source_rate: an E2EE share connection over its account's limits, listener sni, closed after the SNI peek). platform/connlimit.",
 }, []string{"listener", "reason"})
 
 // IncrConnRefusals counts a connection platform/connlimit refused. allow:wrapper

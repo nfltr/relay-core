@@ -360,9 +360,15 @@ func SetDefaultFlags() {
 	// single machine's handshake or slow-connection flood stops there
 	// (docs/decisions/relay-flood-hardening-2026-11-05.md in nfltr). Loopback
 	// peers are exempt. 0 turns a limit off.
-	_ = flag.Int("security.conn_limit.per_ip_max", 2000, "open connections one source IP may hold on each public port (0 = no limit)")
-	_ = flag.Float64("security.conn_limit.per_ip_rate", 200, "new connections a second one source IP may open on each public port (0 = no limit)")
-	_ = flag.Int("security.conn_limit.per_ip_burst", 2000, "burst of security.conn_limit.per_ip_rate")
+	_ = flag.Int("security.conn_limit.per_ip_max", 5000, "open connections one source IP may hold on each public port, before TLS or any account is known: the flood floor (0 = no limit)")
+	_ = flag.Float64("security.conn_limit.per_ip_rate", 1000, "new connections a second one source IP may open on each public port: the flood floor (0 = no limit)")
+	_ = flag.Int("security.conn_limit.per_ip_burst", 5000, "burst of security.conn_limit.per_ip_rate")
+	_ = flag.Int("security.conn_limit.account_max", 0, "open E2EE share connections of one account (its agents' owner), past the flood floor; a hosted relay takes its plan's limits from the accounts service instead (0 = no limit)")
+	_ = flag.Float64("security.conn_limit.account_rate", 0, "new E2EE share connections a second of one account (0 = no limit)")
+	_ = flag.Int("security.conn_limit.account_burst", 0, "burst of security.conn_limit.account_rate")
+	_ = flag.Int("security.conn_limit.account_source_max", 0, "open E2EE share connections of one account from one source address: visitors behind one NAT spend their account's budget only (0 = no limit)")
+	_ = flag.Float64("security.conn_limit.account_source_rate", 0, "new E2EE share connections a second of one account from one source address (0 = no limit)")
+	_ = flag.Int("security.conn_limit.account_source_burst", 0, "burst of security.conn_limit.account_source_rate")
 	_ = flag.Float64("security.conn_limit.per_ip_packet_rate", 20000, "UDP datagrams a second one source (IPv4 address, IPv6 /64) may send to the QUIC agent link (agent_link.quic.listen); the rest are dropped before QUIC parses them (0 = no limit)")
 	_ = flag.Int("security.conn_limit.per_ip_packet_burst", 40000, "burst of security.conn_limit.per_ip_packet_rate")
 	_ = flag.Float64("security.conn_limit.per_ip_handshake_packet_rate", 50, "of those, QUIC long-header datagrams (handshakes, 3 to 8 per connection, more when a slow or lossy path retransmits; version negotiation) a second one source may send: each Initial with a new connection ID makes the relay hold a half-open handshake (~70 KB) until its timeout (15 s), so this bounds a source's (0 = no limit)")

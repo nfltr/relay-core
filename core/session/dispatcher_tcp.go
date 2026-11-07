@@ -22,6 +22,7 @@ import (
 	"github.com/nfltr/relay-core/internal/platform/acceptloop"
 	"github.com/nfltr/relay-core/internal/platform/auth"
 	"github.com/nfltr/relay-core/internal/platform/logging"
+	"github.com/nfltr/relay-core/platform/connlimit"
 	"github.com/nfltr/relay-core/platform/metrics"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
@@ -170,6 +171,11 @@ type TCPDispatcher struct {
 	servicesLeaving <-chan struct{}
 	uncounted       func(agentID string) bool
 	drainWindow     time.Duration
+	// Visitors limits visitor connections per account (AdmitVisitor), from
+	// security.conn_limit.account_* (WireTCP) until the relay sets a plan;
+	// VisitorRefused, when set, hears each refusal (owner, agent, reason).
+	Visitors       *connlimit.Accounts
+	VisitorRefused func(owner, agentID, reason string)
 	// DrainBy is the relay's drain deadline (RPCServer.drainBy): the agent
 	// link's sessions run until then once the gRPC port closed.
 	DrainBy func() time.Time

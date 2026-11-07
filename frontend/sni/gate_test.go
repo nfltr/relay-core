@@ -5,6 +5,7 @@ package sni
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net"
 	"testing"
@@ -56,5 +57,20 @@ func TestRouteE2EESessionLifetimeStartsAtRouting(t *testing.T) {
 	routeE2EE(ctx, newResolver("e2ee.test.local", grantsOf(store)), d, logger, a, code+".e2ee.test.local", nil)
 	if got := sniDurationSum(t) - before; got <= 0 || got >= 60 {
 		t.Fatalf("sni lifetime observed %vs, want the routed session's (well under a minute)", got)
+	}
+}
+
+// A refused E2EE connection gets a TLS alert record, then EOF: the client
+// reports an alert, not a reset.
+func TestRefuseTLSSendsAnAlert(t *testing.T) {
+	a, b := net.Pipe()
+	go refuseTLS(a)
+	got := make([]byte, 16)
+	n, _ := io.ReadAtLeast(b, got, len(alertAccessDenied))
+	if string(got[:n]) != string(alertAccessDenied) {
+		t.Fatalf("read % x, want the access_denied alert % x", got[:n], alertAccessDenied)
+	}
+	if _, err := b.Read(got); err != io.EOF {
+		t.Fatalf("after the alert: %v, want EOF", err)
 	}
 }

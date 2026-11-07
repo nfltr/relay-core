@@ -12,6 +12,17 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `platform/connlimit`: `Accounts`, an account's own connection limits
+  past the per-source floor (spec/AccountLimit.tla): open connections and
+  new ones a second, per account and per (account, source address), under
+  `Limits` set per plan (`SetPlan`; the default from the new flags
+  `security.conn_limit.account_*`, 0 = no limit). `core/session`:
+  `TCPDispatcher.Visitors`, `VisitorRefused`, `AdmitVisitor`; an E2EE share
+  connection over its account's limits is answered with a TLS
+  `access_denied` alert and closed (refusals counted in
+  `rpc_server_proxy_conn_refused_total{listener="sni",reason="account_*"}`).
+  `platform/ratelimit`: `Limiter.Ready` (a bucket takes new limits).
+
 - `keyfile`: accounts of a key-file relay (spec/KeyAccount.tla). A line
   may carry a fourth field `account=<machine id>`: the machine belongs to
   that account (`Machine.Account`, `Machine.AccountOf`; `KeyRecord.Account`,
@@ -42,6 +53,14 @@ changes listed (from the first tag on).
 - `grpcauth`: under `security.trust_loopback` a loopback call carrying a
   forwarding header (`forwarded`, `x-forwarded-for`, `x-real-ip`) is not
   trusted: it came through a proxy on the relay's host (audit F-33).
+
+### Changed
+
+- The flood floor's defaults rise to a level only an attack reaches, now
+  that each account has limits of its own past it (nfltr/nfltr
+  docs/decisions/relay-plan-conn-limits-2026-11-08.md): per source
+  address `security.conn_limit.per_ip_max` 5000 (was 2000),
+  `per_ip_rate` 1000/s (was 200), `per_ip_burst` 5000 (was 2000).
 
 ### Changed (breaking)
 
