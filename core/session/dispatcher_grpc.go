@@ -592,6 +592,8 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 			responseMD.Append("x-admin-message", msg)
 		}
 		d.appendHeartbeat(responseMD, d.agentHeartbeat(stream.Context()))
+		// The ref it is registered under: the callee its A2A calls name.
+		responseMD.Set(agentwire.AgentRefKey, agentID)
 		if sendErr := stream.SendHeader(responseMD); sendErr != nil {
 			d.Logger.Warn("failed to send response headers", "error", sendErr)
 		}

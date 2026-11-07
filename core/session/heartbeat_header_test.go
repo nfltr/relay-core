@@ -161,3 +161,22 @@ func TestConnectHTTPStatesLinkLiveness(t *testing.T) {
 		}
 	}
 }
+
+// The AgentTunnel accept states the ref the relay registered the agent
+// under (agentwire.AgentRefKey): the callee its A2A E2EE calls name.
+func TestAgentTunnelStatesTheAgentRef(t *testing.T) {
+	d, cancel := newTestDispatcher(t)
+	defer cancel()
+	client, ctx := dialDispatcher(t, serveDispatcherAs(t, d, "ref-agent"))
+	s, err := client.AgentTunnel(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, err := s.Header()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := firstOf(md.Get(agentwire.AgentRefKey)); got != "ref-agent" {
+		t.Fatalf("AgentTunnel states ref %q, want the agent id it registered, ref-agent", got)
+	}
+}
