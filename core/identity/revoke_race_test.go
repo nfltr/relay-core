@@ -91,3 +91,33 @@ func TestRevocationKeepsOtherKeysAndLaterReads(t *testing.T) {
 		h.Release()
 	}
 }
+
+// TestRevocationObservedLeavesNoCachedAnswer: whoever sees a revocation's
+// cut (its held connection ending) finds no cached answer left: the cut
+// comes after the cache is cleared, so the key's next connection is asked
+// of the provider, which refuses it (relay-server
+// TestRevocationReachesEveryReplica saw the cut, then a cached accept).
+func TestRevocationObservedLeavesNoCachedAnswer(t *testing.T) {
+	for i := 0; i < 300; i++ {
+		f := &fakeProvider{name: "keys", tokens: map[string]Principal{
+			"k": {Owner: "o", Subject: "agent", CacheTTL: 1 << 40},
+		}}
+		a := NewAuthenticator("keys", f)
+		p, err := a.Authenticate(t.Context(), Credential{Token: "k"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		held := a.Hold(t.Context(), p)
+		again := make(chan error, 1)
+		context.AfterFunc(held, func() {
+			_, err := a.Authenticate(context.Background(), Credential{Token: "k"})
+			again <- err
+		})
+		delete(f.tokens, "k") // the store refuses it from now on
+		a.Revoke(Key("keys", "agent"))
+		if err := <-again; err == nil {
+			t.Fatalf("run %d: the key authenticated from the cache after its cut was seen", i)
+		}
+		held.Release()
+	}
+}

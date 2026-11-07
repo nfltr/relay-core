@@ -33,6 +33,12 @@ changes listed (from the first tag on).
 
 ### Fixed
 
+- `core/identity`: `Authenticator.Revoke` clears the credential's cached
+  answers before it cuts its connections, so whoever sees a connection
+  end at the cut finds no cached answer: the key's next connection is
+  asked of its provider. Before, a connection opened right after the cut
+  could take the cached answer, and its hold then ended it at once
+  (relay-server `TestRevocationReachesEveryReplica`).
 - `grpcauth`: under `security.trust_loopback` a loopback call carrying a
   forwarding header (`forwarded`, `x-forwarded-for`, `x-real-ip`) is not
   trusted: it came through a proxy on the relay's host (audit F-33).

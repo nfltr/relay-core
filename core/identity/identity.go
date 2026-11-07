@@ -298,9 +298,10 @@ func (a *Authenticator) Revoke(key string) int { return a.RevokeCause(key, ErrRe
 func (a *Authenticator) RevokeCause(key string, cause error) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	n := a.live.Cut(key, cause)
+	// The cache first: whoever sees a connection end at the Cut finds no
+	// cached answer (TestRevocationObservedLeavesNoCachedAnswer).
 	a.cache.RemoveIf(func(_ cacheKey, p Principal) bool { return p.Key() == key })
-	return n
+	return a.live.Cut(key, cause)
 }
 
 // Held returns how many connections the credential key names holds.
