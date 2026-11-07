@@ -27,6 +27,15 @@ changes listed (from the first tag on).
 
 ### Changed (breaking)
 
+- Names resolve once at the edge (TENANTS3; relay-server spec/Reach.tla
+  `Dial`, `DialOwn`, `BareNameIsOwnMachine`): `session.ParseAgentAddress`
+  is the one parser of an agent address (a ref; a bare service, the
+  caller's own machine's; `<machine name>.<service>`, resolved within the
+  caller's account), `Dispatcher.ResolveAgent` resolves it, and a
+  `Policy` that also implements `session.NameResolver` resolves machine
+  names. `Dispatcher.ResolveTarget(ctx, reaches, t, rules)` becomes
+  `ResolveTarget(ctx, caller, reaches, t, rules)`: pass the principal
+  `Core.Reach` was called with. A2A routing still takes refs only.
 - No bound services (TENANTSCERT; relay-server spec/Reach.tla
   `AgentIdOwned`, mutant `ref-other-machine`): a machine registers any
   valid service name, always as its own ref `<machine id>-<service>`, so

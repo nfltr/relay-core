@@ -1,0 +1,7 @@
+Incompatible changes:
+- ./core/session.(*Dispatcher).ResolveTarget: changed from func(context.Context, func(string) (bool, error), Target, TargetRules) (string, string, error) to func(context.Context, github.com/nfltr/relay-core/core/identity.Principal, func(string) (bool, error), Target, TargetRules) (string, string, error)
+Compatible changes:
+- ./core/session.(*Dispatcher).ResolveAgent: added
+- ./core/session.AgentAddress: added
+- ./core/session.NameResolver: added
+- ./core/session.ParseAgentAddress: added
