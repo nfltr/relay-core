@@ -328,7 +328,7 @@ checktraces() {
 # ways) and each trace module's event names against the recorder's Go.
 actions_check() {
 	ok=0
-	for m in AgentLink Handoff Move Presence Directory KeyAccount; do
+	for m in AgentLink Handoff Move Presence Directory KeyAccount AccountLimit; do
 		# A step: a definition whose body primes or keeps a variable (not a temporal formula).
 		acts=$(awk '
 			function flush() { if (name != "" && act && !tmp) print name; name = "" }
@@ -383,6 +383,7 @@ check)
 	run Presence.cfg Presence.tla
 	run Directory.cfg Directory.tla
 	run KeyAccount.cfg KeyAccount.tla
+	run AccountLimit.cfg AccountLimit.tla
 	# That race heals at the latest session's next renewal (finding 38).
 	run DirectoryHeal.cfg Directory.tla
 	;;
@@ -397,6 +398,7 @@ liveness)
 	run HandoffLive.cfg Handoff.tla
 	run MoveLive.cfg Move.tla
 	run PresenceLive.cfg Presence.tla
+	run AccountLimitLive.cfg AccountLimit.tla
 	;;
 mutants)
 	m='s/Mutant = "none"/Mutant = "'
@@ -407,6 +409,13 @@ mutants)
 	done
 	for w in OutlivesFirst NameReused NameInTwoAccounts; do
 		expect KeyAccount.cfg KeyAccount.tla "witness:$w" -e "s/^    ResolveOwnAccount$/    Witness$w/"
+	done
+	# AccountLimit.tla: an account's own connection limits (CONNLIMIT).
+	for b in count-by-ip-only cache-stale-plan release-twice; do
+		expect AccountLimit.cfg AccountLimit.tla "$b" -e "$m$b\"/"
+	done
+	for w in Refused Lowered Shared; do
+		expect AccountLimit.cfg AccountLimit.tla "witness:$w" -e "s/^    CountsMatch$/    Witness$w/"
 	done
 	expect AgentLink.cfg MCAgentLink.tla fin-overtakes -e "$m"'fin-overtakes"/'
 	expect AgentLink.cfg MCAgentLink.tla grant-early -e "$m"'grant-early"/'

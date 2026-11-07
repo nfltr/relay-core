@@ -724,6 +724,69 @@ recorder yet (each manager call is one locked step of one process).
 | `Reload` | `keyfile/keyfile_reload.go` |
 | `Owner`, `Resolve` | `keyfile/provider.go` |
 
+## AccountLimit.tla: an account's own connection limits
+
+`AccountLimit.tla` models one relay replica's limiter of visitor
+connections per account (`platform/connlimit` `Accounts`, lane CONNLIMIT,
+nfltr/nfltr `docs/decisions/relay-plan-conn-limits-2026-11-08.md`), past
+the per-source flood floor (`connlimit.Wrap`): once an E2EE share's agent's
+owner is known, a connection counts against that account in total and
+against (account, source address): open connections and a token bucket of
+new ones, under the limits of the plan revision the replica holds. The plan
+is one value in the accounts store (relay-server's global settings); a
+change is a new revision that the replica applies when the accounts
+journal says so (relay-server `spec/Journal.tla` bounds when). Counts are
+per replica, in memory; a replica is modelled alone, as two replicas are
+two copies of this model sharing only the plan.
+
+| action | Go |
+|---|---|
+| `ChangePlan(p)` | the accounts service saves the global settings' `conn_limits` (relay-server `UpsertGlobalSettings`, `GlobalSettingsChanged`) |
+| `Apply` | relay-server `reloadGlobalSettings` -> `Accounts.SetPlan` |
+| `Refill(a)`, `RefillSource(k)` | time passing in a `rate.Limiter` (`platform/ratelimit`) |
+| `Admit(a, s)` | `Accounts.Admit` admitting (`TCPDispatcher.AdmitVisitor` from `frontend/sni` `routeE2EE`); `Limiter.Ready` gives a bucket the held plan's rate and burst first |
+| `Refuse(a, s)` | `Accounts.Admit` refusing: `refuseTLS` (a TLS alert), `VisitorRefused` |
+| `Close(a, s)` | the release `Admit` returned (`sync.OnceFunc`), deferred in `routeE2EE` |
+
+Invariants (`AccountLimit.cfg`, `make spec`: 2 accounts behind 1 source,
+limits 1..2, 2 revisions: 1,304,504 states (175,146 distinct), 6 s;
+`COVERAGE=1` takes every action; `Refuse` only stutters in the correct
+model): `LimitHolds` (every admission is within the held revision's
+limits: open per account, open per account and source, both buckets),
+`NoAccountStarvesAnother` (a refusal is explained by the refused account's
+own counts), `CountsMatch` (the limiter's counts are the live connections).
+Liveness (`AccountLimitLive.cfg`, `make spec-liveness`): `PlanReaches`
+(every revision is applied, under weak fairness of `Apply`). Mutants
+(`make spec-mutants`), each caught: `count-by-ip-only` (the per-source key
+without the account: `NoAccountStarvesAnother`), `cache-stale-plan` (a
+bucket keeps the burst it was made with: `LimitHolds`), `release-twice`
+(a second Close releases again: `CountsMatch`). Witnesses, each violated:
+`WitnessRefused`, `WitnessLowered` (a plan lowered under more open
+connections than its new limit: they stay), `WitnessShared` (both
+accounts' visitors behind one address at once). Tests: `connlimit`
+`TestAccountsOpenLimits`, `TestAccountsNoAccountStarvesAnother`,
+`TestAccountsPlanReachesBuckets`, `TestAccountsRefusalSpendsNothing`;
+`core/session` `TestAdmitVisitorCountsTheAgentsAccount`. No trace recorder
+yet (each `Admit` and release is one step under one mutex of one process;
+open item of the lane).
+
+Environment assumptions:
+
+| assumption | source |
+|---|---|
+| a `rate.Limiter` whose burst is lowered caps its tokens at the new burst at its next read | golang.org/x/time/rate `advance` (`tokens > burst`) |
+| `sync.OnceFunc` runs its function once however often called | Go `sync` docs |
+| the global settings change reaches every replica (journal poll, bus, the service's POST) | relay-server `spec/Journal.tla` |
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `Admit`, `Refuse`, `Close`, `Apply` (`SetPlan`) | `platform/connlimit/account.go` |
+| a bucket's limits replaced (`Ready`) | `platform/ratelimit/ratelimit.go` |
+| `AdmitVisitor`, the account | `core/session/visitors.go` |
+| the refusal at the share | `frontend/sni/gate.go` |
+
 ## Layer contract: what the layer above may assume
 
 relay-server (its `spec/Replicas.tla`), the relay's clients and the agent
