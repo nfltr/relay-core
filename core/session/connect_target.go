@@ -26,11 +26,16 @@ type TargetRules struct {
 	Managed func(ctx context.Context, agentID, port string) string
 }
 
-// ResolveTarget is the core's access rule and target resolution for a
-// caller who reaches what reaches says: ConnectTarget, then the operator's
-// E2EE policy. It refuses with a *Refusal.
-func (d *Dispatcher) ResolveTarget(ctx context.Context, reaches func(string) (bool, error), t Target, rules TargetRules) (string, string, error) {
-	agentID, targetAddr, refusal := d.ConnectTarget(ctx, reaches, t.Agent, t.Service, rules)
+// ResolveTarget is the core's access rule and target resolution for
+// caller, who reaches what reaches says: the agent's address resolved once
+// to its ref (ResolveAgent; the session carries the ref), ConnectTarget,
+// then the operator's E2EE policy. It refuses with a *Refusal.
+func (d *Dispatcher) ResolveTarget(ctx context.Context, caller identity.Principal, reaches func(string) (bool, error), t Target, rules TargetRules) (string, string, error) {
+	agent, refusal := d.ResolveAgent(caller, t.Agent)
+	if refusal != nil {
+		return "", "", refusal
+	}
+	agentID, targetAddr, refusal := d.ConnectTarget(ctx, reaches, agent, t.Service, rules)
 	if refusal != nil {
 		return "", "", refusal
 	}
@@ -48,7 +53,7 @@ func (d *Dispatcher) KeyReach(rules func() TargetRules) Reach {
 		if caller.Provider == "" {
 			return "", "", &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED, Msg: "authentication required", AgentID: t.Agent}
 		}
-		return d.ResolveTarget(ctx, d.DialReaches(caller), t, rules())
+		return d.ResolveTarget(ctx, caller, d.DialReaches(caller), t, rules())
 	}
 }
 
