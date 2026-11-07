@@ -7,23 +7,15 @@ import (
 	"github.com/nfltr/relay-core/core/identity"
 )
 
-// Action is what a reach decision is asked for.
-type Action uint8
+// Action is what a reach decision is asked for (identity.Action: the
+// accounts side names it without linking the relay's sessions).
+type Action = identity.Action
 
-// The actions a principal may take on an agent (cedar's Action::"dial",
-// Action::"list").
+// The actions a principal may take on an agent.
 const (
-	Dial Action = iota // open bytes or a call to it: connect, E2EE, A2A, browse, WireGuard, a peer replica's session
-	List               // see it in a listing (presence, my agents, Fleet)
+	Dial = identity.Dial
+	List = identity.List
 )
-
-// String is the action as the policy names it.
-func (a Action) String() string {
-	if a == List {
-		return "list"
-	}
-	return "dial"
-}
 
 // Policy decides whether principal p may act on agent, an agent of p's own
 // account (Reach checked that first). relay-server's is cedar-go over the

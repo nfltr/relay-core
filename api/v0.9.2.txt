@@ -1,4 +1,15 @@
 Incompatible changes:
+- ./core/identity.AnyName: removed
+- ./core/identity.Minting: removed
+- ./core/session.(*Dispatcher).A2AReaches: changed from func(string, string, string) (bool, error) to func(string, string) (bool, error)
+- ./core/session.(*Dispatcher).ConnectTarget: changed from func(context.Context, func(string) (bool, error), string, string, string, TargetRules) (string, string, *Refusal) to func(context.Context, func(string) (bool, error), string, string, TargetRules) (string, string, *Refusal)
+- ./core/session.(*Dispatcher).IsAgentConnected: removed
+- ./core/session.(*Dispatcher).PrincipalReaches: removed
+- ./core/session.(*Dispatcher).RegisterAgent: changed from func(string, string, string, string) to func(string, string, string)
+- ./core/session.(*Dispatcher).ResolveTarget: changed from func(context.Context, string, func(string) (bool, error), Target, TargetRules) (string, string, error) to func(context.Context, func(string) (bool, error), Target, TargetRules) (string, string, error)
+- ./core/session.AgentCredentialReaches: removed
+- ./core/session.Dispatcher.AgentKeyBase: removed
+- ./core/session.TCPEndpoint: old is comparable, new is not
 - ./keyfile.(*APIKeyStore).Add: changed from func(string, string) to func(Machine, string)
 - ./keyfile.(*APIKeyStore).Hashes: changed from func() map[[32]byte]string to func() map[[32]byte]Machine
 - ./keyfile.(*APIKeyStore).Remove: changed from func(string) to func(github.com/nfltr/relay-core/core/identity.MachineID)
@@ -14,45 +25,16 @@ Incompatible changes:
 - ./keyfile.KeyRecord: old is comparable, new is not
 - ./keyfile.Provider.MintsSubjects: removed
 - ./keyfile.ScopedAgentID: removed
-- ./relaycoretest.New: changed from func(testing.TB) *Relay to func(testing.TB, ...string) *Relay
-- ./core/session.(*Dispatcher).A2AReaches: changed from func(string, string, string) (bool, error) to func(string, string) (bool, error)
-- ./core/session.(*Dispatcher).ConnectTarget: changed from func(context.Context, func(string) (bool, error), string, string, string, TargetRules) (string, string, *Refusal) to func(context.Context, func(string) (bool, error), string, string, TargetRules) (string, string, *Refusal)
-- ./core/session.(*Dispatcher).IsAgentConnected: removed
-- ./core/session.(*Dispatcher).PrincipalReaches: removed
-- ./core/session.(*Dispatcher).RegisterAgent: changed from func(string, string, string, string) to func(string, string, string)
-- ./core/session.(*Dispatcher).ResolveTarget: changed from func(context.Context, string, func(string) (bool, error), Target, TargetRules) (string, string, error) to func(context.Context, func(string) (bool, error), Target, TargetRules) (string, string, error)
-- ./core/session.AgentCredentialReaches: removed
-- ./core/session.Dispatcher.AgentKeyBase: removed
-- ./core/session.TCPEndpoint: old is comparable, new is not
-- ./core/identity.AnyName: removed
-- ./core/identity.Minting: removed
 - ./core/frontend.(*CoreHost).Visible: changed from func(string) func(agentID string) bool to func(github.com/nfltr/relay-core/core/identity.Principal) func(agentID string) bool
 - ./core/frontend.Host.Visible: changed from func(string) func(agentID string) bool to func(github.com/nfltr/relay-core/core/identity.Principal) func(agentID string) bool
+- ./relaycoretest.New: changed from func(testing.TB) *Relay to func(testing.TB, ...string) *Relay
 Compatible changes:
-- ./keyfile.ErrMachineName: added
-- ./keyfile.ErrServiceName: added
-- ./keyfile.KeyGenerateResponse.MachineID: added
-- ./keyfile.KeyGenerateResponse.Name: added
-- ./keyfile.KeyGenerateResponse.Services: added
-- ./keyfile.KeyRecord.MachineID: added
-- ./keyfile.KeyRecord.Name: added
-- ./keyfile.KeyRecord.Services: added
-- ./keyfile.Machine: added
-- ./relaycoretest.(*Relay).Ref: added
-- ./relaycoretest.Relay.Machine: added
-- ./core/session.(*Dispatcher).DialReaches: added
-- ./core/session.(*Dispatcher).Reach: added
-- ./core/session.AccountIsOneGroup: added
-- ./core/session.Action: added
-- ./core/session.Dial: added
-- ./core/session.Dispatcher.MachineOwner: added
-- ./core/session.Dispatcher.Policy: added
-- ./core/session.List: added
-- ./core/session.Policy: added
-- ./core/session.TCPEndpoint.Caller: added
 - ./core/identity.(*Authenticator).Owner: added
+- ./core/identity.Action: added
 - ./core/identity.AgentRef: added
+- ./core/identity.Dial: added
 - ./core/identity.ErrMachineNotEnrolled: added
+- ./core/identity.List: added
 - ./core/identity.MachineID: added
 - ./core/identity.MachineIDLen: added
 - ./core/identity.MachineIDOf: added
@@ -64,3 +46,24 @@ Compatible changes:
 - ./core/identity.Principal.Machine: added
 - ./core/identity.ValidMachineName: added
 - ./core/identity.ValidService: added
+- ./core/session.(*Dispatcher).DialReaches: added
+- ./core/session.(*Dispatcher).Reach: added
+- ./core/session.AccountIsOneGroup: added
+- ./core/session.Action: added
+- ./core/session.Dial: added
+- ./core/session.Dispatcher.MachineOwner: added
+- ./core/session.Dispatcher.Policy: added
+- ./core/session.List: added
+- ./core/session.Policy: added
+- ./core/session.TCPEndpoint.Caller: added
+- ./keyfile.ErrMachineName: added
+- ./keyfile.ErrServiceName: added
+- ./keyfile.KeyGenerateResponse.MachineID: added
+- ./keyfile.KeyGenerateResponse.Name: added
+- ./keyfile.KeyGenerateResponse.Services: added
+- ./keyfile.KeyRecord.MachineID: added
+- ./keyfile.KeyRecord.Name: added
+- ./keyfile.KeyRecord.Services: added
+- ./keyfile.Machine: added
+- ./relaycoretest.(*Relay).Ref: added
+- ./relaycoretest.Relay.Machine: added

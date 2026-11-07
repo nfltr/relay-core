@@ -319,3 +319,21 @@ func FromContext(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(Principal)
 	return p, ok
 }
+
+// Action is what a reach decision is asked for.
+type Action uint8
+
+// The actions a principal may take on an agent (cedar's Action::"dial",
+// Action::"list").
+const (
+	Dial Action = iota // open bytes or a call to it: connect, E2EE, A2A, browse, WireGuard, a peer replica's session
+	List               // see it in a listing (presence, my agents, Fleet)
+)
+
+// String is the action as the policy names it.
+func (a Action) String() string {
+	if a == List {
+		return "list"
+	}
+	return "dial"
+}
