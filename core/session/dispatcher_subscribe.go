@@ -234,14 +234,10 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	d.AddHTTPSession(agentID, agentStream) // after the claim: a request meanwhile waits (RouteArriving)
 	d.Presence.up(agentID, agentStream.labels, agentStream.capabilities)
 	if d.OnAgentMetadata != nil {
-		caps := agentStream.capabilities
-		if len(caps) == 0 {
-			caps = []string{"browse"}
-		}
 		d.OnAgentMetadata(AgentInfo{
 			AgentID:      agentID,
 			TunnelType:   ProtocolHTTP,
-			Capabilities: cloneStringSlice(caps),
+			Capabilities: cloneStringSlice(agentStream.capabilities),
 			Routes:       cloneStringSlice(agentStream.routes),
 			Labels:       cloneStringMap(agentStream.labels),
 			ConnectedAt:  agentStream.connectedAt,

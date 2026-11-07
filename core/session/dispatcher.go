@@ -798,14 +798,10 @@ type AgentInfo struct {
 func (d *Dispatcher) GetAllAgentInfo() []AgentInfo {
 	infos := make([]AgentInfo, 0)
 	d.Agents.Range(func(key string, s *HTTPStream) bool {
-		caps := s.Capabilities()
-		if len(caps) == 0 {
-			caps = []string{"browse"}
-		}
 		infos = append(infos, AgentInfo{
 			AgentID:      key,
 			TunnelType:   ProtocolHTTP,
-			Capabilities: caps,
+			Capabilities: s.Capabilities(), // what the agent declares: no default "browse"
 			Routes:       s.Routes(),
 			Labels:       s.Labels(),
 			ConnectedAt:  s.ConnectedAt(),

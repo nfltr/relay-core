@@ -355,10 +355,14 @@ func TestGetAllAgentInfoCapabilities(t *testing.T) {
 			wantCaps:     []string{"browse", "terminal", "tail"},
 		},
 		{
-			name:         "agent with no capabilities defaults to browse",
+			// Browse is what an agent declares (nfltr http does): an agent
+			// serving nothing at its root (tcp only, named services, a
+			// service agent) answered the dashboard's Browse link "not
+			// found" (BROWSEFIX, 2026-11-07).
+			name:         "agent with no capabilities declares none",
 			agentID:      "plain-agent",
 			capabilities: nil,
-			wantCaps:     []string{"browse"},
+			wantCaps:     nil,
 		},
 	}
 
