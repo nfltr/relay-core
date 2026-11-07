@@ -127,6 +127,7 @@ type Authenticator struct {
 	providers []Provider
 	primary   string
 	cache     *expiring.Cache[cacheKey, Principal]
+	tr        revokeTrace // -tags relaytrace: RevokeCause's steps (trace_on.go)
 	live      Live
 	now       func() time.Time
 }
@@ -301,7 +302,10 @@ func (a *Authenticator) RevokeCause(key string, cause error) int {
 	// The cache first: whoever sees a connection end at the Cut finds no
 	// cached answer (TestRevocationObservedLeavesNoCachedAnswer).
 	a.cache.RemoveIf(func(_ cacheKey, p Principal) bool { return p.Key() == key })
-	return a.live.Cut(key, cause)
+	a.tr.emit("cache", key)
+	n := a.live.Cut(key, cause)
+	a.tr.emit("cut", key)
+	return n
 }
 
 // Held returns how many connections the credential key names holds.

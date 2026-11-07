@@ -21,6 +21,7 @@ vet:
 
 test:
 	go test -count=1 -timeout 30m ./...
+	go test -count=1 -tags relaytrace -run TestRevocationTrace ./core/identity/
 
 test-race:
 	go test -count=1 -race -timeout 30m ./...

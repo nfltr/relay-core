@@ -23,6 +23,11 @@ changes listed (from the first tag on).
   `rpc_server_proxy_conn_refused_total{listener="sni",reason="account_*"}`).
   `platform/ratelimit`: `Limiter.Ready` (a bucket takes new limits).
 
+- With `-tags relaytrace` only: `Authenticator.TraceRevocations(f)`, each
+  revocation's two steps of relay-server `spec/Revocation.tla` in order,
+  `cache` (its cached answers dropped) then `cut` (`Live.Cut`), for the
+  revocation trace check. Without the tag nothing changes.
+
 - `keyfile`: accounts of a key-file relay (spec/KeyAccount.tla). A line
   may carry a fourth field `account=<machine id>`: the machine belongs to
   that account (`Machine.Account`, `Machine.AccountOf`; `KeyRecord.Account`,
