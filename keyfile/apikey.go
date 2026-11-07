@@ -3,8 +3,7 @@
 
 // Package keyfile is the static API key file: the machine store of a relay
 // without a database. Each line is one machine (an id the file assigns,
-// never a client's, its name and bound services) and the SHA-256 of its
-// key (APIKeyStore, LoadAPIKeys); KeyManager adds, reloads and revokes
+// never a client's, and its name) and the SHA-256 of its key (APIKeyStore, LoadAPIKeys); KeyManager adds, reloads and revokes
 // machines, and Provider authenticates them (nfltr
 // docs/decisions/tenants-reach-policy-2026-11-07.md, Decided 7).
 package keyfile
@@ -18,7 +17,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"slices"
+
 	"strings"
 	"sync"
 
@@ -27,21 +26,16 @@ import (
 
 const hashPrefix = "sha256:"
 
-// Machine is one machine of the key file: its id, name and bound
-// services (the agents it may register).
+// Machine is one machine of the key file: its id and name. It may
+// register any valid service name (its agents are its own id's refs).
 type Machine struct {
-	ID       identity.MachineID
-	Name     string
-	Services []string
+	ID   identity.MachineID
+	Name string
 }
 
 // ErrMachineName: a machine name the file cannot hold (1 to 63 of
 // [a-z0-9-], not starting or ending with '-').
 var ErrMachineName = errors.New("keyfile: a machine name is 1 to 63 of [a-z0-9-], not starting or ending with '-'")
-
-// ErrServiceName: a service name over identity.MaxServiceLen characters or
-// outside [a-z0-9-] (an agent ref must stay one DNS label).
-var ErrServiceName = fmt.Errorf("keyfile: a service name is 1 to %d of [a-z0-9-], not starting or ending with '-'", identity.MaxServiceLen)
 
 // validMachine checks what a line or a Generate states about a machine.
 func validMachine(m Machine) error {
@@ -50,17 +44,6 @@ func validMachine(m Machine) error {
 	}
 	if !identity.ValidMachineName(m.Name) {
 		return fmt.Errorf("%w: %q", ErrMachineName, m.Name)
-	}
-	if len(m.Services) == 0 {
-		return fmt.Errorf("keyfile: machine %s binds no service", m.Name)
-	}
-	for i, svc := range m.Services {
-		if !identity.ValidService(svc) {
-			return fmt.Errorf("%w: %q", ErrServiceName, svc)
-		}
-		if slices.Contains(m.Services[:i], svc) {
-			return fmt.Errorf("keyfile: machine %s binds %q twice", m.Name, svc)
-		}
 	}
 	return nil
 }
@@ -78,8 +61,8 @@ func NewAPIKeyStore() *APIKeyStore {
 	return &APIKeyStore{keys: make(map[[32]byte]Machine)}
 }
 
-// LoadAPIKeys reads a key file: one "<machine id> <name> <service,...>
-// sha256:<hex>" per non-empty, non-comment line. A line of another form
+// LoadAPIKeys reads a key file: one "<machine id> <name> sha256:<hex>" per
+// non-empty, non-comment line. A line of another form
 // (the agent-id files before machines) refuses the file: re-add its
 // machines with `nfltr-relay keys add`.
 func LoadAPIKeys(path string) (*APIKeyStore, error) {
@@ -128,23 +111,22 @@ func readAPIKeys(path string) (*APIKeyStore, error) {
 }
 
 // LoadAPIKeysFromEnv loads one machine from an environment variable:
-// "<machine id> <name> <service,...> <key>". The key is hashed before it
-// is stored.
+// "<machine id> <name> <key>". The key is hashed before it is stored.
 func LoadAPIKeysFromEnv(envVar string) (*APIKeyStore, error) {
 	val := os.Getenv(envVar)
 	if val == "" {
 		return nil, fmt.Errorf("security: env var %s is empty", envVar)
 	}
 	f := strings.Fields(val)
-	if len(f) != 4 {
-		return nil, fmt.Errorf("security: env var %s: want \"<machine id> <name> <service,...> <key>\"", envVar)
+	if len(f) != 3 {
+		return nil, fmt.Errorf("security: env var %s: want \"<machine id> <name> <key>\"", envVar)
 	}
-	m := Machine{ID: identity.MachineID(f[0]), Name: f[1], Services: strings.Split(f[2], ",")}
+	m := Machine{ID: identity.MachineID(f[0]), Name: f[1]}
 	if err := validMachine(m); err != nil {
 		return nil, fmt.Errorf("security: env var %s: %w", envVar, err)
 	}
 	store := NewAPIKeyStore()
-	store.keys[sha256.Sum256([]byte(f[3]))] = m
+	store.keys[sha256.Sum256([]byte(f[2]))] = m
 	return store, nil
 }
 
@@ -207,18 +189,17 @@ func (s *APIKeyStore) Count() int {
 	return len(s.keys)
 }
 
-// parseLine reads one machine line: "<machine id> <name> <service,...>
-// sha256:<hex>".
+// parseLine reads one machine line: "<machine id> <name> sha256:<hex>".
 func parseLine(line string) (Machine, [32]byte, error) {
 	f := strings.Fields(line)
-	if len(f) != 4 || !strings.HasPrefix(f[3], hashPrefix) {
-		return Machine{}, [32]byte{}, errors.New(`want "<machine id> <name> <service,...> sha256:<hex>" (a key file from before machines: re-add each machine with nfltr-relay keys add)`)
+	if len(f) != 3 || !strings.HasPrefix(f[2], hashPrefix) {
+		return Machine{}, [32]byte{}, errors.New(`want "<machine id> <name> sha256:<hex>" (a line with a services field, or a key file from before machines: re-add each machine with nfltr-relay keys add)`)
 	}
-	m := Machine{ID: identity.MachineID(f[0]), Name: f[1], Services: strings.Split(f[2], ",")}
+	m := Machine{ID: identity.MachineID(f[0]), Name: f[1]}
 	if err := validMachine(m); err != nil {
 		return Machine{}, [32]byte{}, err
 	}
-	h, err := decodeHashPrefix(f[3][len(hashPrefix):])
+	h, err := decodeHashPrefix(f[2][len(hashPrefix):])
 	return m, h, err
 }
 
@@ -228,7 +209,7 @@ func (m Machine) Line(key string) string { return m.line(sha256.Sum256([]byte(ke
 
 // line is m's key file line for the key hash h.
 func (m Machine) line(h [32]byte) string {
-	return fmt.Sprintf("%s %s %s %s%s", m.ID, m.Name, strings.Join(m.Services, ","), hashPrefix, hex.EncodeToString(h[:]))
+	return fmt.Sprintf("%s %s %s%s", m.ID, m.Name, hashPrefix, hex.EncodeToString(h[:]))
 }
 
 // decodeHashPrefix decodes a 64-char hex string (the portion after "sha256:")

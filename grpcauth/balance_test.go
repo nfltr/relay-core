@@ -88,7 +88,7 @@ type noMachine struct{}
 
 func (noMachine) Name() string { return "accounts" }
 func (noMachine) Authenticate(context.Context, identity.Credential) (identity.Principal, error) {
-	return identity.Principal{Owner: "o", Subject: "cli-1", Names: []string{"svc"}}, nil
+	return identity.Principal{Owner: "o", Subject: "cli-1"}, nil
 }
 
 // hasReason reports whether s carries reason as its ErrorInfo.

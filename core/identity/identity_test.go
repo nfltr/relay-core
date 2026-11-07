@@ -53,11 +53,11 @@ func (f *fakeProvider) Authenticate(_ context.Context, c Credential) (Principal,
 // provider can mint another provider's owner.
 func TestOwnersAreNamespacedByProvider(t *testing.T) {
 	accounts := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"ka": {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"*"}},
+		"ka": {Owner: "alice@example.com", Subject: "alice-hub"},
 	}}
 	keys := &fakeProvider{name: "keys", tokens: map[string]Principal{
-		"kb":    {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"*"}}, // the same strings
-		"forge": {Owner: "accounts:alice@example.com", Subject: "x", Names: []string{"*"}},
+		"kb":    {Owner: "alice@example.com", Subject: "alice-hub"}, // the same strings
+		"forge": {Owner: "accounts:alice@example.com", Subject: "x"},
 	}}
 	a := NewAuthenticator("accounts", accounts, keys)
 	pa, err := a.Authenticate(t.Context(), Credential{Token: "ka"})
@@ -85,15 +85,15 @@ func TestOwnersAreNamespacedByProvider(t *testing.T) {
 	}
 }
 
-// TestAdmitUsesPrincipalMachine (spec Reach.tla AgentIdOwned, mutant
-// owner-by-name): the agent a connection registers is always its own
-// machine's ref; a request naming another machine's ref, or its own, is a
-// name that is not a bound service and is refused.
+// TestAdmitUsesPrincipalMachine (spec Reach.tla AgentIdOwned, mutants
+// owner-by-name, ref-other-machine): the agent a connection registers is
+// always its own machine's ref; a request naming another machine's ref,
+// or its own, is not a valid service name and is refused.
 func TestAdmitUsesPrincipalMachine(t *testing.T) {
 	ma, mb := NewMachineID(), NewMachineID()
 	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"a": {Owner: "alice", Machine: ma, Subject: "alice-key", Names: []string{"site", "ci"}},
-		"b": {Owner: "bob", Machine: mb, Subject: "bob-key", Names: []string{"site"}},
+		"a": {Owner: "alice", Machine: ma, Subject: "alice-key"},
+		"b": {Owner: "bob", Machine: mb, Subject: "bob-key"},
 	}}
 	a := NewAuthenticator("accounts", prov)
 	ref := func(m MachineID, s string) string { return AgentRef{Machine: m, Service: s}.String() }
@@ -116,19 +116,24 @@ func TestAdmitUsesPrincipalMachine(t *testing.T) {
 	}
 }
 
-// TestAdmitOnlyBoundServices (spec KeyBoundToNames): a machine registers
-// exactly its bound services; no pattern is a wildcard, and a listed name
-// that is not a valid service is refused anyway.
-func TestAdmitOnlyBoundServices(t *testing.T) {
+// TestAdmitAnyValidService (spec Reach.tla AgentIdOwned, mutant
+// ref-other-machine): a machine registers any valid service name, always
+// as its own machine's ref; a name that is not a valid service (a
+// pattern, upper case, too long, a ref) is refused.
+func TestAdmitAnyValidService(t *testing.T) {
 	long := strings.Repeat("x", MaxServiceLen+1)
-	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"k": {Owner: "o", Subject: "s", Names: []string{"site", "*", "ci-*", "SITE", long}},
-	}}
+	m := NewMachineID()
+	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{"k": {Owner: "o", Machine: m, Subject: "s"}}}
 	a := NewAuthenticator("accounts", prov)
-	if p, err := a.Authenticate(t.Context(), Credential{Token: "k", Name: "site"}); err != nil || p.AgentID == "" {
-		t.Fatalf("a bound service: %+v, %v", p, err)
+	for _, name := range []string{"site", "web", "ci-1", "hub-7f3a"} {
+		if p, err := a.Authenticate(t.Context(), Credential{Token: "k", Name: name}); err != nil || p.AgentID != (AgentRef{Machine: m, Service: name}).String() {
+			t.Fatalf("%q: %+v, %v; want its own machine's ref", name, p, err)
+		}
 	}
-	for _, name := range []string{"web", "ci-1", "SITE", long, "*", "site.x"} {
+	for _, name := range []string{"SITE", long, "*", "site.x", "", "-x"} {
+		if name == "" {
+			continue // not an agent: a client
+		}
 		if p, err := a.Authenticate(t.Context(), Credential{Token: "k", Name: name}); !errors.Is(err, ErrNameNotAllowed) {
 			t.Fatalf("%q: %+v, %v; want ErrNameNotAllowed", name, p, err)
 		}
@@ -141,8 +146,8 @@ func TestAdmitOnlyBoundServices(t *testing.T) {
 // never held or cached; a malformed machine id is refused too.
 func TestUnenrolledKeyRefused(t *testing.T) {
 	prov := &fakeProvider{name: "accounts", raw: true, tokens: map[string]Principal{
-		"old": {Owner: "o", Subject: "cli-1234", Names: []string{"site"}, CacheTTL: time.Minute},
-		"bad": {Owner: "o", Machine: "m-not-an-id", Subject: "k", Names: []string{"site"}},
+		"old": {Owner: "o", Subject: "cli-1234", CacheTTL: time.Minute},
+		"bad": {Owner: "o", Machine: "m-not-an-id", Subject: "k"},
 	}}
 	a := NewAuthenticator("accounts", prov)
 	for _, name := range []string{"", "site"} {
@@ -163,8 +168,8 @@ func TestUnenrolledKeyRefused(t *testing.T) {
 func TestExpiryEndsConnections(t *testing.T) {
 	soon := time.Now().Add(150 * time.Millisecond)
 	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"t":    {Owner: "o", Subject: "s", Names: []string{"*"}, NotAfter: soon},
-		"past": {Owner: "o", Subject: "s2", Names: []string{"*"}, NotAfter: time.Now().Add(-time.Second)},
+		"t":    {Owner: "o", Subject: "s", NotAfter: soon},
+		"past": {Owner: "o", Subject: "s2", NotAfter: time.Now().Add(-time.Second)},
 	}}
 	a := NewAuthenticator("accounts", prov)
 	if _, err := a.Authenticate(t.Context(), Credential{Token: "past"}); !errors.Is(err, ErrExpired) {
@@ -190,7 +195,7 @@ func TestExpiryEndsConnections(t *testing.T) {
 // and drops cached answers, so the next use asks the provider again.
 func TestRevokeCutsAndForgets(t *testing.T) {
 	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"t": {Owner: "o", Subject: "s", Names: []string{"*"}, CacheTTL: time.Minute},
+		"t": {Owner: "o", Subject: "s", CacheTTL: time.Minute},
 	}}
 	a := NewAuthenticator("accounts", prov)
 	p, err := a.Authenticate(t.Context(), Credential{Token: "t"})
@@ -217,8 +222,8 @@ func TestRevokeCutsAndForgets(t *testing.T) {
 func TestRevokeForgetsOnlyThatCredential(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"a": {Owner: "o", Subject: "sa", Names: []string{"svc"}, CacheTTL: time.Minute},
-		"b": {Owner: "o", Subject: "sb", Names: []string{"svc"}, CacheTTL: time.Minute},
+		"a": {Owner: "o", Subject: "sa", CacheTTL: time.Minute},
+		"b": {Owner: "o", Subject: "sb", CacheTTL: time.Minute},
 	}}
 	a := NewAuthenticator("accounts", prov)
 	pa, _ := a.Authenticate(t.Context(), Credential{Token: "a"})
@@ -239,10 +244,10 @@ func TestRevokeForgetsOnlyThatCredential(t *testing.T) {
 // keys its principals.
 func TestOutsideProvidersAreNamespaced(t *testing.T) {
 	accounts := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"ka": {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"laptop"}},
+		"ka": {Owner: "alice@example.com", Subject: "alice-hub"},
 	}}
 	idp := &fakeProvider{name: "idp", tokens: map[string]Principal{
-		"t": {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"laptop"}, Scopes: []string{"read", "admin"}},
+		"t": {Owner: "alice@example.com", Subject: "alice-hub", Scopes: []string{"read", "admin"}},
 	}}
 	a := NewAuthenticator("accounts", accounts, idp)
 	pa, _ := a.Authenticate(t.Context(), Credential{Token: "ka", Name: "laptop"})

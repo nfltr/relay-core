@@ -28,7 +28,7 @@ func ExampleServe() {
 		os.Args = args
 	}
 	keys := keyfile.NewAPIKeyStore()
-	keys.Add(keyfile.Machine{ID: identity.NewMachineID(), Name: "demo", Services: []string{"web"}}, "rpc_example-key")
+	keys.Add(keyfile.Machine{ID: identity.NewMachineID(), Name: "demo"}, "rpc_example-key")
 
 	var ls compose.Ports
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {

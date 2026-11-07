@@ -24,12 +24,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// testKey is NFLTR_API_KEY: machine "alice" (testMachine) serving "web",
-// its key testSecret.
+// testKey is NFLTR_API_KEY: machine "alice" (testMachine), its key
+// testSecret.
 const (
 	testMachine = "m-aaaaaaaaaaaaaaaaaaaaaaaaae"
 	testSecret  = "rpc_lr11testkeyaaaaaaaaaaaaaaaaaaaaaaaa"
-	testKey     = testMachine + " alice web " + testSecret
+	testKey     = testMachine + " alice " + testSecret
 	testAgent   = testMachine + "-web" // the agent ref of its "web"
 )
 

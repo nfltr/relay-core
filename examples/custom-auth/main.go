@@ -93,7 +93,7 @@ func (t tokens) Authenticate(_ context.Context, c identity.Credential) (identity
 	if !ok {
 		return identity.Principal{}, identity.ErrUnknownCredential
 	}
-	return identity.Principal{Owner: team, Machine: machines[team], Subject: team, Names: []string{"echo"}}, nil
+	return identity.Principal{Owner: team, Machine: machines[team], Subject: team}, nil
 }
 
 func must[T any](v T, err error) T {

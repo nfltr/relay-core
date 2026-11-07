@@ -27,6 +27,19 @@ changes listed (from the first tag on).
 
 ### Changed (breaking)
 
+- No bound services (TENANTSCERT; relay-server spec/Reach.tla
+  `AgentIdOwned`, mutant `ref-other-machine`): a machine registers any
+  valid service name, always as its own ref `<machine id>-<service>`, so
+  no machine can take another's agent and the bound list protected
+  nothing. Removed: `identity.Principal.Names`, `keyfile.Machine.Services`,
+  `KeyRecord.Services`, `KeyGenerateResponse.Services`,
+  `keyfile.ErrServiceName`, the flags `security.mtls.names` and
+  `security.oidc.names_claim`; `KeyManager.Generate(name)` and
+  `GenerateForOwner(name, owner)` take no services; `relaycoretest.New(tb)`
+  takes none. `identity.ValidService` refuses a name that is itself an
+  agent ref. A key file line is `<machine id> <name> sha256:<hex>` and an
+  environment key `<machine id> <name> <key>`; a line with a services
+  field is refused. Migration: drop the services field of each line.
 - Machine identity (TENANTS2, nfltr docs/decisions/tenants-reach-policy-2026-11-07.md;
   relay-server spec/Reach.tla, spec/MachineAuth.tla). An agent is its
   agent ref `<machine id>-<service>` (`identity.AgentRef`,

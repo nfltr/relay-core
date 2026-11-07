@@ -62,8 +62,9 @@ func ParseMachineID(s string) (MachineID, error) {
 	return MachineID(s), nil
 }
 
-// AgentRef is an agent: one bound service of one machine. The same
-// service on two machines is two agents.
+// AgentRef is an agent: one service of one machine (any valid service
+// name: the ref is always its machine's own). The same service on two
+// machines is two agents.
 type AgentRef struct {
 	Machine MachineID
 	Service string
@@ -90,8 +91,17 @@ func ParseAgentRef(s string) (AgentRef, error) {
 }
 
 // ValidService reports whether s is a service name: 1 to MaxServiceLen of
-// [a-z0-9-], not starting or ending with '-' (the ref stays a DNS label).
-func ValidService(s string) bool { return label(s, MaxServiceLen) }
+// [a-z0-9-], not starting or ending with '-' (the ref stays a DNS label),
+// and not itself an agent ref (a machine id and '-'): a ref names one
+// machine at a glance, never another's inside it.
+func ValidService(s string) bool {
+	if len(s) > MachineIDLen && s[MachineIDLen] == '-' {
+		if _, err := ParseMachineID(s[:MachineIDLen]); err == nil {
+			return false
+		}
+	}
+	return label(s, MaxServiceLen)
+}
 
 // ValidMachineName reports whether s is a machine name: one DNS label of
 // [a-z0-9-] (a label people type, resolved to a MachineID at the edge).

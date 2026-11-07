@@ -73,7 +73,7 @@ func echoThrough(tb testing.TB, r *relaycoretest.Relay, msg string) string {
 // key's bytes to their agent.
 func TestNewCarriesBytes(t *testing.T) {
 	for i := range 2 {
-		r := relaycoretest.New(t, "echo")
+		r := relaycoretest.New(t)
 		if got := echoThrough(t, r, fmt.Sprint("hello ", i)); got != fmt.Sprint("hello ", i) {
 			t.Fatalf("echoed %q", got)
 		}

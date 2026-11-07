@@ -23,14 +23,14 @@ func testKeyManagerLogger() *slog.Logger {
 // TestKeyFileAssignsMachineID (Decided 7): adding a machine assigns it a
 // fresh id the caller never chose; the key validates at once as that
 // machine, is written hashed only, and the file loads back the same
-// machine. Two machines of one name are refused, a service over 34
-// characters is refused typed, and a later machine never gets an id again.
+// machine. Two machines of one name are refused, and a later machine
+// never gets an id again.
 func TestKeyFileAssignsMachineID(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "api-keys")
 	store := NewAPIKeyStore()
 	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
 
-	resp, err := km.Generate("east", []string{"ssh", "web"})
+	resp, err := km.Generate("east")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestKeyFileAssignsMachineID(t *testing.T) {
 		t.Fatalf("the new key validates as %+v, %v", m, ok)
 	}
 	data, _ := os.ReadFile(keyFile)
-	if strings.Contains(string(data), resp.APIKey) || !strings.Contains(string(data), string(resp.MachineID)+" east ssh,web sha256:") {
+	if strings.Contains(string(data), resp.APIKey) || !strings.Contains(string(data), string(resp.MachineID)+" east sha256:") {
 		t.Fatalf("key file %q: want the machine's hashed line only", data)
 	}
 	back, err := LoadAPIKeys(keyFile)
@@ -52,21 +52,15 @@ func TestKeyFileAssignsMachineID(t *testing.T) {
 		t.Fatalf("reloaded: %+v %v %v", m, ok, err)
 	}
 
-	if _, err := km.Generate("east", []string{"ssh"}); err == nil {
+	if _, err := km.Generate("east"); err == nil {
 		t.Fatal("a second machine named east was added")
 	}
-	if _, err := km.Generate("west", []string{strings.Repeat("s", identity.MaxServiceLen+1)}); !errors.Is(err, ErrServiceName) {
-		t.Fatalf("a 35-character service: %v, want ErrServiceName", err)
-	}
-	for _, bad := range []struct {
-		name string
-		svcs []string
-	}{{"", []string{"ssh"}}, {"West", []string{"ssh"}}, {"a:b", []string{"ssh"}}, {"west", nil}, {"west", []string{"ssh", "ssh"}}} {
-		if _, err := km.Generate(bad.name, bad.svcs); err == nil {
-			t.Fatalf("Generate(%q, %v) was accepted", bad.name, bad.svcs)
+	for _, bad := range []string{"", "West", "a:b", "-west"} {
+		if _, err := km.Generate(bad); err == nil {
+			t.Fatalf("Generate(%q) was accepted", bad)
 		}
 	}
-	other, err := km.Generate("west", []string{"ssh"})
+	other, err := km.Generate("west")
 	if err != nil || other.MachineID == resp.MachineID {
 		t.Fatalf("second machine %+v, %v", other, err)
 	}
@@ -81,7 +75,7 @@ func TestKeyManagerRevoke(t *testing.T) {
 	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
 	var cut []string
 	km.OnRevoke(func(s string) { cut = append(cut, s) })
-	resp, err := km.Generate("east", []string{"ssh"})
+	resp, err := km.Generate("east")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,18 +92,19 @@ func TestKeyManagerRevoke(t *testing.T) {
 		t.Fatal("a second revoke of the machine: no error")
 	}
 	// Its name is free again; the new machine gets a new id.
-	again, err := km.Generate("east", []string{"ssh"})
+	again, err := km.Generate("east")
 	if err != nil || again.MachineID == resp.MachineID {
 		t.Fatalf("re-added: %+v, %v", again, err)
 	}
 }
 
-// The provider states the key's machine: its id, its services as the names
-// it may register, and its own account.
+// The provider states the key's machine: its id and its own account; it
+// registers any valid service name as its own ref (spec Reach.tla
+// AgentIdOwned), nothing else.
 func TestProviderStatesTheMachine(t *testing.T) {
 	store := NewAPIKeyStore()
 	km := NewKeyManager("", store, testKeyManagerLogger())
-	resp, err := km.Generate("east", []string{"ssh"})
+	resp, err := km.Generate("east")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +113,10 @@ func TestProviderStatesTheMachine(t *testing.T) {
 	if err != nil || p.Machine != resp.MachineID || p.AgentID != (identity.AgentRef{Machine: resp.MachineID, Service: "ssh"}).String() {
 		t.Fatalf("principal %+v, %v", p, err)
 	}
-	if _, err := a.Authenticate(context.Background(), identity.Credential{Token: resp.APIKey, Name: "web"}); !errors.Is(err, identity.ErrNameNotAllowed) {
-		t.Fatalf("an unbound service: %v", err)
+	if p, err := a.Authenticate(context.Background(), identity.Credential{Token: resp.APIKey, Name: "web"}); err != nil || p.AgentID != (identity.AgentRef{Machine: resp.MachineID, Service: "web"}).String() {
+		t.Fatalf("another service: %+v, %v", p, err)
+	}
+	if _, err := a.Authenticate(context.Background(), identity.Credential{Token: resp.APIKey, Name: "Web"}); !errors.Is(err, identity.ErrNameNotAllowed) {
+		t.Fatalf("an invalid service name: %v", err)
 	}
 }

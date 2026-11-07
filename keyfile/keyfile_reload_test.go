@@ -107,7 +107,7 @@ func TestKeyManagerReloadOfNoKeysRevokesAll(t *testing.T) {
 // A file that does not load keeps the keys.
 func TestKeyManagerReloadKeepsKeysOnBadFile(t *testing.T) {
 	for name, write := range map[string]func(path string){
-		"malformed": func(p string) { writeKeys(t, p, string(tm("a"))+" a svc sha256:nothex") },
+		"malformed": func(p string) { writeKeys(t, p, string(tm("a"))+" a sha256:nothex") },
 		"duplicate": func(p string) { writeKeys(t, p, "a:key-a", "a:key-x") },
 		"missing":   func(p string) { _ = os.Remove(p) },
 	} {
@@ -197,7 +197,7 @@ func TestKeyManagerWritesKeyFileAtomically(t *testing.T) {
 	}
 	km := NewKeyManager(path, nil, testKeyManagerLogger())
 	before, _ := os.Stat(path)
-	resp, err := km.Generate("a", []string{"svc"})
+	resp, err := km.Generate("a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestKeyManagerWritesKeyFileAtomically(t *testing.T) {
 		t.Fatalf("mode %v, want 0640 kept", after.Mode().Perm())
 	}
 	data, _ := os.ReadFile(path)
-	if !strings.HasPrefix(string(data), "# header\n"+string(resp.MachineID)+" a svc sha256:") {
+	if !strings.HasPrefix(string(data), "# header\n"+string(resp.MachineID)+" a sha256:") {
 		t.Fatalf("file %q, want the header then the new key", data)
 	}
 	if err := km.Revoke(resp.MachineID); err != nil {
@@ -223,18 +223,16 @@ func TestKeyManagerWritesKeyFileAtomically(t *testing.T) {
 	}
 }
 
-// A rename in the file cuts nothing (names are labels: spec RenameKeepsReach);
-// a change of a machine's services re-admits it (its connections end).
-func TestKeyManagerReloadRenameKeepsServicesCut(t *testing.T) {
+// A rename in the file cuts nothing (names are labels: spec RenameKeepsReach).
+func TestKeyManagerReloadRenameCutsNothing(t *testing.T) {
 	km, store, path, revoked := reloadingManager(t, "a:key-a", "b:key-b")
 	renamed := strings.Replace(kl("a", "key-a"), " a ", " a2 ", 1)
-	rebound := strings.Replace(kl("b", "key-b"), " svc ", " svc,web ", 1)
-	writeKeys(t, path, renamed, rebound)
+	writeKeys(t, path, renamed, kl("b", "key-b"))
 	if _, err := km.Reload(); err != nil {
 		t.Fatal(err)
 	}
-	if got := revoked(); !slices.Equal(got, ids("b")) {
-		t.Fatalf("revoked %v, want only b (services changed)", got)
+	if got := revoked(); len(got) != 0 {
+		t.Fatalf("revoked %v, want none (a rename)", got)
 	}
 	if m, ok := store.Validate("key-a"); !ok || m.ID != tm("a") || m.Name != "a2" {
 		t.Fatalf("renamed machine: %+v %v", m, ok)

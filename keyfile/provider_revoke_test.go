@@ -32,7 +32,7 @@ func (r revokeAfterRead) Authenticate(ctx context.Context, c identity.Credential
 func TestKeyFileRevocationDuringAuthenticate(t *testing.T) {
 	store := NewAPIKeyStore()
 	km := NewKeyManager(filepath.Join(t.TempDir(), "api-keys"), store, testKeyManagerLogger())
-	resp, err := km.Generate("agent-1", []string{"svc"})
+	resp, err := km.Generate("agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}

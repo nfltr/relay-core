@@ -16,9 +16,9 @@ import (
 )
 
 // A key file holds one machine per line: "<machine id> <name>
-// <service,...> sha256:<hex of the key's SHA-256>". The store keeps only
-// the keys' hashes, and the provider authenticates a credential as its
-// machine, which may register only its services.
+// sha256:<hex of the key's SHA-256>". The store keeps only the keys'
+// hashes, and the provider authenticates a credential as its machine,
+// whose agents are its own id's refs.
 func Example() {
 	dir, err := os.MkdirTemp("", "keyfile")
 	if err != nil {
@@ -27,7 +27,7 @@ func Example() {
 	defer os.RemoveAll(dir) //nolint:errcheck
 	path := filepath.Join(dir, "api-keys")
 	sum := sha256.Sum256([]byte("rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa"))
-	line := "m-aaaaaaaaaaaaaaaaaaaaaaaaaa web ssh,http sha256:" + hex.EncodeToString(sum[:]) + "\n"
+	line := "m-aaaaaaaaaaaaaaaaaaaaaaaaaa web sha256:" + hex.EncodeToString(sum[:]) + "\n"
 	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
 		panic(err)
 	}
@@ -37,14 +37,14 @@ func Example() {
 		panic(err)
 	}
 	m, ok := store.Validate("rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa")
-	fmt.Println(m.ID, m.Name, m.Services, ok)
+	fmt.Println(m.ID, m.Name, ok)
 	_, ok = store.Validate("rpc_wrong")
 	fmt.Println(ok)
 
 	p, err := keyfile.Provider{Store: store}.Authenticate(context.Background(), identity.Credential{Token: "rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa"})
-	fmt.Println(p.Machine, p.Names, err)
+	fmt.Println(p.Machine, err)
 	// Output:
-	// m-aaaaaaaaaaaaaaaaaaaaaaaaaa web [ssh http] true
+	// m-aaaaaaaaaaaaaaaaaaaaaaaaaa web true
 	// false
-	// m-aaaaaaaaaaaaaaaaaaaaaaaaaa [ssh http] <nil>
+	// m-aaaaaaaaaaaaaaaaaaaaaaaaaa <nil>
 }

@@ -17,7 +17,7 @@ import (
 // key the client would stop on.
 func TestRevokeCauseReachesEveryHold(t *testing.T) {
 	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"t": {Owner: "o", Subject: "s", Names: []string{"svc"}, CacheTTL: time.Minute},
+		"t": {Owner: "o", Subject: "s", CacheTTL: time.Minute},
 	}}
 	a := NewAuthenticator("accounts", prov)
 	p, err := a.Authenticate(t.Context(), Credential{Token: "t"})

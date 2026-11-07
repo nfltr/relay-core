@@ -20,7 +20,7 @@ const CredentialCacheTTL = 30 * time.Second
 
 // Provider is the static key file as an identity provider (a relay with no
 // database): every machine is its own account (as each key was before
-// machines), registers only its bound services, and lives until it is
+// machines), registers any valid service name (its own id's refs), and lives until it is
 // revoked (KeyManager.Revoke, which drops the core's cached answers). It
 // links no database.
 type Provider struct{ Store *APIKeyStore }
@@ -38,5 +38,5 @@ func (k Provider) Authenticate(_ context.Context, c identity.Credential) (identi
 		return identity.Principal{}, identity.ErrUnknownCredential
 	}
 	id := string(m.ID)
-	return identity.Principal{Owner: id, Machine: m.ID, Subject: id, Names: m.Services, CacheTTL: CredentialCacheTTL}, nil
+	return identity.Principal{Owner: id, Machine: m.ID, Subject: id, CacheTTL: CredentialCacheTTL}, nil
 }

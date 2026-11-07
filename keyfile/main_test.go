@@ -21,8 +21,8 @@ func base32Lower(b []byte) string {
 	return base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding).EncodeToString(b)
 }
 
-// tmach is test machine name, bound to service svc.
-func tmach(name string) Machine { return Machine{ID: tm(name), Name: name, Services: []string{"svc"}} }
+// tmach is test machine name.
+func tmach(name string) Machine { return Machine{ID: tm(name), Name: name} }
 
 // kl is the key file line of test machine name with key.
 func kl(name, key string) string { return tmach(name).line(sha256.Sum256([]byte(key))) }

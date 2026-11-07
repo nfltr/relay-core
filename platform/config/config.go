@@ -222,7 +222,6 @@ func SetDefaultFlags() {
 	_ = flag.String("security.mtls.revoked_file", "", "optional revocation list, reloaded on change: a CRL (PEM or DER) signed by a CA of the bundle, or hex serials one per line; a revoked certificate's connections end")
 	_ = flag.String("security.mtls.owner", "{cn}", "rule making a certificate's owner (namespaced mtls:<owner>) from its fields {cn} {o} {ou} {dns} {email} {uri} {serial}")
 	_ = flag.String("security.mtls.subject", "{cn}", "rule making a certificate's subject (its agent id) from the same fields")
-	_ = flag.StringSlice("security.mtls.names", nil, "agent names a certificate may take under its subject (\"*\" any, \"ci-*\" a prefix; empty: any)")
 
 	// ── OIDC/JWT identity provider (an organization's IdP; off without an issuer) ──
 	_ = flag.String("security.oidc.issuer", "", "issuer URL whose JWTs authenticate (the iss claim; https, or http to loopback); turns the OIDC identity provider on")
@@ -231,7 +230,6 @@ func SetDefaultFlags() {
 	_ = flag.String("security.oidc.owner", "{sub}", "rule making a token's owner (namespaced oidc:<issuer hash>:<owner>) from its claims, e.g. {org}")
 	_ = flag.String("security.oidc.subject", "{sub}", "rule making a token's subject (its agent id) from its claims")
 	_ = flag.String("security.oidc.scopes_claim", "scope", "claim holding a token's scopes (space-separated or a list; admin is never taken from an IdP)")
-	_ = flag.String("security.oidc.names_claim", "", "claim holding the agent names a token may take (empty: any name)")
 	_ = flag.Duration("security.oidc.clock_skew", time.Minute, "clock skew allowed on exp, nbf and iat (at most 5m); a connection ends at exp plus this")
 
 	// ── SQL Key Store (database-backed API keys & fleet tokens) ─────────

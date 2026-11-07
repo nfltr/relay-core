@@ -99,7 +99,7 @@ const zeroKeyFile = "nfltr-relay-core.keys"
 
 // zeroConfig makes the defaults of `serve` without --from-env: loopback
 // ports, TCP sessions on, and the key file zeroKeyFile, created 0600 with
-// one generated machine "quickstart" serving "web" (its key also in a
+// one generated machine "quickstart" (its key also in a
 // comment, so a local agent and client can read it) when it does not
 // exist. The environment still overrides each default;
 // the key file then is the one security.apikey.file names.
@@ -117,7 +117,7 @@ func zeroConfig(logger *slog.Logger) error {
 		return err
 	}
 	key := "rpc_" + hex.EncodeToString(secret)
-	m := keyfile.Machine{ID: identity.NewMachineID(), Name: "quickstart", Services: []string{"web"}}
+	m := keyfile.Machine{ID: identity.NewMachineID(), Name: "quickstart"}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- the operator's key file path
 	if err != nil {
 		return err

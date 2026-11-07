@@ -55,10 +55,10 @@ SECURITY_APIKEY_FILE=nfltr-relay-core.keys TCP_ENABLED=true bin/nfltr-relay-core
 ```
 
 The key file is the relay's machine store: each line is `<machine id>
-<name> <service,...> sha256:<hex>` (a machine, the services its agents
-may register and its key's hash; a start on loopback writes one, machine
-`quickstart` serving `web`, with its key in a comment). An agent connects
-as one of its machine's services and is reached as its agent ref
+<name> sha256:<hex>` (a machine and its key's hash; a start on loopback
+writes one, machine `quickstart`, with its key in a comment). An agent
+connects as any service of its machine (a valid service name) and is
+reached as its agent ref
 `<machine id>-<service>`; agents and clients send the key, and a key whose
 machine is not in the file is refused (`machine_not_enrolled`). `serve --from-env` reads every
 setting from the environment (`PROXY_PORT`, `GRPC_PORT`, `INTERNAL_PORT`,

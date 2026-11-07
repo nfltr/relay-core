@@ -35,7 +35,7 @@ func main() {
 	const key = "rpc_minimal-example-key-0123456789"
 	keys := keyfile.NewAPIKeyStore()
 	machine := identity.NewMachineID()
-	keys.Add(keyfile.Machine{ID: machine, Name: "demo", Services: []string{"echo"}}, key)
+	keys.Add(keyfile.Machine{ID: machine, Name: "demo"}, key)
 
 	var ls compose.Ports // the relay's ports: clients, agents, /ready
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {

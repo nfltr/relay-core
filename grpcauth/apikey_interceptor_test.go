@@ -17,7 +17,7 @@ import (
 
 // testMachine is a key file machine bound to service "svc"; its agent is
 // testRef.
-var testMachine = keyfile.Machine{ID: identity.NewMachineID(), Name: "agent-1", Services: []string{"svc"}}
+var testMachine = keyfile.Machine{ID: identity.NewMachineID(), Name: "agent-1"}
 
 var testRef = identity.AgentRef{Machine: testMachine.ID, Service: "svc"}.String()
 
@@ -53,8 +53,8 @@ func TestValidateAPIKeyFromMetadata_ValidKey(t *testing.T) {
 }
 
 // TestValidateAPIKeyFromMetadata_AgentIsMachineService: x-agent-id names
-// one of the key's machine's services and the agent is its ref; any other
-// name is refused.
+// a service and the agent is the key's machine's ref for it; a name that
+// is no valid service (another machine's ref) is refused.
 func TestValidateAPIKeyFromMetadata_AgentIsMachineService(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
 	store.Add(testMachine, "rpc_secret123")
@@ -67,8 +67,8 @@ func TestValidateAPIKeyFromMetadata_AgentIsMachineService(t *testing.T) {
 		t.Fatalf("AgentID %q (ok=%v), want %q", agentID, ok, testRef)
 	}
 	if _, err := validateAPIKeyFromMetadata(metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs("x-api-key", "rpc_secret123", "x-agent-id", "custom-name")), store); err == nil {
-		t.Fatal("an unbound service was taken")
+		metadata.Pairs("x-api-key", "rpc_secret123", "x-agent-id", identity.AgentRef{Machine: identity.MachineIDOf("other"), Service: "svc"}.String())), store); err == nil {
+		t.Fatal("another machine's ref was taken")
 	}
 }
 

@@ -28,7 +28,7 @@ func TestNewGRPCServer_IgnoresClientAssertedIdentity(t *testing.T) {
 	defer viper.Reset()
 
 	keys := keyfile.NewAPIKeyStore()
-	keys.Add(keyfile.Machine{ID: identity.NewMachineID(), Name: "owner", Services: []string{"svc"}}, "owner-key-supersecret")
+	keys.Add(keyfile.Machine{ID: identity.NewMachineID(), Name: "owner"}, "owner-key-supersecret")
 	s := NewGRPCServer(testLogger(), WithAuthenticator(identity.NewAuthenticator("accounts", keyfile.Provider{Store: keys})))
 	var gotID string
 	var gotErr error

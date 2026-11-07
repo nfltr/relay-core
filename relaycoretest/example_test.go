@@ -29,7 +29,7 @@ func ExampleNew() {
 		}
 	}()
 
-	r := relaycoretest.New(t, "echo")
+	r := relaycoretest.New(t)
 	// Agents connect to r.GRPC with r.Key; the key's clients reach them on r.Proxy.
 	fmt.Println(r.GRPC != "", r.Proxy != "", len(r.Key) > 0)
 	// Output: true true true

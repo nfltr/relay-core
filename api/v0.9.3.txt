@@ -1,0 +1,9 @@
+Incompatible changes:
+- ./keyfile.(*KeyManager).Generate: changed from func(string, []string) (*KeyGenerateResponse, error) to func(string) (*KeyGenerateResponse, error)
+- ./keyfile.(*KeyManager).GenerateForOwner: changed from func(string, []string, string) (*KeyGenerateResponse, error) to func(string, string) (*KeyGenerateResponse, error)
+- ./keyfile.ErrServiceName: removed
+- ./keyfile.KeyGenerateResponse.Services: removed
+- ./keyfile.KeyRecord.Services: removed
+- ./keyfile.Machine.Services: removed
+- ./core/identity.Principal.Names: removed
+- ./relaycoretest.New: changed from func(testing.TB, ...string) *Relay to func(testing.TB) *Relay

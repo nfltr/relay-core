@@ -34,7 +34,7 @@ func TestRevocationDuringAuthenticate(t *testing.T) {
 		name := map[bool]string{true: "after the provider read", false: "after Authenticate"}[during]
 		t.Run(name, func(t *testing.T) {
 			f := &fakeProvider{name: "keys", tokens: map[string]Principal{
-				"k": {Owner: "o", Subject: "agent", Names: []string{"svc"}, CacheTTL: 1 << 40},
+				"k": {Owner: "o", Subject: "agent", CacheTTL: 1 << 40},
 			}}
 			var a *Authenticator
 			revoke := func() {
@@ -73,8 +73,8 @@ func TestRevocationDuringAuthenticate(t *testing.T) {
 // the same subject (a key minted again for it) are held.
 func TestRevocationKeepsOtherKeysAndLaterReads(t *testing.T) {
 	f := &fakeProvider{name: "keys", tokens: map[string]Principal{
-		"k": {Owner: "o", Subject: "agent", Names: []string{"svc"}},
-		"j": {Owner: "o", Subject: "other", Names: []string{"svc"}},
+		"k": {Owner: "o", Subject: "agent"},
+		"j": {Owner: "o", Subject: "other"},
 	}}
 	a := NewAuthenticator("keys", f)
 	pj, _ := a.Authenticate(t.Context(), Credential{Token: "j"})

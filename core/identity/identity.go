@@ -28,7 +28,7 @@ type Credential struct {
 }
 
 // Principal is what the core keys every decision on: a machine of an
-// account. A provider fills Owner, Machine, Group, Subject, Names, Scopes,
+// account. A provider fills Owner, Machine, Group, Subject, Scopes,
 // NotAfter and CacheTTL from its machine store; the core namespaces Owner
 // and sets Provider and AgentID.
 type Principal struct {
@@ -37,7 +37,6 @@ type Principal struct {
 	Machine  MachineID     // the machine, from its row (never from the request)
 	Group    string        // the machine's group in its account (reach policy data)
 	Subject  string        // the credential's own id (a key's, a certificate's): what Key and Revoke name
-	Names    []string      // the services the machine is bound to: exactly the agents it may register
 	Scopes   []string      // opaque to the core but "admin"
 	NotAfter time.Time     // its connections end then; zero: until revoked
 	CacheTTL time.Duration // how long the core may reuse this answer (0: not at all)
@@ -213,9 +212,9 @@ func (a *Authenticator) admit(prov Provider, p Principal, name string, now time.
 	if !p.NotAfter.IsZero() && !now.Before(p.NotAfter) {
 		return Principal{}, ErrExpired
 	}
-	// The agent is always this machine's: a name is one of its bound
-	// services, never a ref (spec Reach.tla KeyBoundToNames, AgentIdOwned).
-	if name != "" && (!ValidService(name) || !slices.Contains(p.Names, name)) {
+	// The agent is always this machine's: any valid service name, never
+	// a ref (spec Reach.tla AgentIdOwned).
+	if name != "" && !ValidService(name) {
 		return Principal{}, ErrNameNotAllowed
 	}
 	p.Provider = provider

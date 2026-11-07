@@ -15,7 +15,7 @@ import (
 
 // Reload reads the key file again into the live store: the keys the file
 // now holds replace the store's at once, and the records follow. A machine
-// whose key left the file, whose key changed, or whose services changed is
+// whose key left the file or whose key changed is
 // revoked (a rename alone is not):
 // OnRevoke runs for it (the relay ends its connections) after its old key
 // stopped validating and before a new key of it validates, so the cut never
@@ -35,7 +35,7 @@ func (km *KeyManager) Reload() ([]identity.MachineID, error) {
 	gone := map[identity.MachineID]bool{}
 	km.store.mu.RLock()
 	for h, m := range km.store.keys {
-		if n, ok := next.keys[h]; !ok || n.ID != m.ID || !slices.Equal(n.Services, m.Services) {
+		if n, ok := next.keys[h]; !ok || n.ID != m.ID {
 			gone[m.ID] = true
 		}
 	}

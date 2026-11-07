@@ -4,7 +4,6 @@
 package keyfile
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +24,7 @@ func TestLoadAPIKeys(t *testing.T) {
 	if err != nil || store.Count() != 2 {
 		t.Fatalf("load: %v, %d keys", err, store.Count())
 	}
-	if m, ok := store.Validate("secret-a"); !ok || m.ID != tm("web") || m.Name != "web" || len(m.Services) != 1 {
+	if m, ok := store.Validate("secret-a"); !ok || m.ID != tm("web") || m.Name != "web" {
 		t.Fatalf("Validate = %+v, %v", m, ok)
 	}
 	if _, ok := store.Validate("wrong-key"); ok {
@@ -38,7 +37,8 @@ func TestLoadAPIKeys(t *testing.T) {
 
 // The file refuses what it cannot hold as a machine: a line from before
 // machines (agent-id:key, agent-id:sha256:<hex>), a machine or a name
-// twice, a bad id, name or service (a 35-character service included).
+// twice, a bad id or name, a line with a services field (the form before
+// any valid service name was allowed).
 func TestLoadAPIKeysRefuses(t *testing.T) {
 	ok := tmach("web")
 	for name, line := range map[string][]string{
@@ -48,8 +48,7 @@ func TestLoadAPIKeysRefuses(t *testing.T) {
 		"name twice":     {kl("web", "a"), strings.Replace(kl("db", "b"), " db ", " web ", 1)},
 		"bad id":         {strings.Replace(kl("web", "a"), string(ok.ID), "m-nope", 1)},
 		"bad name":       {strings.Replace(kl("web", "a"), " web ", " Web ", 1)},
-		"long service":   {strings.Replace(kl("web", "a"), " svc ", " "+strings.Repeat("s", 35)+" ", 1)},
-		"service twice":  {strings.Replace(kl("web", "a"), " svc ", " svc,svc ", 1)},
+		"services field": {strings.Replace(kl("web", "a"), " web ", " web svc ", 1)},
 		"malformed hash": {strings.Replace(kl("web", "a"), "sha256:", "sha256:zz", 1)},
 	} {
 		if _, err := LoadAPIKeys(writeFile(t, line...)); err == nil {
@@ -59,21 +58,21 @@ func TestLoadAPIKeysRefuses(t *testing.T) {
 }
 
 func TestLoadAPIKeysFromEnv(t *testing.T) {
-	t.Setenv("KF_TEST", string(tm("web"))+" web ssh,http secret")
+	t.Setenv("KF_TEST", string(tm("web"))+" web secret")
 	store, err := LoadAPIKeysFromEnv("KF_TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m, ok := store.Validate("secret"); !ok || m.ID != tm("web") || strings.Join(m.Services, ",") != "ssh,http" {
+	if m, ok := store.Validate("secret"); !ok || m.ID != tm("web") || m.Name != "web" {
 		t.Fatalf("Validate = %+v, %v", m, ok)
 	}
 	t.Setenv("KF_TEST", "web:secret")
 	if _, err := LoadAPIKeysFromEnv("KF_TEST"); err == nil {
 		t.Fatal("an agent-id:key value loaded")
 	}
-	t.Setenv("KF_TEST", string(tm("web"))+" web "+strings.Repeat("s", 35)+" secret")
-	if _, err := LoadAPIKeysFromEnv("KF_TEST"); !errors.Is(err, ErrServiceName) {
-		t.Fatalf("a 35-character service: %v, want ErrServiceName", err)
+	t.Setenv("KF_TEST", string(tm("web"))+" web ssh,http secret")
+	if _, err := LoadAPIKeysFromEnv("KF_TEST"); err == nil {
+		t.Fatal("a value with a services field loaded")
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
+
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +22,6 @@ import (
 type KeyRecord struct {
 	MachineID identity.MachineID `json:"machine_id"`
 	Name      string             `json:"name"`
-	Services  []string           `json:"services"`
 	KeyPrefix string             `json:"key_prefix"`      // first chars for identification
 	Owner     string             `json:"owner,omitempty"` // email of the user who created this key
 	CreatedAt time.Time          `json:"created_at"`
@@ -33,7 +32,6 @@ type KeyRecord struct {
 type KeyGenerateResponse struct {
 	MachineID identity.MachineID `json:"machine_id"`
 	Name      string             `json:"name"`
-	Services  []string           `json:"services"`
 	APIKey    string             `json:"api_key"`
 	CreatedAt time.Time          `json:"created_at"`
 	Message   string             `json:"message"`
@@ -86,21 +84,20 @@ func NewKeyManager(filePath string, store *APIKeyStore, logger *slog.Logger) *Ke
 // fileRecord is the record of a key read from the file: its hash's prefix,
 // no owner, creation time unknown.
 func fileRecord(m Machine, hash [32]byte) KeyRecord {
-	return KeyRecord{MachineID: m.ID, Name: m.Name, Services: m.Services, KeyPrefix: hex.EncodeToString(hash[:4]) + "..."}
+	return KeyRecord{MachineID: m.ID, Name: m.Name, KeyPrefix: hex.EncodeToString(hash[:4]) + "..."}
 }
 
-// Generate adds a machine named name, bound to services: the file assigns
-// it a fresh id (identity.NewMachineID; a caller never chooses one).
-// Returns the full key (only shown once), usable at once and persisted.
-func (km *KeyManager) Generate(name string, services []string) (*KeyGenerateResponse, error) {
-	return km.GenerateForOwner(name, services, "")
+// Generate adds a machine named name: the file assigns it a fresh id
+// (identity.NewMachineID; a caller never chooses one). Returns the full
+// key (only shown once), usable at once and persisted.
+func (km *KeyManager) Generate(name string) (*KeyGenerateResponse, error) {
+	return km.GenerateForOwner(name, "")
 }
 
 // GenerateForOwner is Generate recording the owner email for per-user
-// scoping. A name already in use, or an invalid name or service (one over
-// identity.MaxServiceLen characters: ErrServiceName), is refused.
-func (km *KeyManager) GenerateForOwner(name string, services []string, owner string) (*KeyGenerateResponse, error) {
-	m := Machine{ID: identity.NewMachineID(), Name: name, Services: slices.Clone(services)}
+// scoping. A name already in use, or an invalid name, is refused.
+func (km *KeyManager) GenerateForOwner(name, owner string) (*KeyGenerateResponse, error) {
+	m := Machine{ID: identity.NewMachineID(), Name: name}
 	if err := validMachine(m); err != nil {
 		return nil, err
 	}
@@ -126,14 +123,13 @@ func (km *KeyManager) GenerateForOwner(name string, services []string, owner str
 		return nil, fmt.Errorf("persist key: %w", err)
 	}
 
-	record := KeyRecord{MachineID: m.ID, Name: m.Name, Services: m.Services, KeyPrefix: apiKey[:12] + "...", Owner: owner, CreatedAt: time.Now().UTC()}
+	record := KeyRecord{MachineID: m.ID, Name: m.Name, KeyPrefix: apiKey[:12] + "...", Owner: owner, CreatedAt: time.Now().UTC()}
 	km.records[m.ID] = record
 	km.logger.Info("security: added machine", "machine_id", m.ID, "name", m.Name, "owner", owner, "prefix", record.KeyPrefix)
 
 	return &KeyGenerateResponse{
 		MachineID: m.ID,
 		Name:      m.Name,
-		Services:  m.Services,
 		APIKey:    apiKey,
 		CreatedAt: record.CreatedAt,
 		Message:   "Store this key securely — it will not be shown again.",
@@ -215,7 +211,7 @@ func (km *KeyManager) appendToFile(m Machine, key string) error {
 }
 
 // rewriteFile rebuilds the key file from the current store contents.
-// Keys are written hashed: "<machine id> <name> <service,...> sha256:<hex>".
+// Keys are written hashed: "<machine id> <name> sha256:<hex>".
 func (km *KeyManager) rewriteFile() error {
 	if km.filePath == "" {
 		return nil
@@ -224,7 +220,7 @@ func (km *KeyManager) rewriteFile() error {
 	km.store.mu.RLock()
 	var lines []string
 	lines = append(lines, "# API keys managed by the relay (do not edit manually)")
-	lines = append(lines, "# Format: <machine id> <name> <service,...> sha256:<hex_hash>")
+	lines = append(lines, "# Format: <machine id> <name> sha256:<hex_hash>")
 	for hash, m := range km.store.keys {
 		lines = append(lines, m.line(hash))
 	}
