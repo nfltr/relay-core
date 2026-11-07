@@ -14,7 +14,7 @@ import (
 // one but holds nothing; HoldCarried holds it from then on (a revocation
 // ends the hold), once, and only on a carried context.
 func TestCarryHoldsOnlyWhenAsked(t *testing.T) {
-	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{"t": {Owner: "o", Subject: "s", Names: AnyName}}}
+	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{"t": {Owner: "o", Subject: "s", Names: []string{"svc"}}}}
 	a := NewAuthenticator("accounts", prov)
 	p, err := a.Authenticate(t.Context(), Credential{Token: "t"})
 	if err != nil {

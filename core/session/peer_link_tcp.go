@@ -36,13 +36,36 @@ func NewPodRelayStream(stream Streamer, targetPodIP string, cleanup func()) *Pod
 	return &PodRelayStream{stream: stream, targetPodIP: targetPodIP, cleanup: cleanup}
 }
 
+// recheck is the serving replica's Reach for a session a principal opened
+// (TCPEndpoint.Caller): refused as the agent not being found, as the
+// opening replica answers (ConnectTarget). Guard: TestReachEveryPath.
+func (d *TCPDispatcher) recheck(ep TCPEndpoint) error {
+	if ep.Caller.Owner == "" && ep.Caller.Subject == "" {
+		return nil
+	}
+	if d.reach == nil {
+		return dataplane.Refusal(relayv1.ErrorReason_ERROR_REASON_AGENT_NOT_FOUND, "agent not found")
+	}
+	switch ok, err := d.reach(ep.Caller, ep.AgentID, Dial); {
+	case err != nil:
+		return dataplane.Refusal(relayv1.ErrorReason_ERROR_REASON_DIRECTORY_UNAVAILABLE, "the relay's directory is unavailable")
+	case !ok:
+		return dataplane.Refusal(relayv1.ErrorReason_ERROR_REASON_AGENT_NOT_FOUND, "agent not found")
+	}
+	return nil
+}
+
 // ServeLinkTCP serves a session a peer forwarded on the link as a hop of
 // its chain (session_chain.go): on to the agent here, as if its opener had
 // connected here, answered with the agent's word. A session this replica
 // cannot serve is refused: AGENT_OFFLINE when the agent is not here (it
-// moved), SHARE_POLICY_UNENFORCED for a share its stream does not enforce.
+// moved), AGENT_NOT_FOUND for a caller this replica's Reach refuses,
+// SHARE_POLICY_UNENFORCED for a share its stream does not enforce.
 func (d *TCPDispatcher) ServeLinkTCP(s PeerSession, ep TCPEndpoint) {
 	Forward(d.logger, chainReplica, s, ep.Answer, func(ctx context.Context) (peerlink.Session, func(), error) {
+		if r := d.recheck(ep); r != nil {
+			return nil, nil, r // before the agent's presence: no oracle for it
+		}
 		as := d.agentStream(ep.AgentID)
 		if as == nil {
 			return nil, nil, dataplane.Refusal(relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE, fmt.Sprintf("agent %s is not connected", ep.AgentID))

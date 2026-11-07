@@ -61,6 +61,7 @@ func (c *Core) WireTCP(ctx context.Context, logger *slog.Logger, grace time.Dura
 	t.DrainBy = c.DrainBy // its agent link drains until then (agent_link.go)
 	d.ConfigureTCPRenew(t)
 	t.ownerOf = d.OwnerForAgent
+	t.reach = d.Reach
 	d.TCPDispatcher = t
 	d.tcpAgents.Store(t)
 	c.TCPDispatcher = t

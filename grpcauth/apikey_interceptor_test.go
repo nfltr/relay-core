@@ -15,10 +15,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const (
-	testAgentID  = "agent-1"
-	testAgentID2 = "my-agent"
-)
+// testMachine is a key file machine bound to service "svc"; its agent is
+// testRef.
+var testMachine = keyfile.Machine{ID: identity.NewMachineID(), Name: "agent-1", Services: []string{"svc"}}
+
+var testRef = identity.AgentRef{Machine: testMachine.ID, Service: "svc"}.String()
 
 // ---------------------------------------------------------------------------
 // validateAPIKeyFromMetadata
@@ -26,7 +27,7 @@ const (
 
 func TestValidateAPIKeyFromMetadata_ValidKey(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
-	store.Add(testAgentID, "rpc_secret123")
+	store.Add(testMachine, "rpc_secret123")
 
 	md := metadata.Pairs("x-api-key", "rpc_secret123")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -36,10 +37,9 @@ func TestValidateAPIKeyFromMetadata_ValidKey(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// AgentID should be in context value.
-	agentID, ok := AgentIDFromContext(ctx)
-	if !ok || agentID != testAgentID {
-		t.Fatalf("expected AgentID 'agent-1', got %q (ok=%v)", agentID, ok)
+	// A connection naming no service is a client, not an agent.
+	if agentID, ok := AgentIDFromContext(ctx); ok {
+		t.Fatalf("a client got agent id %q", agentID)
 	}
 
 	// The principal is typed, never strings in metadata.
@@ -47,53 +47,28 @@ func TestValidateAPIKeyFromMetadata_ValidKey(t *testing.T) {
 	if vals := outMD.Get("x-apikey-agentID"); len(vals) != 0 {
 		t.Fatalf("x-apikey-agentID in metadata %v: want the principal only", vals)
 	}
-	if p, ok := identity.FromContext(ctx); !ok || p.Provider != keyfile.ProviderName || p.Subject != testAgentID || p.Owner != "keys:"+testAgentID {
+	if p, ok := identity.FromContext(ctx); !ok || p.Provider != keyfile.ProviderName || p.Machine != testMachine.ID || p.Owner != "keys:"+string(testMachine.ID) {
 		t.Fatalf("principal %+v, %v", p, ok)
 	}
 }
 
-// TestValidateAPIKeyFromMetadata_AgentIDOverride verifies that when x-agent-id
-// is present in metadata alongside a valid key, the agent-supplied name is
-// scoped to the key's stored agentID to prevent global name collisions.
-func TestValidateAPIKeyFromMetadata_AgentIDOverride(t *testing.T) {
+// TestValidateAPIKeyFromMetadata_AgentIsMachineService: x-agent-id names
+// one of the key's machine's services and the agent is its ref; any other
+// name is refused.
+func TestValidateAPIKeyFromMetadata_AgentIsMachineService(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
-	store.Add("default-agent", "rpc_secret123")
-
-	md := metadata.Pairs("x-api-key", "rpc_secret123", "x-agent-id", "custom-name")
-	ctx := metadata.NewIncomingContext(context.Background(), md)
-
-	ctx, err := validateAPIKeyFromMetadata(ctx, store)
+	store.Add(testMachine, "rpc_secret123")
+	ctx, err := validateAPIKeyFromMetadata(metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("x-api-key", "rpc_secret123", "x-agent-id", "svc")), store)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// The override "custom-name" should be scoped under the key's identity:
-	// "default-agent.custom-name" (not bare "custom-name").
-	want := "default-agent.custom-name"
-	agentID, ok := AgentIDFromContext(ctx)
-	if !ok || agentID != want {
-		t.Fatalf("expected AgentID %q, got %q (ok=%v)", want, agentID, ok)
+	if agentID, ok := AgentIDFromContext(ctx); !ok || agentID != testRef {
+		t.Fatalf("AgentID %q (ok=%v), want %q", agentID, ok, testRef)
 	}
-
-}
-
-// TestValidateAPIKeyFromMetadata_AgentIDSameAsKey verifies that when the
-// override matches the key's stored agentID, no prefix is added.
-func TestValidateAPIKeyFromMetadata_AgentIDSameAsKey(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testAgentID2, "rpc_secret456")
-
-	md := metadata.Pairs("x-api-key", "rpc_secret456", "x-agent-id", testAgentID2)
-	ctx := metadata.NewIncomingContext(context.Background(), md)
-
-	ctx, err := validateAPIKeyFromMetadata(ctx, store)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	agentID, ok := AgentIDFromContext(ctx)
-	if !ok || agentID != testAgentID2 {
-		t.Fatalf("expected AgentID 'my-agent', got %q (ok=%v)", agentID, ok)
+	if _, err := validateAPIKeyFromMetadata(metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("x-api-key", "rpc_secret123", "x-agent-id", "custom-name")), store); err == nil {
+		t.Fatal("an unbound service was taken")
 	}
 }
 
@@ -101,7 +76,7 @@ func TestValidateAPIKeyFromMetadata_AgentIDSameAsKey(t *testing.T) {
 // refused (fail closed), whatever stores the relay has.
 func TestValidateAPIKeyFromMetadata_InvalidKey(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
-	store.Add(testAgentID, "rpc_secret123")
+	store.Add(testMachine, "rpc_secret123")
 
 	md := metadata.Pairs("x-api-key", "rpc_wrong_key")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -113,7 +88,7 @@ func TestValidateAPIKeyFromMetadata_InvalidKey(t *testing.T) {
 
 func TestValidateAPIKeyFromMetadata_NoKey(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
-	store.Add(testAgentID, "rpc_secret123")
+	store.Add(testMachine, "rpc_secret123")
 
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(nil))
 	ctx, err := validateAPIKeyFromMetadata(ctx, store)
@@ -139,7 +114,7 @@ func TestValidateAPIKeyFromMetadata_NilStore(t *testing.T) {
 
 func TestValidateAPIKeyFromMetadata_NoMetadata(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
-	store.Add(testAgentID, "rpc_secret123")
+	store.Add(testMachine, "rpc_secret123")
 
 	ctx := context.Background() // no metadata at all
 	ctx, err := validateAPIKeyFromMetadata(ctx, store)
@@ -159,11 +134,11 @@ func TestValidateAPIKeyFromMetadata_NoMetadata(t *testing.T) {
 
 func TestAPIKeyUnaryInterceptor_ValidKey(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
-	store.Add(testAgentID, "rpc_test_key")
+	store.Add(testMachine, "rpc_test_key")
 
 	interceptor := APIKeyUnaryInterceptor(store)
 
-	md := metadata.Pairs("x-api-key", "rpc_test_key")
+	md := metadata.Pairs("x-api-key", "rpc_test_key", "x-agent-id", "svc")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	var capturedCtx context.Context
@@ -181,8 +156,8 @@ func TestAPIKeyUnaryInterceptor_ValidKey(t *testing.T) {
 	}
 
 	agentID, ok := AgentIDFromContext(capturedCtx)
-	if !ok || agentID != testAgentID {
-		t.Fatalf("expected AgentID 'agent-1', got %q (ok=%v)", agentID, ok)
+	if !ok || agentID != testRef {
+		t.Fatalf("expected AgentID %q, got %q (ok=%v)", testRef, agentID, ok)
 	}
 }
 
@@ -216,11 +191,11 @@ func (f *fakeServerStream) Context() context.Context { return f.ctx }
 
 func TestAPIKeyStreamInterceptor_ValidKey(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
-	store.Add("stream-agent", "rpc_stream_key")
+	store.Add(testMachine, "rpc_stream_key")
 
 	interceptor := APIKeyStreamInterceptor(store)
 
-	md := metadata.Pairs("x-api-key", "rpc_stream_key")
+	md := metadata.Pairs("x-api-key", "rpc_stream_key", "x-agent-id", "svc")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	ss := &fakeServerStream{ctx: ctx}
 
@@ -236,8 +211,8 @@ func TestAPIKeyStreamInterceptor_ValidKey(t *testing.T) {
 	}
 
 	agentID, ok := AgentIDFromContext(capturedCtx)
-	if !ok || agentID != "stream-agent" {
-		t.Fatalf("expected AgentID 'stream-agent', got %q (ok=%v)", agentID, ok)
+	if !ok || agentID != testRef {
+		t.Fatalf("expected AgentID %q, got %q (ok=%v)", testRef, agentID, ok)
 	}
 }
 
@@ -259,25 +234,5 @@ func TestAPIKeyStreamInterceptor_NilStore(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected handler to be called with nil store")
-	}
-}
-
-// TestValidateAPIKeyFromMetadata_KeyBaseID verifies that x-apikey-base-id
-// metadata contains the pre-scoped key identity for A2A target resolution.
-func TestValidateAPIKeyFromMetadata_KeyBaseID(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add("mykey", "rpc_base123")
-
-	md := metadata.Pairs("x-api-key", "rpc_base123", "x-agent-id", "worker")
-	ctx := metadata.NewIncomingContext(context.Background(), md)
-
-	ctx, err := validateAPIKeyFromMetadata(ctx, store)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Scoped agentID "mykey.worker", the pre-scoped base (subject) "mykey".
-	if p, _ := identity.FromContext(ctx); p.AgentID != "mykey.worker" || p.Subject != "mykey" {
-		t.Fatalf("principal agent %q, subject %q; want mykey.worker, mykey", p.AgentID, p.Subject)
 	}
 }

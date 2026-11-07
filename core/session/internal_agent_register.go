@@ -49,7 +49,7 @@ func (d *Dispatcher) RegisterInternalAgent(parent context.Context, agentID strin
 	d.Upstreams.Store(agentID, grpcStream)
 	d.notifyUpstreamRegistered(agentID)
 	d.touchAgentLastSeen(agentID)
-	d.RegisterAgent(agentID, "", "", "internal-loopback")
+	d.RegisterAgent(agentID, "", "internal-loopback")
 
 	var receiveDone sync.WaitGroup
 	receiveDone.Go(func() {

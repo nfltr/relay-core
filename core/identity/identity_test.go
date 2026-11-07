@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -19,22 +20,17 @@ type fakeProvider struct {
 	tokens map[string]Principal
 	err    error
 	calls  int
+	raw    bool // state principals as given: no test machine filled in
+}
+
+// testMachine is a fixed machine id per subject, for fakes whose
+// principals name none.
+func testMachine(subject string) MachineID {
+	sum := sha256.Sum256([]byte(subject))
+	return MachineID("m-" + machineB32.EncodeToString(sum[:16]))
 }
 
 func (f *fakeProvider) Name() string { return f.name }
-
-// MintsSubjects: the fake's subjects are minted key ids (Minting).
-func (f *fakeProvider) MintsSubjects() {}
-
-// outside is a provider whose subjects an outside authority chose (an
-// IdP, a CA): it is not Minting.
-type outside struct{ f *fakeProvider }
-
-func (o outside) Name() string { return o.f.name }
-
-func (o outside) Authenticate(ctx context.Context, c Credential) (Principal, error) {
-	return o.f.Authenticate(ctx, c)
-}
 
 func (f *fakeProvider) Authenticate(_ context.Context, c Credential) (Principal, error) {
 	f.calls++
@@ -45,21 +41,23 @@ func (f *fakeProvider) Authenticate(_ context.Context, c Credential) (Principal,
 	if !ok {
 		return Principal{}, ErrUnknownCredential
 	}
+	if p.Machine == "" && !f.raw {
+		p.Machine = testMachine(p.Subject)
+	}
 	return p, nil
 }
 
 // TestOwnersAreNamespacedByProvider: whatever owner a provider states, the
 // core keys the principal on it under the provider's namespace (the
-// primary's stay as stated), and refuses an owner or subject with a ':',
-// so no provider can mint another provider's owner.
+// primary's stay as stated), and refuses an owner with a ':', so no
+// provider can mint another provider's owner.
 func TestOwnersAreNamespacedByProvider(t *testing.T) {
 	accounts := &fakeProvider{name: "accounts", tokens: map[string]Principal{
 		"ka": {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"*"}},
 	}}
 	keys := &fakeProvider{name: "keys", tokens: map[string]Principal{
-		"kb":      {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"*"}}, // the same strings
-		"forge":   {Owner: "accounts:alice@example.com", Subject: "x", Names: []string{"*"}},
-		"forge-s": {Owner: "bob", Subject: "accounts:alice-hub", Names: []string{"*"}},
+		"kb":    {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"*"}}, // the same strings
+		"forge": {Owner: "accounts:alice@example.com", Subject: "x", Names: []string{"*"}},
 	}}
 	a := NewAuthenticator("accounts", accounts, keys)
 	pa, err := a.Authenticate(t.Context(), Credential{Token: "ka"})
@@ -70,7 +68,10 @@ func TestOwnersAreNamespacedByProvider(t *testing.T) {
 	if err != nil || pb.Owner != "keys:alice@example.com" || pb.Key() == pa.Key() {
 		t.Fatalf("another provider stating the same owner and subject: %+v, %v; want them apart", pb, err)
 	}
-	for _, tok := range []string{"forge", "forge-s"} {
+	if a.Owner("keys", "alice@example.com") != pb.Owner || a.Owner("accounts", "alice@example.com") != pa.Owner || (*Authenticator)(nil).Owner("keys", "x") != "x" {
+		t.Fatal("Owner must be the owner form admit gives principals")
+	}
+	for _, tok := range []string{"forge"} {
 		if p, err := a.Authenticate(t.Context(), Credential{Token: tok}); err == nil {
 			t.Fatalf("a provider minting another namespace (%s): %+v", tok, p)
 		}
@@ -84,32 +85,76 @@ func TestOwnersAreNamespacedByProvider(t *testing.T) {
 	}
 }
 
-// TestIsolationAcrossOwners: each owner's credential takes only the names
-// its principal allows, scoped under its own subject; another owner's
-// credential asking for them gets its own scope, never the other's agent.
-func TestIsolationAcrossOwners(t *testing.T) {
+// TestAdmitUsesPrincipalMachine (spec Reach.tla AgentIdOwned, mutant
+// owner-by-name): the agent a connection registers is always its own
+// machine's ref; a request naming another machine's ref, or its own, is a
+// name that is not a bound service and is refused.
+func TestAdmitUsesPrincipalMachine(t *testing.T) {
+	ma, mb := NewMachineID(), NewMachineID()
 	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"a": {Owner: "alice", Subject: "alice-key", Names: []string{"site", "ci-*"}},
-		"b": {Owner: "bob", Subject: "bob-key", Names: []string{"*"}},
+		"a": {Owner: "alice", Machine: ma, Subject: "alice-key", Names: []string{"site", "ci"}},
+		"b": {Owner: "bob", Machine: mb, Subject: "bob-key", Names: []string{"site"}},
 	}}
 	a := NewAuthenticator("accounts", prov)
+	ref := func(m MachineID, s string) string { return AgentRef{Machine: m, Service: s}.String() }
 	for _, tc := range []struct {
 		token, name, agent string
 		err                error
 	}{
-		{"a", "", "alice-key", nil},
-		{"a", "site", "alice-key.site", nil},
-		{"a", "ci-7", "alice-key.ci-7", nil},
-		{"a", "alice-key.site", "alice-key.site", nil},
-		{"a", "db", "", ErrNameNotAllowed},
-		{"a", "alice-key.db", "", ErrNameNotAllowed},
-		{"b", "site", "bob-key.site", nil},
-		{"b", "alice-key.site", "bob-key.alice-key.site", nil}, // bob's own scope, never alice's agent
+		{"a", "", "", nil}, // not an agent: a client
+		{"a", "site", ref(ma, "site"), nil},
+		{"a", "ci", ref(ma, "ci"), nil},
+		{"b", "site", ref(mb, "site"), nil},
+		{"a", ref(mb, "site"), "", ErrNameNotAllowed}, // another machine's agent
+		{"a", ref(ma, "site"), "", ErrNameNotAllowed}, // a ref is not a service
+		{"b", ref(ma, "site"), "", ErrNameNotAllowed},
 	} {
 		p, err := a.Authenticate(t.Context(), Credential{Token: tc.token, Name: tc.name})
-		if !errors.Is(err, tc.err) || (err == nil && p.AgentID != tc.agent) {
+		if !errors.Is(err, tc.err) || (err == nil && (p.AgentID != tc.agent || p.Machine != prov.tokens[tc.token].Machine)) {
 			t.Fatalf("%s as %q: %q, %v; want %q, %v", tc.token, tc.name, p.AgentID, err, tc.agent, tc.err)
 		}
+	}
+}
+
+// TestAdmitOnlyBoundServices (spec KeyBoundToNames): a machine registers
+// exactly its bound services; no pattern is a wildcard, and a listed name
+// that is not a valid service is refused anyway.
+func TestAdmitOnlyBoundServices(t *testing.T) {
+	long := strings.Repeat("x", MaxServiceLen+1)
+	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
+		"k": {Owner: "o", Subject: "s", Names: []string{"site", "*", "ci-*", "SITE", long}},
+	}}
+	a := NewAuthenticator("accounts", prov)
+	if p, err := a.Authenticate(t.Context(), Credential{Token: "k", Name: "site"}); err != nil || p.AgentID == "" {
+		t.Fatalf("a bound service: %+v, %v", p, err)
+	}
+	for _, name := range []string{"web", "ci-1", "SITE", long, "*", "site.x"} {
+		if p, err := a.Authenticate(t.Context(), Credential{Token: "k", Name: name}); !errors.Is(err, ErrNameNotAllowed) {
+			t.Fatalf("%q: %+v, %v; want ErrNameNotAllowed", name, p, err)
+		}
+	}
+}
+
+// TestUnenrolledKeyRefused: a credential its provider knows but whose
+// principal names no machine (a key from before machines) is refused with
+// the typed ErrMachineNotEnrolled, for a client and an agent alike, and is
+// never held or cached; a malformed machine id is refused too.
+func TestUnenrolledKeyRefused(t *testing.T) {
+	prov := &fakeProvider{name: "accounts", raw: true, tokens: map[string]Principal{
+		"old": {Owner: "o", Subject: "cli-1234", Names: []string{"site"}, CacheTTL: time.Minute},
+		"bad": {Owner: "o", Machine: "m-not-an-id", Subject: "k", Names: []string{"site"}},
+	}}
+	a := NewAuthenticator("accounts", prov)
+	for _, name := range []string{"", "site"} {
+		if p, err := a.Authenticate(t.Context(), Credential{Token: "old", Name: name}); !errors.Is(err, ErrMachineNotEnrolled) || p.Owner != "" {
+			t.Fatalf("unenrolled as %q: %+v, %v; want ErrMachineNotEnrolled", name, p, err)
+		}
+	}
+	if _, err := a.Authenticate(t.Context(), Credential{Token: "old"}); prov.calls != 3 || err == nil {
+		t.Fatalf("an unenrolled answer was cached (%d provider calls)", prov.calls)
+	}
+	if p, err := a.Authenticate(t.Context(), Credential{Token: "bad"}); err == nil {
+		t.Fatalf("a malformed machine id: %+v", p)
 	}
 }
 
@@ -172,8 +217,8 @@ func TestRevokeCutsAndForgets(t *testing.T) {
 func TestRevokeForgetsOnlyThatCredential(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	prov := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"a": {Owner: "o", Subject: "sa", Names: AnyName, CacheTTL: time.Minute},
-		"b": {Owner: "o", Subject: "sb", Names: AnyName, CacheTTL: time.Minute},
+		"a": {Owner: "o", Subject: "sa", Names: []string{"svc"}, CacheTTL: time.Minute},
+		"b": {Owner: "o", Subject: "sb", Names: []string{"svc"}, CacheTTL: time.Minute},
 	}}
 	a := NewAuthenticator("accounts", prov)
 	pa, _ := a.Authenticate(t.Context(), Credential{Token: "a"})
@@ -188,44 +233,33 @@ func TestRevokeForgetsOnlyThatCredential(t *testing.T) {
 	}
 }
 
-// TestOutsideSubjectsAreNamespaced: a provider that does not mint its
-// subjects (an IdP, a CA) cannot state an accounts key's id and take its
-// agent id or the agents under it: its subjects are "<provider>:<subject>"
-// (no minted id holds a ':'); it cannot grant admin; SubjectKey keys what
-// it revokes as the core keys its principals.
-func TestOutsideSubjectsAreNamespaced(t *testing.T) {
+// TestOutsideProvidersAreNamespaced: a provider other than the primary
+// stating the primary's owner and subject gets its own owner namespace and
+// key, cannot grant admin, and SubjectKey keys what it revokes as the core
+// keys its principals.
+func TestOutsideProvidersAreNamespaced(t *testing.T) {
 	accounts := &fakeProvider{name: "accounts", tokens: map[string]Principal{
-		"ka": {Owner: "alice@example.com", Subject: "alice-hub", Names: AnyName},
+		"ka": {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"laptop"}},
 	}}
-	idp := outside{&fakeProvider{name: "idp", tokens: map[string]Principal{
-		"t": {Owner: "alice@example.com", Subject: "alice-hub", Names: AnyName, Scopes: []string{"read", "admin"}},
-	}}}
+	idp := &fakeProvider{name: "idp", tokens: map[string]Principal{
+		"t": {Owner: "alice@example.com", Subject: "alice-hub", Names: []string{"laptop"}, Scopes: []string{"read", "admin"}},
+	}}
 	a := NewAuthenticator("accounts", accounts, idp)
 	pa, _ := a.Authenticate(t.Context(), Credential{Token: "ka", Name: "laptop"})
-	for _, name := range []string{"", "laptop", "alice-hub.laptop"} {
-		p, err := a.Authenticate(t.Context(), Credential{Token: "t", Name: name})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if p.Subject != "idp:alice-hub" || !strings.HasPrefix(p.AgentID, "idp:alice-hub") || p.AgentID == pa.AgentID || p.AgentID == "alice-hub" || strings.HasPrefix(p.AgentID, "alice-hub.") {
-			t.Fatalf("as %q: subject %q, agent %q: an outside provider took an accounts key's agent id", name, p.Subject, p.AgentID)
-		}
-		// The reach rule takes an agent under "<subject>.": neither is
-		// under the other's.
-		if strings.HasPrefix(pa.AgentID, p.Subject+".") || strings.HasPrefix(p.AgentID, pa.Subject+".") {
-			t.Fatalf("agent %q under subject %q, or %q under %q", pa.AgentID, p.Subject, p.AgentID, pa.Subject)
-		}
-		if p.Owner == pa.Owner || p.Admin() {
-			t.Fatalf("owner %q (accounts %q), admin %v", p.Owner, pa.Owner, p.Admin())
-		}
-		if a.SubjectKey("idp", "alice-hub") != p.Key() || a.SubjectKey("accounts", "alice-hub") != pa.Key() || a.SubjectKey("none", "x") != "" {
-			t.Fatalf("SubjectKey does not key the principals: %q %q", p.Key(), pa.Key())
-		}
+	p, err := a.Authenticate(t.Context(), Credential{Token: "t", Name: "laptop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Owner == pa.Owner || p.Admin() || p.Key() == pa.Key() {
+		t.Fatalf("owner %q (accounts %q), admin %v, key %q", p.Owner, pa.Owner, p.Admin(), p.Key())
+	}
+	if a.SubjectKey("idp", "alice-hub") != p.Key() || a.SubjectKey("accounts", "alice-hub") != pa.Key() || a.SubjectKey("none", "x") != "" {
+		t.Fatalf("SubjectKey does not key the principals: %q %q", p.Key(), pa.Key())
 	}
 	defer func() {
 		if recover() == nil {
 			t.Fatal("two providers of one name were taken")
 		}
 	}()
-	NewAuthenticator("accounts", accounts, outside{&fakeProvider{name: "accounts"}})
+	NewAuthenticator("accounts", accounts, &fakeProvider{name: "accounts"})
 }

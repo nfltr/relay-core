@@ -4,112 +4,134 @@
 package session
 
 import (
-	"strings"
-
 	"github.com/nfltr/relay-core/core/identity"
 )
 
-// AgentCredentialReaches is the one ownership rule for a caller holding an
-// agent credential, shared by the HTTP and gRPC entry points. caller is the
-// credential's key base (its agent ID when it has no key), callerOwner the
-// account owning it ("" none). The caller reaches agentID when it is the
-// caller, an agent under "<caller>.", or an agent whose owner (ownerOf) is
-// callerOwner. No caller reaches nothing; an unowned caller reaches only
-// its own namespace.
-func AgentCredentialReaches(caller, callerOwner, agentID string, ownerOf func(string) string) bool {
-	if caller == "" || agentID == "" {
-		return false
+// Action is what a reach decision is asked for.
+type Action uint8
+
+// The actions a principal may take on an agent (cedar's Action::"dial",
+// Action::"list").
+const (
+	Dial Action = iota // open bytes or a call to it: connect, E2EE, A2A, browse, WireGuard, a peer replica's session
+	List               // see it in a listing (presence, my agents, Fleet)
+)
+
+// String is the action as the policy names it.
+func (a Action) String() string {
+	if a == List {
+		return "list"
 	}
-	if agentID == caller || strings.HasPrefix(agentID, caller+".") {
-		return true
-	}
-	return callerOwner != "" && ownerOf != nil && ownerOf(agentID) == callerOwner
+	return "dial"
 }
 
-// agentReaches applies agentCredentialReaches to a gRPC caller (its agent
-// ID and key base).
-func (d *Dispatcher) agentReaches(caller, base, agentID string) (bool, error) {
-	return d.reachScope(caller, base)(agentID)
+// Policy decides whether principal p may act on agent, an agent of p's own
+// account (Reach checked that first). relay-server's is cedar-go over the
+// account's groups and rules, keyed by its revision; relay-core holds none
+// of its own. The policy reads p.Machine's group from its own snapshot (a
+// move takes effect at the revision that made it), never from p.Group. An error is the policy's unavailability (the caller answers
+// it as retryable), never "no".
+type Policy interface {
+	Allowed(p identity.Principal, agent identity.AgentRef, a Action) (bool, error)
 }
 
-// ownerReaches is AgentCredentialReaches with the owners OwnerForAgent
-// reads: false with the directory's error (directory.ErrUnavailable) when
-// an owner it needed could not be read, so a caller answers the relay's
-// unavailability, never "not found". callerOwnerErr is the error reading
-// the caller's own owner.
-func (d *Dispatcher) ownerReaches(caller, callerOwner string, callerOwnerErr error, agentID string) (bool, error) {
-	var failed error
-	ok := AgentCredentialReaches(caller, callerOwner, agentID, func(id string) string {
-		owner, err := d.OwnerForAgent(id)
-		if err != nil {
-			failed = err
-		}
-		return owner
-	})
-	switch {
-	case ok:
-		return true, nil
-	case failed != nil:
-		return false, failed
-	}
-	return false, callerOwnerErr
-}
-
-// reachScope is agentReaches for one caller over many agents: the caller's
-// owner (its principal's, ownerForAgent) is resolved once. Under
-// security.trust_loopback (DEV ONLY) every authenticated caller is the one
-// local tenant, as in agentTenantScope.
-func (d *Dispatcher) reachScope(caller, base string) func(agentID string) (bool, error) {
-	if caller == "" {
-		return func(string) (bool, error) { return false, nil }
+// Reach is the one reach decision (relay-server spec/Reach.tla Allowed):
+// every dial path and every listing asks it. p reaches agentID when it is
+// an agent ref of p's own account (its owner: the principal it connected
+// with here, else its directory record) and the Policy allows the action.
+// A different account is refused before any policy is asked; no Policy
+// refuses everything (fail closed, no legacy pass-through). An owner the
+// directory could not read is an error, not "no". Under SingleTenant (DEV
+// ONLY) every authenticated principal reaches every agent.
+func (d *Dispatcher) Reach(p identity.Principal, agentID string, a Action) (bool, error) {
+	if p.Owner == "" && p.Subject == "" {
+		return false, nil
 	}
 	if d.SingleTenant {
-		return func(string) (bool, error) { return true, nil }
+		return true, nil
 	}
-	if base == "" {
-		base = caller
+	ref, err := identity.ParseAgentRef(agentID)
+	if p.Machine == "" || err != nil {
+		return false, nil
 	}
-	owner, err := d.OwnerForAgent(caller)
-	return func(agentID string) (bool, error) { return d.ownerReaches(base, owner, err, agentID) }
+	owner, err := d.agentOwner(ref, agentID)
+	if err != nil {
+		return false, err
+	}
+	if owner == "" || owner != p.Owner || d.Policy == nil {
+		return false, nil
+	}
+	return d.Policy.Allowed(p, ref, a)
 }
 
-// PrincipalReaches is the access rule for a caller holding the credential
-// p on any entry point that opens bytes to an agent (HTTP /connect and
-// data sessions, as the gRPC paths through agentReaches): the same agent,
-// an agent under p's subject, or an agent of p's owner (OwnerForAgent:
-// the principal it connected with here, else its directory record, so an
-// agent on another replica or of an outside provider resolves too). The
-// relay's in-process agents are never reached this way. An owner the
-// directory could not read is an error (ownerReaches), not "no".
-func (d *Dispatcher) PrincipalReaches(p identity.Principal) func(agentID string) (bool, error) {
-	base := p.Subject // the key base; a principal the relay made for an agent has only its agent ID
-	if base == "" {
-		base = p.AgentID
+// agentOwner is the account of agent ref's machine: MachineOwner's, else
+// the directory's record of the agent.
+func (d *Dispatcher) agentOwner(ref identity.AgentRef, agentID string) (string, error) {
+	if d.MachineOwner != nil {
+		if owner, err := d.MachineOwner(ref.Machine); err != nil || owner != "" {
+			return owner, err
+		}
 	}
-	switch {
-	case base == "":
-		return func(string) (bool, error) { return false, nil }
-	case d.SingleTenant:
-		return func(agentID string) (bool, error) { return !d.IsInternalAgent(agentID), nil }
-	}
+	return d.OwnerForAgent(agentID)
+}
+
+// DialReaches is Reach(p, ·, Dial) for the entry points that open bytes to
+// an agent (HTTP /connect and data sessions, the direct agent subdomain,
+// WireGuard exits): the relay's in-process agents are never reached this
+// way.
+func (d *Dispatcher) DialReaches(p identity.Principal) func(agentID string) (bool, error) {
 	return func(agentID string) (bool, error) {
 		if d.IsInternalAgent(agentID) {
 			return false, nil
 		}
-		return d.ownerReaches(base, p.Owner, nil, agentID)
+		return d.Reach(p, agentID, Dial)
 	}
 }
 
-// A2AReaches is agentReaches for agent-to-agent traffic, which also carries
-// relay plumbing: an authenticated agent may reach the relay's internal
-// agents, and an internal agent registered in this process may reach any
-// agent.
-func (d *Dispatcher) A2AReaches(caller, base, target string) (bool, error) {
-	if caller == "" {
+// agentPrincipal is the principal agent connected with, as far as any
+// replica can tell (its machine from the ref, its owner from its
+// connection here or its directory record): the source of an A2A call.
+// ok is false for an agent with no known owner.
+func (d *Dispatcher) agentPrincipal(agentID string) (identity.Principal, bool, error) {
+	ref, err := identity.ParseAgentRef(agentID)
+	if err != nil {
+		return identity.Principal{}, false, nil
+	}
+	owner, err := d.OwnerForAgent(agentID)
+	if err != nil || owner == "" {
+		return identity.Principal{}, false, err
+	}
+	return identity.Principal{Owner: owner, Machine: ref.Machine, Subject: agentID, AgentID: agentID}, true, nil
+}
+
+// A2AReaches is Reach for agent-to-agent traffic, which also carries relay
+// plumbing: an authenticated agent may reach the relay's internal agents,
+// and an internal agent registered in this process may reach any agent.
+// The replica that forwards a call and the one that delivers it
+// (RelayTunnel) both ask it.
+func (d *Dispatcher) A2AReaches(source, target string) (bool, error) {
+	if source == "" {
 		return false, nil
 	}
-	if _, internal := d.internalAgents.Load(caller); internal || d.IsInternalAgent(target) {
+	if d.SingleTenant {
 		return true, nil
 	}
-	return d.agentReaches(caller, base, target)
+	if d.IsInternalAgent(source) || d.IsInternalAgent(target) {
+		return true, nil
+	}
+	p, ok, err := d.agentPrincipal(source)
+	if !ok {
+		return false, err
+	}
+	return d.Reach(p, target, Dial)
+}
+
+// AccountIsOneGroup is the Policy of a relay without groups (the core's own
+// composition, compose.Serve): every machine of an account reaches every
+// agent of it. A relay with groups (relay-server) sets its own.
+type AccountIsOneGroup struct{}
+
+// Allowed implements Policy: Reach already checked the account.
+func (AccountIsOneGroup) Allowed(identity.Principal, identity.AgentRef, Action) (bool, error) {
+	return true, nil
 }

@@ -32,7 +32,7 @@ func registerEchoAgent(ctx context.Context, d *Dispatcher, agentID string) {
 	ticker := time.NewTicker(time.Hour)
 	grpcStream := NewGRPCStream(agentID, es, ctx, heartbeats, ticker)
 	d.Upstreams.Store(agentID, grpcStream)
-	d.RegisterAgent(agentID, "", "", "")
+	d.RegisterAgent(agentID, "", "")
 	go func() { _ = d.receiveFromGRPCAgent(ctx, grpcStream) }()
 }
 

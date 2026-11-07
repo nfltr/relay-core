@@ -108,6 +108,10 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		relaystatus.WriteHTTP(w, http.StatusPaymentRequired, codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, err.Error())
 		return
 	}
+	if errors.Is(err, identity.ErrMachineNotEnrolled) {
+		relaystatus.WriteHTTP(w, http.StatusUnauthorized, codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED, err.Error()) // says how to enrol
+		return
+	}
 	if caller.Provider == "" {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return

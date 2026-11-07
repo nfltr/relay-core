@@ -243,7 +243,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 			ConnectedAt:  agentStream.connectedAt,
 		})
 	}
-	d.RegisterAgent(agentID, keyBase, agentStream.account, agentStream.tlsFingerprint)
+	d.RegisterAgent(agentID, agentStream.account, agentStream.tlsFingerprint)
 	registered = agentStream // its teardown: the deferred close(ended) above
 	metrics.AgentUp(agentStream.account, agentID)
 	// The accept goes out only now: an agent that hears it is connected

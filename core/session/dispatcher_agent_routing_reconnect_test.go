@@ -132,12 +132,12 @@ func TestAgentTunnel_ReconnectKeepsReplacementUpstreamState(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		current, ok := d.Upstreams.Load(sourceAgentID)
-		cachedKeyBase, cached := d.AgentKeyBase.Load(sourceAgentID)
-		if ok && current.Context() != nil && current.Context().Err() == nil && cached && cachedKeyBase == keyBase {
+		cachedOwner, cached := d.AgentOwners.Load(sourceAgentID)
+		if ok && current.Context() != nil && current.Context().Err() == nil && cached && cachedOwner == "keys:"+keyBase {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("replacement planner upstream was not preserved after reconnect: upstream_ok=%t key_base_ok=%t key_base=%q", ok, cached, cachedKeyBase)
+			t.Fatalf("replacement planner upstream was not preserved after reconnect: upstream_ok=%t owner_ok=%t owner=%q", ok, cached, cachedOwner)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -79,25 +79,10 @@ func TestNewDispatcherConfig(t *testing.T) {
 	}
 }
 
-func TestDispatcher_IsAgentConnected(t *testing.T) {
-	d, cancel := newTestDispatcher(t)
-	defer cancel()
-	defer viper.Reset()
-
-	if d.IsAgentConnected("agentID-1") {
-		t.Fatal("should not be connected")
-	}
-
-	// Store an agent
-	heartbeats := make(chan proto.Message, 1)
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	mock := &mockHTTPStreamer{}
-	d.Agents.Store("agentID-1", NewHTTPStream("agentID-1", mock, nil, heartbeats, ticker))
-
-	if !d.IsAgentConnected("agentID-1") {
-		t.Fatal("should be connected")
-	}
+// agentConnected reports whether agentID has an HTTP stream here.
+func agentConnected(d *Dispatcher, agentID string) bool {
+	_, ok := d.Agents.Load(agentID)
+	return ok
 }
 
 func TestDispatcher_GetAllConnectedAgents(t *testing.T) {

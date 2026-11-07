@@ -17,11 +17,12 @@ import (
 type revokeAfterRead struct {
 	Provider
 	km *KeyManager
+	id *identity.MachineID
 }
 
 func (r revokeAfterRead) Authenticate(ctx context.Context, c identity.Credential) (identity.Principal, error) {
 	p, err := r.Provider.Authenticate(ctx, c)
-	_ = r.km.Revoke(testAgentID)
+	_ = r.km.Revoke(*r.id)
 	return p, err
 }
 
@@ -31,11 +32,11 @@ func (r revokeAfterRead) Authenticate(ctx context.Context, c identity.Credential
 func TestKeyFileRevocationDuringAuthenticate(t *testing.T) {
 	store := NewAPIKeyStore()
 	km := NewKeyManager(filepath.Join(t.TempDir(), "api-keys"), store, testKeyManagerLogger())
-	resp, err := km.Generate(testAgentID)
+	resp, err := km.Generate("agent-1", []string{"svc"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := identity.NewAuthenticator(ProviderName, revokeAfterRead{Provider{Store: store}, km})
+	a := identity.NewAuthenticator(ProviderName, revokeAfterRead{Provider{Store: store}, km, &resp.MachineID})
 	km.OnRevoke(func(id string) { a.Revoke(identity.Key(ProviderName, id)) })
 
 	p, err := a.Authenticate(t.Context(), identity.Credential{Token: resp.APIKey})

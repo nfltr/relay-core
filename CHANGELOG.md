@@ -27,6 +27,32 @@ changes listed (from the first tag on).
 
 ### Changed (breaking)
 
+- Machine identity (TENANTS2, nfltr docs/decisions/tenants-reach-policy-2026-11-07.md;
+  relay-server spec/Reach.tla, spec/MachineAuth.tla). An agent is its
+  agent ref `<machine id>-<service>` (`identity.AgentRef`,
+  `identity.MachineID`: `m-` + 26 base32 characters); `identity.Principal`
+  gains `Machine` and `Group`, its `Names` are exactly the machine's bound
+  services, and a credential whose provider states no machine is refused
+  with `identity.ErrMachineNotEnrolled` (gRPC Unauthenticated and HTTP 401
+  with reason `ERROR_REASON_MACHINE_NOT_ENROLLED`). Removed with no
+  replacement: `identity.AnyName`, the `Minting` interface, the
+  `<provider>:<subject>` agent id prefix, `Dispatcher.AgentKeyBase`,
+  `IsAgentConnected`, `PrincipalReaches`, `AgentCredentialReaches` and
+  the A2A short-name resolution. Migration: providers state `Machine`;
+  callers name agents by ref.
+- One reach decision: `Dispatcher.Reach(p, agentID, Action)` (the
+  account, then the injected `session.Policy`; no policy refuses, fail
+  closed), asked by connect, A2A (the forwarding and the delivering
+  replica), WireGuard exits and the serving replica's `ServeLinkTCP`
+  (`TCPEndpoint.Caller`). `compose.Serve` sets `session.AccountIsOneGroup`.
+  `RegisterAgent` drops its key base argument. A principal's session opens
+  at the agent with its caller (`pb.TCPData.Caller`).
+- `keyfile` is the self-hosted machine store: each line is
+  `<machine id> <name> <service,...> sha256:<hex>` (`keyfile.Machine`,
+  `Machine.Line`); `Add`, `Remove`, `Validate`, `Generate` and `Revoke`
+  take or return machines; the old `<agent id>:<key>` lines are refused.
+  Migration: re-add each machine.
+
 - A share revocation names the share's id (`sharecode.ID`), never its code
   (a secret the issuer's revocation journal and the relays' revocation bus
   carried): `core/frontend.(*CachedGrants).ForgetID(id)` and

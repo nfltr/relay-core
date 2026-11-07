@@ -24,7 +24,14 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const testKey = "alice:rpc_lr11testkeyaaaaaaaaaaaaaaaaaaaaaaaa"
+// testKey is NFLTR_API_KEY: machine "alice" (testMachine) serving "web",
+// its key testSecret.
+const (
+	testMachine = "m-aaaaaaaaaaaaaaaaaaaaaaaaae"
+	testSecret  = "rpc_lr11testkeyaaaaaaaaaaaaaaaaaaaaaaaa"
+	testKey     = testMachine + " alice web " + testSecret
+	testAgent   = testMachine + "-web" // the agent ref of its "web"
+)
 
 func TestMain(m *testing.M) {
 	if os.Getenv(childEnv) == "1" { // a test runs this binary as nfltr-relay-core (core_e2e_test.go)
@@ -83,7 +90,7 @@ func TestCoreServesAgents(t *testing.T) {
 		return metadata.NewOutgoingContext(t.Context(), metadata.Pairs("x-api-key", key, "x-agent-id", "web"))
 	}
 
-	agent, err := client.ConnectTCP(keyed(testKey[len("alice:"):]))
+	agent, err := client.ConnectTCP(keyed(testSecret))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -137,6 +137,16 @@ func (d *Dispatcher) RelayTunnel(incomingStream relayTunnelStream) (retErr error
 	if err := d.authorizeRelayTunnelCaller(incomingStreamCtx); err != nil {
 		return err
 	}
+	// The delivering replica re-checks an A2A call with its own policy
+	// (the forwarding one asked too): refused as an agent not connected.
+	// Guard: TestReachEveryPath.
+	if targetAgentID != "" {
+		if ok, err := d.A2AReaches(firstMessage.Routing.AgentId, targetAgentID); err != nil {
+			return status.Error(codes.Unavailable, "the relay's directory is unavailable")
+		} else if !ok {
+			return status.Error(codes.NotFound, "agent not connected")
+		}
+	}
 
 	// find the agent stream using the agentID
 	nextStream, agentConnectedToThisPod := d.Upstreams.Load(agentID)
@@ -486,7 +496,7 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 	// can store them in Redis.
 	var agentLabels map[string]string
 	var agentCapabilities []string
-	var agentTLSFingerprint, keyBase string
+	var agentTLSFingerprint string
 	{
 		md := incomingKeys(stream.Context(), agentwire.LabelsKey, "x-agent-capabilities", agentInstanceHeader,
 			"x-tls-fingerprint")
@@ -501,10 +511,6 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 		if len(agentCapabilities) > 0 {
 			d.Logger.Info("agent advertised capabilities", "AgentID", agentID, "capabilities", agentCapabilities)
 		}
-		// The pre-scoped key identity, for A2A target resolution and
-		// ownership; registerAgent records it once this session holds the
-		// agent.
-		keyBase = keyBaseOf(stream.Context())
 		// E2EE: read TLS certificate fingerprint from agent metadata.
 		if vals := md.Get("x-tls-fingerprint"); len(vals) > 0 && vals[0] != "" {
 			agentTLSFingerprint = vals[0]
@@ -573,7 +579,7 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 			ConnectedAt:  agentStream.connectedAt,
 		})
 	}
-	d.RegisterAgent(agentID, keyBase, agentStream.account, agentStream.tlsFingerprint)
+	d.RegisterAgent(agentID, agentStream.account, agentStream.tlsFingerprint)
 	if ephemeral {
 		d.ephemeralMu.Unlock()
 	}

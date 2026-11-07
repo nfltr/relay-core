@@ -41,3 +41,21 @@ func TestBalanceExhaustedTypedOnConnect(t *testing.T) {
 		t.Fatalf("the cut's abort = %v, want reason ERROR_REASON_BALANCE_EXHAUSTED", a)
 	}
 }
+
+// TestUnenrolledKeyRefusedOnConnect: a credential naming no enrolled
+// machine is answered 401 with the enrolment message, and no session.
+func TestUnenrolledKeyRefusedOnConnect(t *testing.T) {
+	f := &Frontend{
+		Config: func() Config { return Config{Enabled: true} },
+		Caller: func(*http.Request) (identity.Principal, error) {
+			return identity.Principal{}, identity.ErrMachineNotEnrolled
+		},
+	}
+	r := httptest.NewRequest(http.MethodGet, dataplane.UpgradePath, nil)
+	r.Header.Set(agentwire.GenerationKey, "2")
+	w := httptest.NewRecorder()
+	f.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED.String()) {
+		t.Fatalf("answered %d %q, want 401 machine_not_enrolled", w.Code, w.Body.String())
+	}
+}

@@ -29,8 +29,6 @@ func agentStateLeft(d *Dispatcher, id string) []string {
 	has("Upstreams", ok)
 	_, ok = d.AgentOwners.Load(id)
 	has("AgentOwners", ok)
-	_, ok = d.AgentKeyBase.Load(id)
-	has("AgentKeyBase", ok)
 	_, ok = d.a2aSessions.Load(id)
 	has("a2aSessions", ok)
 	_, ok = d.movedAway.Load(id)
@@ -69,7 +67,7 @@ func TestAgentThatLeftLeavesNoTopic(t *testing.T) {
 			t.Fatal(err)
 		}
 		stop() // the agent goes
-		for deadline := time.Now().Add(5 * time.Second); d.IsAgentConnected(id); time.Sleep(5 * time.Millisecond) {
+		for deadline := time.Now().Add(5 * time.Second); agentConnected(d, id); time.Sleep(5 * time.Millisecond) {
 			if time.Now().After(deadline) {
 				t.Fatalf("%s: session never ended", id)
 			}

@@ -125,7 +125,7 @@ func serveAgent(t *testing.T, grpcAddr string, relayTLS *tls.Config, opts ...age
 		_, _ = io.WriteString(w, "web saw "+r.URL.Path+" key="+r.Header.Get("X-API-Key"))
 	}))
 	t.Cleanup(backend.Close)
-	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "web", APIKey: testKey[len("alice:"):], Retries: 1,
+	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "web", APIKey: testSecret, Retries: 1,
 		Routes: []agent.Route{{Backend: backend.URL}}, TCPTunnel: true, TLSConfig: relayTLS, TCPForwardAddr: echo.Addr().String(),
 		Logger: slog.New(slog.DiscardHandler)}, opts...)
 	if err := a.Connect(t.Context()); err != nil {
@@ -183,7 +183,7 @@ func echoed(c io.ReadWriter, msg []byte) error {
 func TestCoreProcessCarriesSessionsAndDrains(t *testing.T) {
 	p := startCoreProcess(t)
 	serveAgent(t, p.grpc, nil)
-	key := testKey[len("alice:"):]
+	key := testSecret
 
 	if _, err := dialData(t, p.proxy, "rpc_unknownkeyaaaaaaaaaaaaaaaaaaaaaaaaaaa"); func() bool {
 		var nu *dataplane.NoUpgradeError
@@ -198,7 +198,7 @@ func TestCoreProcessCarriesSessionsAndDrains(t *testing.T) {
 	var s *dataplane.Session
 	deadline := time.Now().Add(15 * time.Second)
 	for { // the agent registers its TCP stream asynchronously
-		if s, err = m.Open(&pb.TCPData{AgentId: "web", TargetAddr: "22"}); err == nil {
+		if s, err = m.Open(&pb.TCPData{AgentId: testAgent, TargetAddr: "22"}); err == nil {
 			if err = echoed(s, []byte("hello through the core")); err == nil {
 				break
 			}
@@ -213,7 +213,7 @@ func TestCoreProcessCarriesSessionsAndDrains(t *testing.T) {
 	if err := echoed(s, big); err != nil {
 		t.Fatalf("1 MiB echo: %v", err)
 	}
-	if ghost, err := m.Open(&pb.TCPData{AgentId: "ghost", TargetAddr: "22"}); err == nil {
+	if ghost, err := m.Open(&pb.TCPData{AgentId: testMachine + "-ghost", TargetAddr: "22"}); err == nil {
 		_, _ = ghost.Write([]byte("?"))
 		if n, err := ghost.Read(make([]byte, 8)); n != 0 || !errors.Is(err, link.ErrOpenRefused) {
 			t.Fatalf("an unknown agent's session read %d, %v; want the relay's refusal", n, err)
@@ -225,7 +225,7 @@ func TestCoreProcessCarriesSessionsAndDrains(t *testing.T) {
 	// frontend.CoreHost); the relay's key never reaches the agent.
 	req, _ := http.NewRequest(http.MethodGet, "http://"+p.proxy+"/hello", nil)
 	req.Header.Set("X-API-Key", key)
-	req.Header.Set("X-Agent-Id", "web")
+	req.Header.Set("X-Agent-Id", "web") // a service of the key's own machine
 	if res, err := http.DefaultClient.Do(req); err != nil {
 		t.Fatal(err)
 	} else {
@@ -247,7 +247,7 @@ func TestCoreProcessCarriesSessionsAndDrains(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer nc.Close() //nolint:errcheck
-	_, _ = nc.Write([]byte("GET /connect/web/22 HTTP/1.1\r\nHost: relay\r\nX-API-Key: " + key + "\r\n" + agentwire.GenerationKey + ": " + strconv.Itoa(agentwire.Generation) + "\r\n\r\n"))
+	_, _ = nc.Write([]byte("GET /connect/" + testAgent + "/22 HTTP/1.1\r\nHost: relay\r\nX-API-Key: " + key + "\r\n" + agentwire.GenerationKey + ": " + strconv.Itoa(agentwire.Generation) + "\r\n\r\n"))
 	br := bufio.NewReader(nc)
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, " 200 ") {
@@ -269,7 +269,7 @@ func TestCoreProcessCarriesSessionsAndDrains(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "GOAWAY on the open data connection", func() bool {
-		o, err := m.Open(&pb.TCPData{AgentId: "web", TargetAddr: "22"})
+		o, err := m.Open(&pb.TCPData{AgentId: testAgent, TargetAddr: "22"})
 		if err == nil {
 			_ = o.Close()
 		}

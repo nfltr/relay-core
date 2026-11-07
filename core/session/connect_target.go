@@ -27,11 +27,10 @@ type TargetRules struct {
 }
 
 // ResolveTarget is the core's access rule and target resolution for a
-// caller whose bare agent names resolve under scopePrefix and who reaches
-// what reaches says: ConnectTarget, then the operator's E2EE policy. It
-// refuses with a *Refusal.
-func (d *Dispatcher) ResolveTarget(ctx context.Context, scopePrefix string, reaches func(string) (bool, error), t Target, rules TargetRules) (string, string, error) {
-	agentID, targetAddr, refusal := d.ConnectTarget(ctx, reaches, scopePrefix, t.Agent, t.Service, rules)
+// caller who reaches what reaches says: ConnectTarget, then the operator's
+// E2EE policy. It refuses with a *Refusal.
+func (d *Dispatcher) ResolveTarget(ctx context.Context, reaches func(string) (bool, error), t Target, rules TargetRules) (string, string, error) {
+	agentID, targetAddr, refusal := d.ConnectTarget(ctx, reaches, t.Agent, t.Service, rules)
 	if refusal != nil {
 		return "", "", refusal
 	}
@@ -42,22 +41,22 @@ func (d *Dispatcher) ResolveTarget(ctx context.Context, scopePrefix string, reac
 }
 
 // KeyReach is Core.Reach for callers holding a credential (a principal of
-// an identity provider): they reach their own agents (PrincipalReaches),
-// bare names resolving under their subject. No principal reaches nothing.
+// an identity provider): they reach the agents Reach allows them to dial
+// (DialReaches), named by agent ref. No principal reaches nothing.
 func (d *Dispatcher) KeyReach(rules func() TargetRules) Reach {
 	return func(ctx context.Context, caller identity.Principal, t Target) (string, string, error) {
 		if caller.Provider == "" {
 			return "", "", &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED, Msg: "authentication required", AgentID: t.Agent}
 		}
-		return d.ResolveTarget(ctx, caller.Subject, d.PrincipalReaches(caller), t, rules())
+		return d.ResolveTarget(ctx, d.DialReaches(caller), t, rules())
 	}
 }
 
 // ConnectTarget resolves a session to agentID's port or service for a
-// caller (reaches, scopePrefix): the scoped agent ID and the target
-// address, or the refusal the caller gets. Every client session path runs
-// it: WebSocket, HTTP/2 stream and data connection session.
-func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bool, error), scopePrefix, agentID, port string, rules TargetRules) (string, string, *Refusal) {
+// caller (reaches): the agent ref and the target address, or the refusal
+// the caller gets. Every client session path runs it: WebSocket, HTTP/2
+// stream and data connection session.
+func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bool, error), agentID, port string, rules TargetRules) (string, string, *Refusal) {
 	refuse := func(reason relayv1.ErrorReason, msg string) (string, string, *Refusal) {
 		return "", "", &Refusal{Reason: reason, Msg: msg, AgentID: agentID}
 	}
@@ -65,14 +64,10 @@ func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bo
 	if agentID == "" || strings.Contains(agentID, "..") || strings.ContainsAny(agentID, "/\\") {
 		return refuse(relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT, "invalid agent ID")
 	}
-	// Only the agent's owner reaches it; anyone else gets the answer a
-	// nonexistent agent gets. An owner the directory could not read is
-	// the relay's unavailability, not the agent's absence.
-	agentID, err := d.scopedConnectAgent(reaches, scopePrefix, agentID)
-	ok := false
-	if err == nil {
-		ok, err = reaches(agentID)
-	}
+	// Only a principal Reach allows reaches it; anyone else gets the
+	// answer a nonexistent agent gets. An owner the directory could not
+	// read is the relay's unavailability, not the agent's absence.
+	ok, err := reaches(agentID)
 	switch {
 	case err != nil:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_DIRECTORY_UNAVAILABLE, "the relay's directory is unavailable")
@@ -113,29 +108,6 @@ func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bo
 		}
 	}
 	return agentID, targetAddr, nil
-}
-
-// scopedConnectAgent resolves the agent name a key's session names. A
-// short name is scoped to the key's own namespace: `nfltr ssh-proxy
-// --name raspberry-pi` finds "alice.raspberry-pi" registered with the same
-// key, so the caller need not spell the prefix. The key's namespace wins
-// while that agent is connected here; otherwise a full ID the caller's
-// account owns (an agent of another key of the same account) is taken as
-// is. Neither: the scoped name, which the ownership check then answers.
-// No scoping for a session cookie (scopePrefix "") or a name already in
-// the key's namespace.
-func (d *Dispatcher) scopedConnectAgent(reaches func(string) (bool, error), scopePrefix, agentID string) (string, error) {
-	if scopePrefix == "" || agentID == scopePrefix || strings.HasPrefix(agentID, scopePrefix+".") {
-		return agentID, nil
-	}
-	scoped := scopePrefix + "." + agentID
-	if d != nil && d.IsAgentConnected(scoped) {
-		return scoped, nil
-	}
-	if ok, err := reaches(agentID); ok || err != nil {
-		return agentID, err
-	}
-	return scoped, nil
 }
 
 // connectService resolves the owner's session to agentID's service: the

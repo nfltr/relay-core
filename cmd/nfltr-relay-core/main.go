@@ -45,7 +45,9 @@ import (
 	"syscall"
 
 	"github.com/nfltr/relay-core/compose"
+	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/internal/platform/logging"
+	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/buildinfo"
 	"github.com/nfltr/relay-core/platform/config"
 	_ "github.com/nfltr/relay-core/platform/nondumpable"
@@ -97,8 +99,9 @@ const zeroKeyFile = "nfltr-relay-core.keys"
 
 // zeroConfig makes the defaults of `serve` without --from-env: loopback
 // ports, TCP sessions on, and the key file zeroKeyFile, created 0600 with
-// one generated key (plaintext, so a local agent and client can read it)
-// when it does not exist. The environment still overrides each default;
+// one generated machine "quickstart" serving "web" (its key also in a
+// comment, so a local agent and client can read it) when it does not
+// exist. The environment still overrides each default;
 // the key file then is the one security.apikey.file names.
 func zeroConfig(logger *slog.Logger) error {
 	viper.SetDefault("listen.address", "127.0.0.1")
@@ -109,15 +112,17 @@ func zeroConfig(logger *slog.Logger) error {
 	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
 		return err // it exists (nil), or it cannot be read
 	}
-	key := make([]byte, 24)
-	if _, err := rand.Read(key); err != nil {
+	secret := make([]byte, 24)
+	if _, err := rand.Read(secret); err != nil {
 		return err
 	}
+	key := "rpc_" + hex.EncodeToString(secret)
+	m := keyfile.Machine{ID: identity.NewMachineID(), Name: "quickstart", Services: []string{"web"}}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- the operator's key file path
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f, "# nfltr-relay-core zero-config key: <agent id>:<key>; agents and clients send the key\nquickstart:rpc_%s\n", hex.EncodeToString(key))
+	_, err = fmt.Fprintf(f, "# nfltr-relay-core zero-config machine %s (%s): agents and clients send its key\n# key: %s\n%s\n", m.Name, m.ID, key, m.Line(key))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

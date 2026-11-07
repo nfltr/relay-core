@@ -23,22 +23,25 @@ import (
 type Credential struct {
 	Token     string              // x-api-key, or Authorization: Bearer|ApiKey
 	PeerCerts []*x509.Certificate // the TLS client chain, when no Token
-	Name      string              // x-agent-id: the agent name asked for ("" none)
+	Name      string              // x-agent-id: the service asked for ("" none: not an agent)
 	Labels    map[string]string   // the agent's labels (a fleet token matches them)
 }
 
-// Principal is what the core keys every decision on. A provider fills
-// Owner, Subject, Names, Scopes, NotAfter and CacheTTL; the core namespaces
-// Owner and sets Provider and AgentID.
+// Principal is what the core keys every decision on: a machine of an
+// account. A provider fills Owner, Machine, Group, Subject, Names, Scopes,
+// NotAfter and CacheTTL from its machine store; the core namespaces Owner
+// and sets Provider and AgentID.
 type Principal struct {
 	Provider string        // the provider that authenticated the credential
-	Owner    string        // who owns what the credential opens, namespaced by Provider
-	Subject  string        // the credential's own id: a minted key's agent id or a token's id as stated (Minting), else "<provider>:<subject>"
-	Names    []string      // agent names it may take under Subject: "*" any, "p*" a prefix, else exact
+	Owner    string        // the machine's account, namespaced by Provider
+	Machine  MachineID     // the machine, from its row (never from the request)
+	Group    string        // the machine's group in its account (reach policy data)
+	Subject  string        // the credential's own id (a key's, a certificate's): what Key and Revoke name
+	Names    []string      // the services the machine is bound to: exactly the agents it may register
 	Scopes   []string      // opaque to the core but "admin"
 	NotAfter time.Time     // its connections end then; zero: until revoked
 	CacheTTL time.Duration // how long the core may reuse this answer (0: not at all)
-	AgentID  string        // the agent id the connection takes: Subject, or "<Subject>.<Name>"
+	AgentID  string        // the agent the connection registers: AgentRef{Machine, Name}; "" when it names no service
 	key      string        // Key(), set by the core
 	gen      uint64        // Live's generation before the read: Hold cuts it if revoked since
 }
@@ -70,15 +73,6 @@ type Provider interface {
 	// caller retries); any other error refuses it.
 	Authenticate(ctx context.Context, c Credential) (Principal, error)
 }
-
-// Minting is a provider whose subjects are credential ids this relay
-// minted (its key file, its accounts store): they are agent ids as they
-// are. Every other provider's subjects are names an outside authority
-// chose (a CA, an IdP); the core makes them "<provider>:<subject>", which
-// no minted id (the core refuses a ':' in a subject) and no other
-// provider's can equal, so no provider can take another's agent ids or
-// reach the agents under them ("<subject>.<name>").
-type Minting interface{ MintsSubjects() }
 
 // Revoker is a provider that revokes credentials itself (a reloaded CA
 // bundle or revocation list): it calls the function the relay sets with
@@ -124,9 +118,6 @@ type cacheKey struct {
 	name   string
 	labels string
 }
-
-// AnyName is the Names of a principal that may take any agent name.
-var AnyName = []string{"*"}
 
 // Authenticator is the core's provider chain: the first provider that
 // knows a credential decides. It namespaces owners, enforces the names a
@@ -210,34 +201,47 @@ func (a *Authenticator) Authenticate(ctx context.Context, c Credential) (Princip
 // admit applies the core's rules to a provider's answer.
 func (a *Authenticator) admit(prov Provider, p Principal, name string, now time.Time) (Principal, error) {
 	provider := prov.Name()
-	if p.Subject == "" || p.Owner == "" || strings.ContainsRune(p.Owner, ':') || strings.ContainsRune(p.Subject, ':') {
-		return Principal{}, fmt.Errorf("identity: provider %s stated owner %q, subject %q: want both, without ':'", provider, p.Owner, p.Subject)
+	if p.Subject == "" || p.Owner == "" || strings.ContainsRune(p.Owner, ':') {
+		return Principal{}, fmt.Errorf("identity: provider %s stated owner %q, subject %q: want both, the owner without ':'", provider, p.Owner, p.Subject)
+	}
+	if p.Machine == "" {
+		return Principal{}, ErrMachineNotEnrolled
+	}
+	if _, err := ParseMachineID(string(p.Machine)); err != nil {
+		return Principal{}, fmt.Errorf("identity: provider %s: %w", provider, err)
 	}
 	if !p.NotAfter.IsZero() && !now.Before(p.NotAfter) {
 		return Principal{}, ErrExpired
 	}
-	p.Subject = subjectOf(prov, p.Subject)
-	if name != "" && name != p.Subject && !nameAllowed(p.Names, strings.TrimPrefix(name, p.Subject+".")) {
+	// The agent is always this machine's: a name is one of its bound
+	// services, never a ref (spec Reach.tla KeyBoundToNames, AgentIdOwned).
+	if name != "" && (!ValidService(name) || !slices.Contains(p.Names, name)) {
 		return Principal{}, ErrNameNotAllowed
 	}
 	p.Provider = provider
-	if provider != a.primary {
-		p.Owner = provider + ":" + p.Owner
+	if p.Owner = a.Owner(provider, p.Owner); provider != a.primary {
 		if p.Admin() {
 			p.Scopes = slices.DeleteFunc(slices.Clone(p.Scopes), func(s string) bool { return s == "admin" })
 		}
 	}
-	p.AgentID = scopedName(p.Subject, name)
+	p.AgentID = ""
+	if name != "" {
+		p.AgentID = AgentRef{Machine: p.Machine, Service: name}.String()
+	}
 	p.key = Key(provider, p.Subject)
 	return p, nil
 }
 
-// subjectOf is a provider's subject as the core keys it.
-func subjectOf(prov Provider, subject string) string {
-	if _, minted := prov.(Minting); minted {
-		return subject
+// Owner is the owner form principals carry for an owner provider states:
+// a provider other than the primary's is qualified "<provider>:<owner>",
+// so its accounts never meet the primary's. Every place that names a
+// principal's account itself (a machine's account, a site host's owner)
+// uses this one form.
+func (a *Authenticator) Owner(provider, owner string) string {
+	if a == nil || provider == a.primary {
+		return owner
 	}
-	return prov.Name() + ":" + subject
+	return provider + ":" + owner
 }
 
 // SubjectKey is Key for a subject as the named provider states it (a
@@ -245,32 +249,10 @@ func subjectOf(prov Provider, subject string) string {
 func (a *Authenticator) SubjectKey(provider, subject string) string {
 	for _, p := range a.providers {
 		if p.Name() == provider {
-			return Key(provider, subjectOf(p, subject))
+			return Key(provider, subject)
 		}
 	}
 	return ""
-}
-
-func nameAllowed(patterns []string, name string) bool {
-	for _, pat := range patterns {
-		if pat == "*" || pat == name || (strings.HasSuffix(pat, "*") && strings.HasPrefix(name, strings.TrimSuffix(pat, "*"))) {
-			return true
-		}
-	}
-	return false
-}
-
-// scopedName is the agent id a connection with subject takes for name: the
-// subject itself, or "<subject>.<name>", so names are unique per credential.
-func scopedName(subject, name string) string {
-	switch {
-	case name == "":
-		return subject
-	case name == subject || strings.HasPrefix(name, subject+"."):
-		return name
-	default:
-		return subject + "." + name
-	}
 }
 
 func keyOf(c Credential) cacheKey {

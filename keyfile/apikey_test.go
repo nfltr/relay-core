@@ -4,121 +4,87 @@
 package keyfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestLoadAPIKeys_OK(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "keys")
-	_ = os.WriteFile(f, []byte("agent-1:secret-a\nagent-2:secret-b\n"), 0644)
-
-	store, err := LoadAPIKeys(f)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func writeFile(t *testing.T, lines ...string) string {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "keys")
+	if err := os.WriteFile(f, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if store.Count() != 2 {
-		t.Fatalf("expected 2 keys, got %d", store.Count())
-	}
-	agentID, ok := store.Validate("secret-a")
-	if !ok || agentID != testAgentID {
-		t.Fatalf("expected agent-1, got %q (ok=%v)", agentID, ok)
-	}
+	return f
 }
 
-func TestLoadAPIKeys_DuplicateAgentID(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "keys")
-	// Same AgentID with two different keys — must be rejected.
-	_ = os.WriteFile(f, []byte("agent-1:key-a\nagent-1:key-b\n"), 0644)
-
-	_, err := LoadAPIKeys(f)
-	if err == nil {
-		t.Fatal("expected error for duplicate AgentID")
+func TestLoadAPIKeys(t *testing.T) {
+	store, err := LoadAPIKeys(writeFile(t, "# comment", "", kl("web", "secret-a"), kl("db", "secret-b")))
+	if err != nil || store.Count() != 2 {
+		t.Fatalf("load: %v, %d keys", err, store.Count())
 	}
-	if !strings.Contains(err.Error(), "duplicate AgentID") {
-		t.Fatalf("expected 'duplicate AgentID' error, got: %v", err)
+	if m, ok := store.Validate("secret-a"); !ok || m.ID != tm("web") || m.Name != "web" || len(m.Services) != 1 {
+		t.Fatalf("Validate = %+v, %v", m, ok)
 	}
-}
-
-func TestLoadAPIKeys_EmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "keys")
-	_ = os.WriteFile(f, []byte("# only comments\n"), 0644)
-
-	_, err := LoadAPIKeys(f)
-	if err == nil {
-		t.Fatal("expected error for empty key file")
-	}
-}
-
-func TestLoadAPIKeys_SkipsComments(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "keys")
-	_ = os.WriteFile(f, []byte("# comment\n\nagent-1:secret\n"), 0644)
-
-	store, err := LoadAPIKeys(f)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if store.Count() != 1 {
-		t.Fatalf("expected 1 key, got %d", store.Count())
-	}
-}
-
-func TestValidate_ConstantTime(t *testing.T) {
-	store := NewAPIKeyStore()
-	store.Add(testAgentID, "correct-key")
-
 	if _, ok := store.Validate("wrong-key"); ok {
-		t.Fatal("expected validation to fail for wrong key")
+		t.Fatal("a wrong key validated")
 	}
-	agentID, ok := store.Validate("correct-key")
-	if !ok || agentID != testAgentID {
-		t.Fatalf("expected agent-1, got %q", agentID)
+	if _, err := LoadAPIKeys(writeFile(t, "# only comments")); err == nil {
+		t.Fatal("a file without keys loaded")
+	}
+}
+
+// The file refuses what it cannot hold as a machine: a line from before
+// machines (agent-id:key, agent-id:sha256:<hex>), a machine or a name
+// twice, a bad id, name or service (a 35-character service included).
+func TestLoadAPIKeysRefuses(t *testing.T) {
+	ok := tmach("web")
+	for name, line := range map[string][]string{
+		"old plaintext":  {"agent-1:secret"},
+		"old hashed":     {"agent-1:sha256:" + strings.Repeat("ab", 32)},
+		"machine twice":  {kl("web", "a"), strings.Replace(kl("db", "b"), string(tm("db")), string(ok.ID), 1)},
+		"name twice":     {kl("web", "a"), strings.Replace(kl("db", "b"), " db ", " web ", 1)},
+		"bad id":         {strings.Replace(kl("web", "a"), string(ok.ID), "m-nope", 1)},
+		"bad name":       {strings.Replace(kl("web", "a"), " web ", " Web ", 1)},
+		"long service":   {strings.Replace(kl("web", "a"), " svc ", " "+strings.Repeat("s", 35)+" ", 1)},
+		"service twice":  {strings.Replace(kl("web", "a"), " svc ", " svc,svc ", 1)},
+		"malformed hash": {strings.Replace(kl("web", "a"), "sha256:", "sha256:zz", 1)},
+	} {
+		if _, err := LoadAPIKeys(writeFile(t, line...)); err == nil {
+			t.Errorf("%s: loaded", name)
+		}
+	}
+}
+
+func TestLoadAPIKeysFromEnv(t *testing.T) {
+	t.Setenv("KF_TEST", string(tm("web"))+" web ssh,http secret")
+	store, err := LoadAPIKeysFromEnv("KF_TEST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := store.Validate("secret"); !ok || m.ID != tm("web") || strings.Join(m.Services, ",") != "ssh,http" {
+		t.Fatalf("Validate = %+v, %v", m, ok)
+	}
+	t.Setenv("KF_TEST", "web:secret")
+	if _, err := LoadAPIKeysFromEnv("KF_TEST"); err == nil {
+		t.Fatal("an agent-id:key value loaded")
+	}
+	t.Setenv("KF_TEST", string(tm("web"))+" web "+strings.Repeat("s", 35)+" secret")
+	if _, err := LoadAPIKeysFromEnv("KF_TEST"); !errors.Is(err, ErrServiceName) {
+		t.Fatalf("a 35-character service: %v, want ErrServiceName", err)
 	}
 }
 
 func TestRemove(t *testing.T) {
 	store := NewAPIKeyStore()
-	store.Add(testAgentID, "key-a")
-	store.Add(testAgentID, "key-b")
-	store.Add("agent-2", "key-c")
-
-	store.Remove(testAgentID)
-	if store.Count() != 1 {
-		t.Fatalf("expected 1 key after remove, got %d", store.Count())
-	}
-	if _, ok := store.Validate("key-a"); ok {
-		t.Fatal("key-a should have been removed")
-	}
-}
-
-func TestScopedAgentID(t *testing.T) {
-	tests := []struct {
-		name     string
-		keyID    string
-		override string
-		want     string
-	}{
-		{"no override", "alice", "", "alice"},
-		{"same as key", "alice", "alice", "alice"},
-		{"different name", "alice", "my-api", "alice.my-api"},
-		{"different name bob", "bob", "my-api", "bob.my-api"},
-		{"empty key id with override", "", "my-api", ".my-api"},
-		// Already-scoped override: agent sends x-resolved-agent-id back verbatim.
-		{"already scoped", "alice", "alice.my-api", "alice.my-api"},
-		{"already scoped deep", "alice", "alice.my-api.extra", "alice.my-api.extra"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := ScopedAgentID(tc.keyID, tc.override)
-			if got != tc.want {
-				t.Errorf("ScopedAgentID(%q, %q) = %q, want %q", tc.keyID, tc.override, got, tc.want)
-			}
-		})
+	store.Add(tmach("a"), "key-a")
+	store.Add(tmach("a"), "key-b")
+	store.Add(tmach("b"), "key-c")
+	store.Remove(tm("a"))
+	if _, ok := store.Validate("key-a"); ok || store.Count() != 1 {
+		t.Fatalf("%d keys after remove, key-a valid %v", store.Count(), ok)
 	}
 }
 
@@ -132,7 +98,7 @@ func buildFileStore(b *testing.B, n int) (*APIKeyStore, []string) {
 	keys := make([]string, n)
 	for i := range keys {
 		k := "testkey-" + strings.Repeat("x", 80) + string(rune('a'+i%26))
-		store.Add("agent-"+string(rune('a'+i%26)), k)
+		store.Add(tmach("agent-"+string(rune('a'+i%26))), k)
 		keys[i] = k
 	}
 	return store, keys

@@ -33,6 +33,7 @@ import (
 
 	"github.com/nfltr/relay-core/compose"
 	"github.com/nfltr/relay-core/core/frontend"
+	"github.com/nfltr/relay-core/core/identity"
 	httpingress "github.com/nfltr/relay-core/frontend/http"
 	"github.com/nfltr/relay-core/frontend/sni"
 	"github.com/nfltr/relay-core/keyfile"
@@ -50,18 +51,27 @@ type Relay struct {
 	Proxy string
 	// Internal serves /ready and /health.
 	Internal string
-	// Key is the API key agents and clients authenticate with: agents
-	// connect under names in its namespace, and its clients reach them.
+	// Key is the API key agents and clients authenticate with: the key of
+	// one machine (Machine) bound to New's services; its agents register
+	// those services, and its clients reach them by Ref.
 	Key string
+	// Machine is the key's machine.
+	Machine identity.MachineID
+}
+
+// Ref is the agent ref of the key's machine's service: what a client opens.
+func (r *Relay) Ref(service string) string {
+	return identity.AgentRef{Machine: r.Machine, Service: service}.String()
 }
 
 var configure sync.Once
 
-// New starts a relay core and stops it when tb's test ends (tb.Cleanup):
+// New starts a relay core whose one key's machine is bound to services
+// ("agent" when none), and stops it when tb's test ends (tb.Cleanup):
 // the run is cancelled and New's cleanup waits until it drained, at most
 // about one second past the last open client session. A relay that cannot
 // start fails the test (tb.Fatalf).
-func New(tb testing.TB) *Relay {
+func New(tb testing.TB, services ...string) *Relay {
 	tb.Helper()
 	configure.Do(func() {
 		if flag.CommandLine.Lookup(config.GrpcServerPort) == nil {
@@ -77,9 +87,12 @@ func New(tb testing.TB) *Relay {
 	if _, err := rand.Read(secret); err != nil {
 		tb.Fatalf("relaycoretest: %v", err)
 	}
-	r := &Relay{Key: "rpc_" + hex.EncodeToString(secret)}
+	if len(services) == 0 {
+		services = []string{"agent"}
+	}
+	r := &Relay{Key: "rpc_" + hex.EncodeToString(secret), Machine: identity.NewMachineID()}
 	keys := keyfile.NewAPIKeyStore()
-	keys.Add("test", r.Key)
+	keys.Add(keyfile.Machine{ID: r.Machine, Name: "test", Services: services}, r.Key)
 
 	var ls compose.Ports
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {

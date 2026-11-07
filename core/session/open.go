@@ -143,7 +143,7 @@ func (c *Core) Open(ctx context.Context, caller identity.Principal, t Target) (O
 	agentID, addr, err := c.reachHeld(route, caller, t)
 	if err == nil {
 		retries, interval := c.DialPolicy()
-		ep := TCPEndpoint{AgentID: agentID, TargetAddr: addr, E2EE: t.E2EE, Answer: t.Answer}
+		ep := TCPEndpoint{AgentID: agentID, TargetAddr: addr, E2EE: t.E2EE, Answer: t.Answer, Caller: caller}
 		var s peerlink.Session
 		var release func()
 		if s, release, err = c.TCPDispatcher.OnwardWithRetry(route, ep, retries, interval); err == nil {

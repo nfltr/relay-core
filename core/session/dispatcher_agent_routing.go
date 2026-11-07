@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strings"
 	"sync/atomic"
 	"time"
 	"uuid"
@@ -281,12 +280,6 @@ func (d *Dispatcher) routeAgentToAgent(ctx context.Context, sourceStream *GRPCSt
 		return
 	}
 
-	resolvedTarget := d.resolveA2ATargetAgentId(sourceAgentID, targetAgentID)
-	if resolvedTarget != targetAgentID {
-		targetAgentID = resolvedTarget
-		firstMsg.Routing.TargetAgentId = resolvedTarget
-	}
-
 	// Build logger with resolved target upfront
 	logger = logging.With(d.Logger,
 		"sourceAgentID", sourceAgentID,
@@ -296,9 +289,6 @@ func (d *Dispatcher) routeAgentToAgent(ctx context.Context, sourceStream *GRPCSt
 		"flow", "agent-to-agent",
 	)
 	logger.Debug("routing agent-to-agent request")
-	if resolvedTarget != firstMsg.Routing.TargetAgentId {
-		logger.Debug("resolved A2A target", "resolvedTarget", resolvedTarget)
-	}
 	if sourceAgentID == targetAgentID {
 		logger.Info("rejecting agent-to-agent self route")
 		metrics.RegisterA2ARequest("local", "denied")
@@ -307,10 +297,10 @@ func (d *Dispatcher) routeAgentToAgent(ctx context.Context, sourceStream *GRPCSt
 		return
 	}
 
-	// Only the target's owner reaches it (agent_reach.go); a refusal is the
+	// Only a source Reach allows reaches the target (agent_reach.go; the
+	// target is an agent ref, never a name resolved here); a refusal is the
 	// answer a target that is not connected gets.
-	sourceBase, _ := d.AgentKeyBase.Load(sourceAgentID)
-	reaches, err := d.A2AReaches(sourceAgentID, sourceBase, targetAgentID)
+	reaches, err := d.A2AReaches(sourceAgentID, targetAgentID)
 	if err != nil {
 		logger.Warn("agent-to-agent request refused: the directory is unavailable", "error", err)
 		metrics.RegisterA2ARequest("local", "denied")
@@ -381,113 +371,6 @@ func a2aFrameDeadlineExpired(msg *pb.TunnelFrame, now time.Time) bool {
 		return false
 	}
 	return !time.UnixMilli(deadlineMs).After(now)
-}
-
-func (d *Dispatcher) resolveA2ATargetAgentId(sourceAgentID, targetAgentID string) string {
-	keyBase, hasKeyBase := d.AgentKeyBase.Load(sourceAgentID)
-	hasScopedKeyBase := hasKeyBase && keyBase != "" && keyBase != sourceAgentID
-
-	if _, found := d.Upstreams.Load(targetAgentID); found {
-		return targetAgentID
-	}
-
-	if hasScopedKeyBase {
-		scopedTarget := keyBase + "." + targetAgentID
-		if _, found := d.Upstreams.Load(scopedTarget); found {
-			return scopedTarget
-		}
-	}
-
-	// A logical agent ID may itself contain dots (for example a host-qualified
-	// worker name). Only treat it as an already-scoped target after checking
-	// the caller's live key scope; a dot alone is not scope evidence.
-	if strings.Contains(targetAgentID, ".") {
-		return targetAgentID
-	}
-
-	// Resolution only picks a name; a directory error reading an owner
-	// leaves it unknown here and is answered by the access check
-	// (A2AReaches) that follows.
-	sourceOwner, _ := d.OwnerForAgent(sourceAgentID)
-
-	suffix := "." + targetAgentID
-	var matchedTarget string
-	ambiguous := false
-	d.Upstreams.Range(func(agentID string, _ Streamer) bool {
-		if !strings.HasSuffix(agentID, suffix) {
-			return true
-		}
-		if owner, _ := d.OwnerForAgent(agentID); sourceOwner != "" && owner != sourceOwner {
-			return true
-		}
-		if matchedTarget != "" && matchedTarget != agentID {
-			ambiguous = true
-			return false
-		}
-		matchedTarget = agentID
-		return true
-	})
-
-	if !ambiguous && matchedTarget != "" {
-		return matchedTarget
-	}
-
-	if inventoryTarget := d.resolveA2ATargetFromInventory(targetAgentID, sourceOwner); inventoryTarget != "" {
-		return inventoryTarget
-	}
-
-	if sourceOwner == "" && !hasScopedKeyBase {
-		return targetAgentID
-	}
-
-	if sourceOwner == "" {
-		// Without owner information, another concurrently connected agent cannot
-		// legitimately share the caller's key base because API keys are single-use.
-		// Returning the raw target avoids inventing an impossible scoped ID.
-		return targetAgentID
-	}
-
-	if ambiguous || matchedTarget == "" {
-		// No local match found. Fall back to key-scoped name for cross-pod routing.
-		if hasScopedKeyBase {
-			return keyBase + "." + targetAgentID
-		}
-		return targetAgentID
-	}
-
-	return matchedTarget
-}
-
-func (d *Dispatcher) resolveA2ATargetFromInventory(targetAgentID, sourceOwner string) string {
-	if d == nil || d.StreamerIPInventory == nil {
-		return ""
-	}
-	targetAgentID = strings.TrimSpace(targetAgentID)
-	if targetAgentID == "" || strings.Contains(targetAgentID, ".") {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-	agentIDs, err := d.StreamerIPInventory.ListAgentIDs(ctx)
-	if err != nil {
-		return ""
-	}
-	suffix := "." + targetAgentID
-	var matched string
-	for _, agentID := range agentIDs {
-		agentID = strings.TrimSpace(agentID)
-		if agentID == "" || !strings.HasSuffix(agentID, suffix) {
-			continue
-		}
-		if owner, _ := d.OwnerForAgent(agentID); sourceOwner != "" && owner != sourceOwner {
-			continue
-		}
-		if matched != "" && matched != agentID {
-			return ""
-		}
-		matched = agentID
-	}
-	return matched
 }
 
 // OwnerForAgent is the account owning agentID ("" unknown): the owner of

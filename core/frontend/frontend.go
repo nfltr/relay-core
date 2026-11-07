@@ -12,6 +12,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"github.com/nfltr/relay-core/core/identity"
 	"log/slog"
 	"net"
 	"net/http"
@@ -48,10 +49,10 @@ type Host interface {
 	// Core is the replica's session core.
 	Core() *session.Core
 	Logger() *slog.Logger
-	// Visible is principal's tenant scope over agent IDs (the scope its
-	// dashboard lists); nil when the relay authenticates no one, every
-	// agent then.
-	Visible(principal string) func(agentID string) bool
+	// Visible is the agents p may dial (session.Dispatcher.Reach), the
+	// WireGuard frontend's exits; nil when the relay authenticates no one,
+	// every agent then.
+	Visible(p identity.Principal) func(agentID string) bool
 	// RecordWireGuardKey keeps an agent's WireGuard public key in the
 	// endpoint registry, which the dashboard and proof page show.
 	RecordWireGuardKey(agentID, publicKey string)

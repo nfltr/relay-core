@@ -50,13 +50,17 @@ Off loopback the relay serves TLS only; it refuses to listen elsewhere in
 plaintext and says what to set. Bring your own certificate and key file:
 
 ```sh
-printf 'alice:%s\n' "rpc_$(openssl rand -hex 24)" >keys && chmod 600 keys
 LISTEN_ADDRESS=0.0.0.0 TLS_ENABLE=true TLS_CERT_FILE=relay.crt TLS_KEY_FILE=relay.key \
-SECURITY_APIKEY_FILE=keys TCP_ENABLED=true bin/nfltr-relay-core serve --from-env
+SECURITY_APIKEY_FILE=nfltr-relay-core.keys TCP_ENABLED=true bin/nfltr-relay-core serve --from-env
 ```
 
-Each key file line is `<agent id>:<key>` (or `<agent id>:sha256:<hex>`, the
-key's hash); agents and clients send the key. `serve --from-env` reads every
+The key file is the relay's machine store: each line is `<machine id>
+<name> <service,...> sha256:<hex>` (a machine, the services its agents
+may register and its key's hash; a start on loopback writes one, machine
+`quickstart` serving `web`, with its key in a comment). An agent connects
+as one of its machine's services and is reached as its agent ref
+`<machine id>-<service>`; agents and clients send the key, and a key whose
+machine is not in the file is refused (`machine_not_enrolled`). `serve --from-env` reads every
 setting from the environment (`PROXY_PORT`, `GRPC_PORT`, `INTERNAL_PORT`,
 `METRICS_PORT`, `LISTEN_ADDRESS`, `SECURITY_APIKEY_FILE`, `NFLTR_API_KEY`,
 `TCP_ENABLED`, `TLS_*`, ...; `platform/config` lists them, a key's

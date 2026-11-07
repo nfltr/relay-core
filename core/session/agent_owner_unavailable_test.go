@@ -35,25 +35,25 @@ func TestOwnerForAgentReportsDirectoryErrors(t *testing.T) {
 		d.StreamerIPInventory, _ = directory.NewIPInventory(fake.TestLogger(), c, time.Second, "127.0.0.1", directory.GetStreamerCacheKey)
 	}
 	use(downCache{directory.NewMemoryCache()})
-	if owner, err := d.OwnerForAgent("carol.node"); owner != "" || !errors.Is(err, directory.ErrUnavailable) {
+	carol, bobHub := testRef("carol", "node"), testRef("bob", "hub")
+	d.Policy = AccountIsOneGroup{}
+	d.RegisterAgent(bobHub, "keys:bob", "")
+	if owner, err := d.OwnerForAgent(carol); owner != "" || !errors.Is(err, directory.ErrUnavailable) {
 		t.Fatalf("OwnerForAgent with the directory down = %q, %v; want ErrUnavailable", owner, err)
 	}
-	reaches := d.PrincipalReaches(identity.Principal{Provider: "keys", Subject: "bob", Owner: "keys:bob"})
-	if ok, err := reaches("carol.node"); ok || !errors.Is(err, directory.ErrUnavailable) {
-		t.Fatalf("PrincipalReaches(another account's agent) with the directory down = %v, %v; want false, ErrUnavailable", ok, err)
+	bob := identity.Principal{Provider: "keys", Subject: "bob", Owner: "keys:bob", Machine: testMachine("bob")}
+	if ok, err := d.Reach(bob, carol, Dial); ok || !errors.Is(err, directory.ErrUnavailable) {
+		t.Fatalf("Reach(another account's agent) with the directory down = %v, %v; want false, ErrUnavailable", ok, err)
 	}
-	if ok, err := reaches("bob.node"); !ok || err != nil {
-		t.Fatalf("PrincipalReaches(own namespace) = %v, %v; want true without the directory", ok, err)
-	}
-	if ok, err := d.A2AReaches("bob.hub", "bob", "carol.node"); ok || !errors.Is(err, directory.ErrUnavailable) {
+	if ok, err := d.A2AReaches(bobHub, carol); ok || !errors.Is(err, directory.ErrUnavailable) {
 		t.Fatalf("A2AReaches with the directory down = %v, %v; want false, ErrUnavailable", ok, err)
 	}
 
 	use(directory.NewMemoryCache())
-	if owner, err := d.OwnerForAgent("carol.node"); owner != "" || err != nil {
+	if owner, err := d.OwnerForAgent(carol); owner != "" || err != nil {
 		t.Fatalf("OwnerForAgent of an agent with no record = %q, %v; want \"\", nil", owner, err)
 	}
-	if ok, err := reaches("carol.node"); ok || err != nil {
-		t.Fatalf("PrincipalReaches(an agent with no record) = %v, %v; want false, nil", ok, err)
+	if ok, err := d.Reach(bob, carol, Dial); ok || err != nil {
+		t.Fatalf("Reach(an agent with no record) = %v, %v; want false, nil", ok, err)
 	}
 }

@@ -361,7 +361,7 @@ func TestRebalanceMoveGivenUpKeepsTheAgent(t *testing.T) {
 		t.Fatalf("the relay let the agent go: %v", err)
 	case <-time.After(3 * d.moveBound):
 	}
-	if !d.IsAgentConnected("agent-1") || d.rebalanceAgents(0, 2) != 0 {
+	if !agentConnected(d, "agent-1") || d.rebalanceAgents(0, 2) != 0 {
 		t.Fatal("the agent is no longer routed to, or was asked again")
 	}
 }
@@ -418,8 +418,8 @@ func TestRebalanceMoveLateConnectedGoesOn(t *testing.T) {
 		t.Fatalf("the relay ended the old session (%v): its requests failed", err)
 	case <-time.After(time.Second):
 	}
-	if steps := sink.steps(); len(steps) != 2 || steps[1] != pb.Move_MOVE_DONE || d.IsAgentConnected("agent-1") {
-		t.Fatalf("the move did not go on: steps %v, routed here %v", steps, d.IsAgentConnected("agent-1"))
+	if steps := sink.steps(); len(steps) != 2 || steps[1] != pb.Move_MOVE_DONE || agentConnected(d, "agent-1") {
+		t.Fatalf("the move did not go on: steps %v, routed here %v", steps, agentConnected(d, "agent-1"))
 	}
 }
 

@@ -29,7 +29,7 @@ import (
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	keyFile := flag.String("key-file", "nfltr-relay-core.keys", "the relay's key file; its last line is <agent id>:<key>")
+	keyFile := flag.String("key-file", "nfltr-relay-core.keys", "the relay's key file: its machine's key in a \"# key: \" comment, the machine on its last line")
 	agents := flag.String("agents", "127.0.0.1:9090", "the relay's gRPC address (agents)")
 	clients := flag.String("clients", "127.0.0.1:8080", "the relay's proxy address (clients)")
 	flag.Parse()
@@ -37,8 +37,11 @@ func main() {
 	for ; err != nil && ctx.Err() == nil; data, err = os.ReadFile(*keyFile) { // the relay writes it as it starts
 		time.Sleep(100 * time.Millisecond)
 	}
-	lines := strings.Split(strings.TrimSpace(string(must(data, err))), "\n")
-	_, key, _ := strings.Cut(lines[len(lines)-1], ":")
+	text := strings.TrimSpace(string(must(data, err)))
+	_, rest, _ := strings.Cut(text, "# key: ")
+	key, _, _ := strings.Cut(rest, "\n")
+	lines := strings.Split(text, "\n")
+	ref := strings.Fields(lines[len(lines)-1])[0] + "-web" // the agent ref of the machine's service "web"
 
 	echo := must(net.Listen("tcp", "127.0.0.1:0")) // the service behind the agent
 	go func() {
@@ -46,7 +49,7 @@ func main() {
 			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
 		}
 	}()
-	a := agent.New(agent.Config{ServerAddr: *agents, AgentID: "echo", APIKey: key,
+	a := agent.New(agent.Config{ServerAddr: *agents, AgentID: "web", APIKey: key,
 		TCPTunnel: true, TCPForwardAddr: echo.Addr().String(), Logger: slog.New(slog.DiscardHandler)})
 	if err := a.Connect(ctx); err != nil {
 		log.Fatal(err)
@@ -56,7 +59,7 @@ func main() {
 	m, _ := must2(dataplane.Upgrade(ctx, must(net.Dial("tcp", *clients)), "relay", key, 1<<20))
 	go func() { _ = m.Serve(nil) }()
 	for ctx.Err() == nil { // the agent registers its TCP stream just after Connect
-		s, err := m.Open(&pb.TCPData{AgentId: "echo", TargetAddr: "22"})
+		s, err := m.Open(&pb.TCPData{AgentId: ref, TargetAddr: "22"})
 		if err == nil {
 			msg := []byte("hello through nfltr-relay-core")
 			buf := make([]byte, len(msg))

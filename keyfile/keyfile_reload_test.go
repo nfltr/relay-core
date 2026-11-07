@@ -12,13 +12,19 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nfltr/relay-core/core/identity"
 )
 
-// writeKeys writes a key file of agentID:plaintext-key lines.
+// writeKeys writes a key file; a "name:key" line is test machine name's
+// line with that key (kl), any other line is written as it is.
 func writeKeys(t *testing.T, path string, lines ...string) {
 	t.Helper()
 	data := ""
 	for _, l := range lines {
+		if name, key, ok := strings.Cut(l, ":"); ok && !strings.HasPrefix(l, "#") && !strings.Contains(l, " ") {
+			l = kl(name, key)
+		}
 		data += l + "\n"
 	}
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
@@ -59,21 +65,21 @@ func TestKeyManagerReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"b", "c"}; !slices.Equal(got, want) || !slices.Equal(revoked(), want) {
+	if want := sortedIDs("b", "c"); !slices.Equal(machineStrings(got), want) || !slices.Equal(revoked(), want) {
 		t.Fatalf("revoked %v, OnRevoke %v, want %v", got, revoked(), want)
 	}
 	for key, want := range map[string]string{"key-a": "a", "key-c2": "c", "key-d": "d", "key-b": "", "key-c": ""} {
-		if id, _ := store.Validate(key); id != want {
-			t.Errorf("Validate(%s) = %q, want %q", key, id, want)
+		if m, _ := store.Validate(key); m.Name != want {
+			t.Errorf("Validate(%s) = %q, want %q", key, m.Name, want)
 		}
 	}
-	var ids []string
+	var names []string
 	for _, r := range km.List() {
-		ids = append(ids, r.AgentID)
+		names = append(names, r.Name)
 	}
-	slices.Sort(ids)
-	if !slices.Equal(ids, []string{"a", "c", "d"}) {
-		t.Fatalf("records %v, want a c d", ids)
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"a", "c", "d"}) {
+		t.Fatalf("records %v, want a c d", names)
 	}
 	// The same file again revokes nothing.
 	if got, err := km.Reload(); err != nil || len(got) != 0 {
@@ -91,7 +97,7 @@ func TestKeyManagerReloadOfNoKeysRevokesAll(t *testing.T) {
 			if _, err := km.Reload(); err != nil {
 				t.Fatal(err)
 			}
-			if got := revoked(); !slices.Equal(got, []string{"a", "b"}) || store.Count() != 0 || len(km.List()) != 0 {
+			if got := revoked(); !slices.Equal(got, sortedIDs("a", "b")) || store.Count() != 0 || len(km.List()) != 0 {
 				t.Fatalf("revoked %v, %d keys, %d records; want a b revoked, none left", got, store.Count(), len(km.List()))
 			}
 		})
@@ -101,7 +107,7 @@ func TestKeyManagerReloadOfNoKeysRevokesAll(t *testing.T) {
 // A file that does not load keeps the keys.
 func TestKeyManagerReloadKeepsKeysOnBadFile(t *testing.T) {
 	for name, write := range map[string]func(path string){
-		"malformed": func(p string) { writeKeys(t, p, "a:sha256:nothex") },
+		"malformed": func(p string) { writeKeys(t, p, string(tm("a"))+" a svc sha256:nothex") },
 		"duplicate": func(p string) { writeKeys(t, p, "a:key-a", "a:key-x") },
 		"missing":   func(p string) { _ = os.Remove(p) },
 	} {
@@ -114,7 +120,7 @@ func TestKeyManagerReloadKeepsKeysOnBadFile(t *testing.T) {
 			if len(revoked()) != 0 || store.Count() != 2 || len(km.List()) != 2 {
 				t.Fatalf("revoked %v, %d keys, %d records; want none revoked, 2 kept", revoked(), store.Count(), len(km.List()))
 			}
-			if id, ok := store.Validate("key-b"); !ok || id != "b" {
+			if m, ok := store.Validate("key-b"); !ok || m.Name != "b" {
 				t.Fatal("key-b no longer validates")
 			}
 		})
@@ -138,7 +144,7 @@ func TestKeyManagerReloadRekeyCutsBeforeNewKey(t *testing.T) {
 	if !slices.Equal(during, []bool{false, false}) {
 		t.Fatalf("during OnRevoke old/new key valid = %v, want neither", during)
 	}
-	if id, _ := store.Validate("key-a2"); id != "a" {
+	if m, _ := store.Validate("key-a2"); m.Name != "a" {
 		t.Fatal("the new key does not validate after the reload")
 	}
 }
@@ -163,13 +169,13 @@ func TestKeyManagerWatch(t *testing.T) {
 		}
 	}
 	writeKeys(t, path, "a:key-a", "c:key-c")
-	await([]string{"b"})
+	await(ids("b"))
 	tmp := path + ".tmp"
 	writeKeys(t, tmp, "c:key-c")
 	if err := os.Rename(tmp, path); err != nil {
 		t.Fatal(err)
 	}
-	await([]string{"b", "a"})
+	await(ids("b", "a"))
 	if store.Count() != 1 {
 		t.Fatalf("%d keys, want 1", store.Count())
 	}
@@ -191,7 +197,8 @@ func TestKeyManagerWritesKeyFileAtomically(t *testing.T) {
 	}
 	km := NewKeyManager(path, nil, testKeyManagerLogger())
 	before, _ := os.Stat(path)
-	if _, err := km.Generate("a"); err != nil {
+	resp, err := km.Generate("a", []string{"svc"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.Stat(path)
@@ -202,10 +209,10 @@ func TestKeyManagerWritesKeyFileAtomically(t *testing.T) {
 		t.Fatalf("mode %v, want 0640 kept", after.Mode().Perm())
 	}
 	data, _ := os.ReadFile(path)
-	if !strings.HasPrefix(string(data), "# header\na:sha256:") {
+	if !strings.HasPrefix(string(data), "# header\n"+string(resp.MachineID)+" a svc sha256:") {
 		t.Fatalf("file %q, want the header then the new key", data)
 	}
-	if err := km.Revoke("a"); err != nil {
+	if err := km.Revoke(resp.MachineID); err != nil {
 		t.Fatal(err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
@@ -214,4 +221,30 @@ func TestKeyManagerWritesKeyFileAtomically(t *testing.T) {
 	if store, err := readAPIKeys(path); err != nil || store.Count() != 0 {
 		t.Fatalf("after revoking the last key: %v keys, %v", store, err)
 	}
+}
+
+// A rename in the file cuts nothing (names are labels: spec RenameKeepsReach);
+// a change of a machine's services re-admits it (its connections end).
+func TestKeyManagerReloadRenameKeepsServicesCut(t *testing.T) {
+	km, store, path, revoked := reloadingManager(t, "a:key-a", "b:key-b")
+	renamed := strings.Replace(kl("a", "key-a"), " a ", " a2 ", 1)
+	rebound := strings.Replace(kl("b", "key-b"), " svc ", " svc,web ", 1)
+	writeKeys(t, path, renamed, rebound)
+	if _, err := km.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := revoked(); !slices.Equal(got, ids("b")) {
+		t.Fatalf("revoked %v, want only b (services changed)", got)
+	}
+	if m, ok := store.Validate("key-a"); !ok || m.ID != tm("a") || m.Name != "a2" {
+		t.Fatalf("renamed machine: %+v %v", m, ok)
+	}
+}
+
+func machineStrings(ms []identity.MachineID) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = string(m)
+	}
+	return out
 }

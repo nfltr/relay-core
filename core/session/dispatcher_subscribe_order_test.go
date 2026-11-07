@@ -27,7 +27,7 @@ func TestRequestRoutedAsTheAgentRegistersReachesIt(t *testing.T) {
 	defer cancel()
 	published := make(chan error, 1)
 	d.OnAgentMetadata = func(info AgentInfo) { // the session has just registered
-		if !d.IsAgentConnected(info.AgentID) {
+		if !agentConnected(d, info.AgentID) {
 			published <- nil
 			return
 		}
@@ -83,7 +83,7 @@ func TestRequestRoutedAsTheSessionEndsIsNotDropped(t *testing.T) {
 	defer cancel()
 	published := make(chan error, 1)
 	d.IPInventory = &teardownInventory{IPInventory: d.IPInventory, onDelete: func(agentID string) {
-		if !d.IsAgentConnected(agentID) {
+		if !agentConnected(d, agentID) {
 			return
 		}
 		p, err := d.broker.CreateProducer(broker.ProducerOptions{Topic: agentID})

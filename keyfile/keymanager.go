@@ -5,31 +5,38 @@ package keyfile
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
+
+	"github.com/nfltr/relay-core/core/identity"
 )
 
-// KeyRecord holds metadata about a generated API key.
+// KeyRecord holds metadata about a machine's key.
 type KeyRecord struct {
-	AgentID   string    `json:"agent_id"`
-	KeyPrefix string    `json:"key_prefix"`      // first 8 chars for identification
-	Owner     string    `json:"owner,omitempty"` // email of the user who created this key
-	CreatedAt time.Time `json:"created_at"`
+	MachineID identity.MachineID `json:"machine_id"`
+	Name      string             `json:"name"`
+	Services  []string           `json:"services"`
+	KeyPrefix string             `json:"key_prefix"`      // first chars for identification
+	Owner     string             `json:"owner,omitempty"` // email of the user who created this key
+	CreatedAt time.Time          `json:"created_at"`
 }
 
-// KeyGenerateResponse is returned when a new key is generated.
-// The full key is only returned ONCE at creation time.
+// KeyGenerateResponse is returned when a machine is added. The full key is
+// only returned ONCE, at creation time.
 type KeyGenerateResponse struct {
-	AgentID   string    `json:"agent_id"`
-	APIKey    string    `json:"api_key"`
-	CreatedAt time.Time `json:"created_at"`
-	Message   string    `json:"message"`
+	MachineID identity.MachineID `json:"machine_id"`
+	Name      string             `json:"name"`
+	Services  []string           `json:"services"`
+	APIKey    string             `json:"api_key"`
+	CreatedAt time.Time          `json:"created_at"`
+	Message   string             `json:"message"`
 }
 
 // KeyListResponse is returned when listing keys.
@@ -37,20 +44,20 @@ type KeyListResponse struct {
 	Keys []KeyRecord `json:"keys"`
 }
 
-// KeyManager generates, persists, and revokes API keys.
-// It manages both the in-memory APIKeyStore and the on-disk key file.
+// KeyManager adds, persists and revokes the key file's machines. It
+// manages both the in-memory APIKeyStore and the on-disk key file.
 type KeyManager struct {
 	mu       sync.Mutex
 	store    *APIKeyStore
 	filePath string
-	records  map[string]KeyRecord // agentID → record
+	records  map[identity.MachineID]KeyRecord
 	logger   *slog.Logger
-	onRevoke func(agentID string)
+	onRevoke func(subject string)
 }
 
-// OnRevoke sets what Revoke and Reload call after they removed a key (the
-// relay ends the key's live connections).
-func (km *KeyManager) OnRevoke(fn func(agentID string)) {
+// OnRevoke sets what Revoke and Reload call after they removed a machine's
+// key, with its subject (the machine id: the relay ends its connections).
+func (km *KeyManager) OnRevoke(fn func(subject string)) {
 	km.mu.Lock()
 	defer km.mu.Unlock()
 	km.onRevoke = fn
@@ -65,13 +72,12 @@ func NewKeyManager(filePath string, store *APIKeyStore, logger *slog.Logger) *Ke
 	km := &KeyManager{
 		store:    store,
 		filePath: filePath,
-		records:  make(map[string]KeyRecord),
+		records:  make(map[identity.MachineID]KeyRecord),
 		logger:   logger,
 	}
-	// Populate records from existing store keys (no prefix info available for pre-existing keys)
 	store.mu.RLock()
-	for key, agentID := range store.keys {
-		km.records[agentID] = fileRecord(agentID, key)
+	for key, m := range store.keys {
+		km.records[m.ID] = fileRecord(m, key)
 	}
 	store.mu.RUnlock()
 	return km
@@ -79,103 +85,81 @@ func NewKeyManager(filePath string, store *APIKeyStore, logger *slog.Logger) *Ke
 
 // fileRecord is the record of a key read from the file: its hash's prefix,
 // no owner, creation time unknown.
-func fileRecord(agentID string, hash [32]byte) KeyRecord {
-	return KeyRecord{AgentID: agentID, KeyPrefix: hex.EncodeToString(hash[:4]) + "..."}
+func fileRecord(m Machine, hash [32]byte) KeyRecord {
+	return KeyRecord{MachineID: m.ID, Name: m.Name, Services: m.Services, KeyPrefix: hex.EncodeToString(hash[:4]) + "..."}
 }
 
-// Generate creates a new API key for the given AgentID.
-// Returns the full key (only shown once). The key is immediately usable
-// for authentication and is persisted to the key file.
-func (km *KeyManager) Generate(agentID string) (*KeyGenerateResponse, error) {
-	return km.GenerateForOwner(agentID, "")
+// Generate adds a machine named name, bound to services: the file assigns
+// it a fresh id (identity.NewMachineID; a caller never chooses one).
+// Returns the full key (only shown once), usable at once and persisted.
+func (km *KeyManager) Generate(name string, services []string) (*KeyGenerateResponse, error) {
+	return km.GenerateForOwner(name, services, "")
 }
 
-// GenerateForOwner creates a new API key for the given AgentID,
-// recording the owner email for per-user scoping.
-func (km *KeyManager) GenerateForOwner(agentID, owner string) (*KeyGenerateResponse, error) {
-	if agentID == "" {
-		return nil, fmt.Errorf("agentID is required")
-	}
-	// The key file holds agentID:sha256:<hex> per line (LoadAPIKeys): an ID
-	// it cannot round-trip would re-key or add an agent, or stop the file
-	// loading, on the next start.
-	if strings.HasPrefix(agentID, "#") || strings.ContainsFunc(agentID, func(r rune) bool {
-		return r == ':' || unicode.IsSpace(r) || unicode.IsControl(r)
-	}) {
-		return nil, fmt.Errorf("agentID %q must not start with '#' or contain ':', spaces or control characters", agentID)
+// GenerateForOwner is Generate recording the owner email for per-user
+// scoping. A name already in use, or an invalid name or service (one over
+// identity.MaxServiceLen characters: ErrServiceName), is refused.
+func (km *KeyManager) GenerateForOwner(name string, services []string, owner string) (*KeyGenerateResponse, error) {
+	m := Machine{ID: identity.NewMachineID(), Name: name, Services: slices.Clone(services)}
+	if err := validMachine(m); err != nil {
+		return nil, err
 	}
 
 	km.mu.Lock()
 	defer km.mu.Unlock()
-
-	// Check if AgentID already has a key
-	if _, exists := km.records[agentID]; exists {
-		return nil, fmt.Errorf("agentID %q already has an API key; revoke it first", agentID)
+	for _, r := range km.records {
+		if r.Name == name {
+			return nil, fmt.Errorf("keyfile: a machine named %q exists; revoke it first", name)
+		}
 	}
 
-	// Generate a cryptographically random key: rpc_ + 48 random bytes (96 hex chars)
+	// A cryptographically random key: rpc_ + 48 random bytes (96 hex chars)
 	keyBytes := make([]byte, 48)
 	if _, err := rand.Read(keyBytes); err != nil {
 		return nil, fmt.Errorf("generate random key: %w", err)
 	}
 	apiKey := "rpc_" + hex.EncodeToString(keyBytes)
 
-	// Add to live store
-	km.store.Add(agentID, apiKey)
-
-	// Persist to file
-	if err := km.appendToFile(agentID, apiKey); err != nil {
-		// Roll back from live store on file error
-		km.store.Remove(agentID)
+	km.store.Add(m, apiKey)
+	if err := km.appendToFile(m, apiKey); err != nil {
+		km.store.Remove(m.ID) // roll back from the live store on a file error
 		return nil, fmt.Errorf("persist key: %w", err)
 	}
 
-	record := KeyRecord{
-		AgentID:   agentID,
-		KeyPrefix: apiKey[:12] + "...",
-		Owner:     owner,
-		CreatedAt: time.Now().UTC(),
-	}
-	km.records[agentID] = record
-
-	km.logger.Info("security: generated API key", "agent_id", agentID, "owner", owner, "prefix", record.KeyPrefix)
+	record := KeyRecord{MachineID: m.ID, Name: m.Name, Services: m.Services, KeyPrefix: apiKey[:12] + "...", Owner: owner, CreatedAt: time.Now().UTC()}
+	km.records[m.ID] = record
+	km.logger.Info("security: added machine", "machine_id", m.ID, "name", m.Name, "owner", owner, "prefix", record.KeyPrefix)
 
 	return &KeyGenerateResponse{
-		AgentID:   agentID,
+		MachineID: m.ID,
+		Name:      m.Name,
+		Services:  m.Services,
 		APIKey:    apiKey,
 		CreatedAt: record.CreatedAt,
 		Message:   "Store this key securely — it will not be shown again.",
 	}, nil
 }
 
-// Revoke removes the API key for the given AgentID from both the live store
-// and the on-disk key file.
-func (km *KeyManager) Revoke(agentID string) error {
-	if agentID == "" {
-		return fmt.Errorf("agentID is required")
-	}
-
+// Revoke removes machine id's key from both the live store and the on-disk
+// key file.
+func (km *KeyManager) Revoke(id identity.MachineID) error {
 	km.mu.Lock()
 	defer km.mu.Unlock()
 
-	if _, exists := km.records[agentID]; !exists {
-		return fmt.Errorf("no API key found for agentID %q", agentID)
+	if _, exists := km.records[id]; !exists {
+		return fmt.Errorf("no machine %q in the key file", id)
 	}
-
-	// Remove from live store and end its connections, whether or not the
-	// file below is rewritten.
-	km.store.Remove(agentID)
+	// Remove from the live store and end its connections, whether or not
+	// the file below is rewritten.
+	km.store.Remove(id)
 	if km.onRevoke != nil {
-		km.onRevoke(agentID)
+		km.onRevoke(string(id))
 	}
-	delete(km.records, agentID)
-
-	// Rewrite file without this AgentID
+	delete(km.records, id)
 	if err := km.rewriteFile(); err != nil {
 		return fmt.Errorf("persist revocation: %w", err)
 	}
-
-	km.logger.Info("security: revoked API key", "agent_id", agentID)
+	km.logger.Info("security: revoked machine", "machine_id", id)
 	return nil
 }
 
@@ -205,17 +189,17 @@ func (km *KeyManager) ListForOwner(email string) []KeyRecord {
 	return records
 }
 
-// IsOwnedBy checks whether the given AgentID's key was created by the given email.
-func (km *KeyManager) IsOwnedBy(agentID, email string) bool {
+// IsOwnedBy checks whether machine id's key was created by the given email.
+func (km *KeyManager) IsOwnedBy(id identity.MachineID, email string) bool {
 	km.mu.Lock()
 	defer km.mu.Unlock()
-	r, exists := km.records[agentID]
+	r, exists := km.records[id]
 	return exists && r.Owner == email
 }
 
-// appendToFile appends a single hashed key entry to the key file.
-// Format: agentID:sha256:<hex> — plaintext key is never written to disk.
-func (km *KeyManager) appendToFile(agentID, key string) error {
+// appendToFile appends machine m's line with key's hash to the key file:
+// the plaintext key is never written to disk.
+func (km *KeyManager) appendToFile(m Machine, key string) error {
 	if km.filePath == "" {
 		return nil // no file persistence (e.g., env-only mode)
 	}
@@ -226,12 +210,12 @@ func (km *KeyManager) appendToFile(agentID, key string) error {
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		data = append(data, '\n')
 	}
-	data = fmt.Appendf(data, "%s:%s%s\n", agentID, hashPrefix, hashKey(key))
+	data = append(append(data, m.line(sha256.Sum256([]byte(key)))...), '\n')
 	return writeFileAtomic(km.filePath, data)
 }
 
 // rewriteFile rebuilds the key file from the current store contents.
-// Keys are written in hashed format: agentID:sha256:<hex>
+// Keys are written hashed: "<machine id> <name> <service,...> sha256:<hex>".
 func (km *KeyManager) rewriteFile() error {
 	if km.filePath == "" {
 		return nil
@@ -240,9 +224,9 @@ func (km *KeyManager) rewriteFile() error {
 	km.store.mu.RLock()
 	var lines []string
 	lines = append(lines, "# API keys managed by the relay (do not edit manually)")
-	lines = append(lines, "# Format: agentID:sha256:<hex_hash>")
-	for hash, agentID := range km.store.keys {
-		lines = append(lines, fmt.Sprintf("%s:%s%s", agentID, hashPrefix, hex.EncodeToString(hash[:])))
+	lines = append(lines, "# Format: <machine id> <name> <service,...> sha256:<hex_hash>")
+	for hash, m := range km.store.keys {
+		lines = append(lines, m.line(hash))
 	}
 	km.store.mu.RUnlock()
 

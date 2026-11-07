@@ -162,7 +162,7 @@ func (env *benchEnv) registerMockAgent(ctx context.Context, agentID string) {
 
 	grpcStream := NewGRPCStream(agentID, es, ctx, heartbeats, ticker)
 	env.dispatcher.Upstreams.Store(agentID, grpcStream)
-	env.dispatcher.RegisterAgent(agentID, "", "", "")
+	env.dispatcher.RegisterAgent(agentID, "", "")
 
 	// Start the same response-processing loop the AgentTunnel handler runs.
 	go func() {

@@ -4,265 +4,121 @@
 package keyfile
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nfltr/relay-core/core/identity"
 )
 
 func testKeyManagerLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-// ── KeyManager Generate ─────────────────────────────────────────────────────
-
-func TestKeyManager_Generate(t *testing.T) {
-	dir := t.TempDir()
-	keyFile := filepath.Join(dir, "api-keys")
-
-	store := NewAPIKeyStore()
-	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
-
-	resp, err := km.Generate("agent-east")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.AgentID != "agent-east" {
-		t.Fatalf("expected agentID 'agent-east', got %q", resp.AgentID)
-	}
-	if !strings.HasPrefix(resp.APIKey, "rpc_") {
-		t.Fatalf("expected key to start with 'rpc_', got %q", resp.APIKey)
-	}
-	// Key should be 4 (prefix) + 96 (hex) = 100 chars
-	if len(resp.APIKey) != 100 {
-		t.Fatalf("expected key length 100, got %d", len(resp.APIKey))
-	}
-
-	// Key should be usable for authentication
-	agentID, ok := store.Validate(resp.APIKey)
-	if !ok {
-		t.Fatal("generated key should be valid in store")
-	}
-	if agentID != "agent-east" {
-		t.Fatalf("expected agentID 'agent-east', got %q", agentID)
-	}
-
-	// Key file should exist and contain the hashed entry (never plaintext)
-	data, err := os.ReadFile(keyFile)
-	if err != nil {
-		t.Fatalf("read key file: %v", err)
-	}
-	content := string(data)
-	if !strings.Contains(content, "agent-east:sha256:") {
-		t.Fatalf("expected key file to contain hashed entry, got: %s", content)
-	}
-	// The plaintext key should NOT appear in the file
-	if strings.Contains(content, resp.APIKey) {
-		t.Fatal("plaintext key should NOT appear in the key file")
-	}
-}
-
-func TestKeyManager_Generate_EmptyAgentID(t *testing.T) {
-	store := NewAPIKeyStore()
-	km := NewKeyManager("", store, testKeyManagerLogger())
-
-	_, err := km.Generate("")
-	if err == nil {
-		t.Fatal("expected error for empty agentID")
-	}
-}
-
-// An agent ID the key file cannot hold (agentID:sha256:<hex> per line) is
-// refused: ':' or a line break would re-key or add an agent on the next
-// load, surrounding space is trimmed away by it, '#' starts a comment.
-// Found by Schemathesis (tests/conformance/schemathesis.sh) on POST /api/v1/keys.
-func TestKeyManager_Generate_RejectsAgentIDTheKeyFileCannotHold(t *testing.T) {
+// TestKeyFileAssignsMachineID (Decided 7): adding a machine assigns it a
+// fresh id the caller never chose; the key validates at once as that
+// machine, is written hashed only, and the file loads back the same
+// machine. Two machines of one name are refused, a service over 34
+// characters is refused typed, and a later machine never gets an id again.
+func TestKeyFileAssignsMachineID(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "api-keys")
-	km := NewKeyManager(keyFile, NewAPIKeyStore(), testKeyManagerLogger())
-	for _, id := range []string{"a:b", "victim:sha256:00\nx", "x\nvictim", " lead", "trail\t", "#comment", "nul\x00", "ok\u0085"} {
-		if _, err := km.Generate(id); err == nil {
-			t.Errorf("Generate(%q) accepted", id)
+	store := NewAPIKeyStore()
+	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
+
+	resp, err := km.Generate("east", []string{"ssh", "web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := identity.ParseMachineID(string(resp.MachineID)); err != nil || resp.Name != "east" {
+		t.Fatalf("Generate = %+v (%v)", resp, err)
+	}
+	if !strings.HasPrefix(resp.APIKey, "rpc_") || len(resp.APIKey) != 100 {
+		t.Fatalf("key %q: want rpc_ and 96 hex characters", resp.APIKey)
+	}
+	if m, ok := store.Validate(resp.APIKey); !ok || m.ID != resp.MachineID {
+		t.Fatalf("the new key validates as %+v, %v", m, ok)
+	}
+	data, _ := os.ReadFile(keyFile)
+	if strings.Contains(string(data), resp.APIKey) || !strings.Contains(string(data), string(resp.MachineID)+" east ssh,web sha256:") {
+		t.Fatalf("key file %q: want the machine's hashed line only", data)
+	}
+	back, err := LoadAPIKeys(keyFile)
+	if m, ok := back.Validate(resp.APIKey); err != nil || !ok || m.ID != resp.MachineID {
+		t.Fatalf("reloaded: %+v %v %v", m, ok, err)
+	}
+
+	if _, err := km.Generate("east", []string{"ssh"}); err == nil {
+		t.Fatal("a second machine named east was added")
+	}
+	if _, err := km.Generate("west", []string{strings.Repeat("s", identity.MaxServiceLen+1)}); !errors.Is(err, ErrServiceName) {
+		t.Fatalf("a 35-character service: %v, want ErrServiceName", err)
+	}
+	for _, bad := range []struct {
+		name string
+		svcs []string
+	}{{"", []string{"ssh"}}, {"West", []string{"ssh"}}, {"a:b", []string{"ssh"}}, {"west", nil}, {"west", []string{"ssh", "ssh"}}} {
+		if _, err := km.Generate(bad.name, bad.svcs); err == nil {
+			t.Fatalf("Generate(%q, %v) was accepted", bad.name, bad.svcs)
 		}
 	}
-	if _, err := km.Generate("agent-east.v2@team_1"); err != nil {
-		t.Fatalf("plain agent ID refused: %v", err)
+	other, err := km.Generate("west", []string{"ssh"})
+	if err != nil || other.MachineID == resp.MachineID {
+		t.Fatalf("second machine %+v, %v", other, err)
 	}
-	if _, err := LoadAPIKeys(keyFile); err != nil {
-		t.Fatalf("key file no longer loads: %v", err)
+	if len(km.List()) != 2 {
+		t.Fatalf("%d records, want 2", len(km.List()))
 	}
 }
 
-func TestKeyManager_Generate_Duplicate(t *testing.T) {
-	dir := t.TempDir()
-	keyFile := filepath.Join(dir, "api-keys")
-
+func TestKeyManagerRevoke(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "api-keys")
 	store := NewAPIKeyStore()
 	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
-
-	_, err := km.Generate("agent-east")
+	var cut []string
+	km.OnRevoke(func(s string) { cut = append(cut, s) })
+	resp, err := km.Generate("east", []string{"ssh"})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	_, err = km.Generate("agent-east")
-	if err == nil {
-		t.Fatal("expected error for duplicate agentID")
+	if err := km.Revoke(resp.MachineID); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "already has an API key") {
-		t.Fatalf("unexpected error message: %v", err)
+	if _, ok := store.Validate(resp.APIKey); ok || len(cut) != 1 || cut[0] != string(resp.MachineID) {
+		t.Fatalf("after revoke: valid %v, OnRevoke %v", ok, cut)
 	}
-}
-
-// ── KeyManager Revoke ───────────────────────────────────────────────────────
-
-func TestKeyManager_Revoke(t *testing.T) {
-	dir := t.TempDir()
-	keyFile := filepath.Join(dir, "api-keys")
-
-	store := NewAPIKeyStore()
-	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
-
-	resp, _ := km.Generate("agent-east")
-	apiKey := resp.APIKey
-
-	// Verify key works
-	_, ok := store.Validate(apiKey)
-	if !ok {
-		t.Fatal("key should be valid before revoke")
+	if data, _ := os.ReadFile(keyFile); strings.Contains(string(data), string(resp.MachineID)) {
+		t.Fatal("the key file still holds the revoked machine")
 	}
-
-	// Revoke
-	if err := km.Revoke("agent-east"); err != nil {
-		t.Fatalf("revoke error: %v", err)
+	if err := km.Revoke(resp.MachineID); err == nil {
+		t.Fatal("a second revoke of the machine: no error")
 	}
-
-	// Key should no longer work
-	_, ok = store.Validate(apiKey)
-	if ok {
-		t.Fatal("key should be invalid after revoke")
-	}
-
-	// File should not contain the entry
-	data, _ := os.ReadFile(keyFile)
-	if strings.Contains(string(data), apiKey) {
-		t.Fatal("key file should not contain revoked key")
+	// Its name is free again; the new machine gets a new id.
+	again, err := km.Generate("east", []string{"ssh"})
+	if err != nil || again.MachineID == resp.MachineID {
+		t.Fatalf("re-added: %+v, %v", again, err)
 	}
 }
 
-func TestKeyManager_Revoke_NotFound(t *testing.T) {
+// The provider states the key's machine: its id, its services as the names
+// it may register, and its own account.
+func TestProviderStatesTheMachine(t *testing.T) {
 	store := NewAPIKeyStore()
 	km := NewKeyManager("", store, testKeyManagerLogger())
-
-	err := km.Revoke("nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent agentID")
-	}
-}
-
-// ── KeyManager List ─────────────────────────────────────────────────────────
-
-func TestKeyManager_List(t *testing.T) {
-	dir := t.TempDir()
-	keyFile := filepath.Join(dir, "api-keys")
-
-	store := NewAPIKeyStore()
-	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
-
-	_, _ = km.Generate("agent-east")
-	_, _ = km.Generate("agent-west")
-
-	records := km.List()
-	if len(records) != 2 {
-		t.Fatalf("expected 2 records, got %d", len(records))
-	}
-
-	agentIDs := map[string]bool{}
-	for _, r := range records {
-		agentIDs[r.AgentID] = true
-		if r.KeyPrefix == "" {
-			t.Fatal("expected non-empty key prefix")
-		}
-	}
-	if !agentIDs["agent-east"] || !agentIDs["agent-west"] {
-		t.Fatal("expected both agent-east and agent-west in list")
-	}
-}
-
-// ── APIKeyStore Remove ──────────────────────────────────────────────────────
-
-func TestAPIKeyStore_Remove(t *testing.T) {
-	store := NewAPIKeyStore()
-	store.Add(testAgentID, "key-aaa")
-	store.Add("agent-2", "key-bbb")
-
-	store.Remove(testAgentID)
-
-	_, ok := store.Validate("key-aaa")
-	if ok {
-		t.Fatal("expected key-aaa to be invalid after remove")
-	}
-	_, ok = store.Validate("key-bbb")
-	if !ok {
-		t.Fatal("expected key-bbb to still be valid")
-	}
-}
-
-// ── HTTP Handlers ───────────────────────────────────────────────────────────
-
-// ── End-to-end: generate → authenticate → revoke → fail auth ───────────────
-
-func TestKeyManager_EndToEnd(t *testing.T) {
-	dir := t.TempDir()
-	keyFile := filepath.Join(dir, "api-keys")
-	store := NewAPIKeyStore()
-	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
-
-	// 1. Generate key for agent
-	resp, err := km.Generate(testAgentID2)
+	resp, err := km.Generate("east", []string{"ssh"})
 	if err != nil {
-		t.Fatalf("generate: %v", err)
+		t.Fatal(err)
 	}
-
-	// 2. Agent authenticates
-	agentID, ok := store.Validate(resp.APIKey)
-	if !ok || agentID != testAgentID2 {
-		t.Fatal("authentication should succeed")
+	a := identity.NewAuthenticator(ProviderName, Provider{Store: store})
+	p, err := a.Authenticate(context.Background(), identity.Credential{Token: resp.APIKey, Name: "ssh"})
+	if err != nil || p.Machine != resp.MachineID || p.AgentID != (identity.AgentRef{Machine: resp.MachineID, Service: "ssh"}).String() {
+		t.Fatalf("principal %+v, %v", p, err)
 	}
-
-	// 3. Revoke
-	if err := km.Revoke(testAgentID2); err != nil {
-		t.Fatalf("revoke: %v", err)
-	}
-
-	// 4. Authentication should fail
-	_, ok = store.Validate(resp.APIKey)
-	if ok {
-		t.Fatal("authentication should fail after revocation")
-	}
-
-	// 5. Can generate a new key for the same AgentID
-	resp2, err := km.Generate(testAgentID2)
-	if err != nil {
-		t.Fatalf("re-generate: %v", err)
-	}
-	if resp2.APIKey == resp.APIKey {
-		t.Fatal("new key should be different from old key")
-	}
-
-	// 6. New key works
-	agentID, ok = store.Validate(resp2.APIKey)
-	if !ok || agentID != testAgentID2 {
-		t.Fatal("new key should authenticate")
-	}
-
-	// 7. Verify persistence: reload from file
-	store2, err := LoadAPIKeys(keyFile)
-	if err != nil {
-		t.Fatalf("reload key file: %v", err)
-	}
-	agentID, ok = store2.Validate(resp2.APIKey)
-	if !ok || agentID != testAgentID2 {
-		t.Fatal("reloaded store should contain the new key")
+	if _, err := a.Authenticate(context.Background(), identity.Credential{Token: resp.APIKey, Name: "web"}); !errors.Is(err, identity.ErrNameNotAllowed) {
+		t.Fatalf("an unbound service: %v", err)
 	}
 }

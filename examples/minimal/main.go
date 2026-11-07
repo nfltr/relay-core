@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nfltr/relay-core/compose"
+	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay/client/agent"
@@ -33,7 +34,8 @@ func main() {
 	viper.Set("tcp.enabled", true)
 	const key = "rpc_minimal-example-key-0123456789"
 	keys := keyfile.NewAPIKeyStore()
-	keys.Add("demo", key)
+	machine := identity.NewMachineID()
+	keys.Add(keyfile.Machine{ID: machine, Name: "demo", Services: []string{"echo"}}, key)
 
 	var ls compose.Ports // the relay's ports: clients, agents, /ready
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {
@@ -59,7 +61,7 @@ func main() {
 	m, _ := must2(dataplane.Upgrade(ctx, must(net.Dial("tcp", ls.Proxy.Addr().String())), "relay", key, 1<<20))
 	go func() { _ = m.Serve(nil) }()
 	for ctx.Err() == nil { // the agent registers its TCP stream just after Connect
-		s, err := m.Open(&pb.TCPData{AgentId: "echo", TargetAddr: "22"})
+		s, err := m.Open(&pb.TCPData{AgentId: identity.AgentRef{Machine: machine, Service: "echo"}.String(), TargetAddr: "22"})
 		if err == nil {
 			msg := []byte("hello through the relay core")
 			buf := make([]byte, len(msg))

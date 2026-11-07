@@ -60,11 +60,11 @@ func (h *CoreHost) Core() *session.Core { return h.C }
 // Logger returns the host's logger.
 func (h *CoreHost) Logger() *slog.Logger { return h.Log }
 
-// Visible is the key base's own agents, the rule the core's sessions
-// reach by (Dispatcher.PrincipalReaches): the WireGuard frontend's exits.
-// An owner the directory cannot read is out of scope.
-func (h *CoreHost) Visible(principal string) func(agentID string) bool {
-	reaches := h.C.Dispatcher.PrincipalReaches(identity.Principal{Subject: principal})
+// Visible is the agents p may dial, the rule the core's sessions reach by
+// (Dispatcher.DialReaches): the WireGuard frontend's exits. An owner the
+// directory cannot read is out of scope.
+func (h *CoreHost) Visible(p identity.Principal) func(agentID string) bool {
+	reaches := h.C.Dispatcher.DialReaches(p)
 	return func(agentID string) bool {
 		ok, _ := reaches(agentID)
 		return ok

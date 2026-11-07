@@ -37,7 +37,8 @@ func main() {
 	viper.Set("tcp.enabled", true)
 	const key = "rpc_minimal-example-key-0123456789"
 	keys := keyfile.NewAPIKeyStore()
-	keys.Add("demo", key)
+	machine := identity.NewMachineID()
+	keys.Add(keyfile.Machine{ID: machine, Name: "demo", Services: []string{"echo"}}, key)
 
 	var ls compose.Ports // the relay's ports: clients, agents, /ready
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {
@@ -45,7 +46,7 @@ func main() {
 	}
 	port := must(net.Listen("tcp", "127.0.0.1:0")) // the frontend's own port
 	go func() {
-		log.Fatal(compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, []frontend.Frontend{&tcpPort{l: port, agent: "echo", service: "22"}}, keyfile.Provider{Store: keys}))
+		log.Fatal(compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, []frontend.Frontend{&tcpPort{l: port, machine: machine, agent: identity.AgentRef{Machine: machine, Service: "echo"}.String(), service: "22"}}, keyfile.Provider{Store: keys}))
 	}()
 
 	echo := must(net.Listen("tcp", "127.0.0.1:0")) // the service behind the agent
@@ -80,10 +81,11 @@ func main() {
 }
 
 // tcpPort is a frontend: on l, each connection is a session to agent's
-// service, opened on behalf of the key "demo" (the relay's reach rule
+// service, opened on behalf of the machine "demo" (the relay's reach rule
 // decides, as for any client).
 type tcpPort struct {
 	l              net.Listener
+	machine        identity.MachineID
 	agent, service string
 }
 
@@ -92,7 +94,7 @@ func (*tcpPort) Settings() []frontend.Setting { return nil }
 
 // Attach serves l with the relay's run (h.Go): it ends with the relay.
 func (f *tcpPort) Attach(ctx context.Context, h frontend.Host) error {
-	owner := identity.Principal{Provider: keyfile.ProviderName, Owner: "demo", Subject: "demo", AgentID: "demo"}
+	owner := identity.Principal{Provider: keyfile.ProviderName, Owner: string(f.machine), Machine: f.machine, Subject: string(f.machine)}
 	h.Go(func() error {
 		go func() { <-ctx.Done(); _ = f.l.Close() }()
 		var backoff time.Duration

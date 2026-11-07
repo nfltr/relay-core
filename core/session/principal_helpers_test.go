@@ -5,6 +5,8 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base32"
 
 	"github.com/nfltr/relay-core/keyfile"
 
@@ -28,7 +30,23 @@ func testPrincipal(ctx context.Context) context.Context {
 	if owner == "" {
 		owner = id
 	}
-	return identity.WithPrincipal(ctx, identity.Principal{Provider: keyfile.ProviderName, Owner: "keys:" + owner, Subject: base, AgentID: id})
+	p := identity.Principal{Provider: keyfile.ProviderName, Owner: "keys:" + owner, Subject: base, AgentID: id}
+	if ref, err := identity.ParseAgentRef(id); err == nil {
+		p.Machine = ref.Machine
+	}
+	return identity.WithPrincipal(ctx, p)
+}
+
+// testMachine is a machine id fixed by seed, so a test names the same
+// machine twice by one word.
+func testMachine(seed string) identity.MachineID {
+	sum := sha256.Sum256([]byte(seed))
+	return identity.MachineID("m-" + base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding).EncodeToString(sum[:16]))
+}
+
+// testRef is service svc's agent ref on testMachine(seed).
+func testRef(seed, svc string) string {
+	return identity.AgentRef{Machine: testMachine(seed), Service: svc}.String()
 }
 
 // testPrincipalStream and testPrincipalUnary are testPrincipal as server

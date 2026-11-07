@@ -53,7 +53,7 @@ func echoThrough(tb testing.TB, r *relaycoretest.Relay, msg string) string {
 	go func() { _ = m.Serve(nil) }()
 	tb.Cleanup(func() { _ = m.Close() })
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) { // the agent registers its TCP stream just after Connect
-		s, err := m.Open(&pb.TCPData{AgentId: "echo", TargetAddr: "22"})
+		s, err := m.Open(&pb.TCPData{AgentId: r.Ref("echo"), TargetAddr: "22"})
 		if err == nil {
 			buf := make([]byte, len(msg))
 			if _, err = s.Write([]byte(msg)); err == nil {
@@ -73,7 +73,7 @@ func echoThrough(tb testing.TB, r *relaycoretest.Relay, msg string) string {
 // key's bytes to their agent.
 func TestNewCarriesBytes(t *testing.T) {
 	for i := range 2 {
-		r := relaycoretest.New(t)
+		r := relaycoretest.New(t, "echo")
 		if got := echoThrough(t, r, fmt.Sprint("hello ", i)); got != fmt.Sprint("hello ", i) {
 			t.Fatalf("echoed %q", got)
 		}

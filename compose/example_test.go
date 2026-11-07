@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/nfltr/relay-core/compose"
+	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/config"
 	flag "github.com/spf13/pflag"
@@ -27,7 +28,7 @@ func ExampleServe() {
 		os.Args = args
 	}
 	keys := keyfile.NewAPIKeyStore()
-	keys.Add("demo", "rpc_example-key")
+	keys.Add(keyfile.Machine{ID: identity.NewMachineID(), Name: "demo", Services: []string{"web"}}, "rpc_example-key")
 
 	var ls compose.Ports
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {

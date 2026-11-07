@@ -17,6 +17,7 @@ import (
 
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/directory"
+	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/core/sharecode"
 	"github.com/nfltr/relay-core/internal/platform/acceptloop"
 	"github.com/nfltr/relay-core/internal/platform/auth"
@@ -97,6 +98,23 @@ type TCPEndpoint struct {
 	// visitor's TLS and gives it to the backend as X-Forwarded-For and
 	// X-Real-IP.
 	ClientAddr string
+	// Caller is the principal that opened the session (Core.Open): the
+	// replica that serves it re-checks Reach with its own policy
+	// (ServeLinkTCP), so a move or revocation applied there holds even for
+	// a session another replica routed. Zero for a session no principal
+	// opened (a share's or a public E2EE host's visitor), which its share
+	// or the agent authorizes.
+	Caller identity.Principal
+}
+
+// callerIdentity is the open frame's caller for the agent
+// (pb.TCPData.Caller, the relay SDK's Session.Caller): the machine, group
+// and account of a principal with a machine, nil for any other session.
+func callerIdentity(p identity.Principal) *pb.CallerIdentity {
+	if p.Machine == "" {
+		return nil
+	}
+	return &pb.CallerIdentity{MachineId: string(p.Machine), GroupId: p.Group, Account: p.Owner}
 }
 
 // TCPDispatcher accepts raw TCP connections, multiplexes them over agents'
@@ -170,6 +188,9 @@ type TCPDispatcher struct {
 
 	// ownerOf is the dispatcher's OwnerForAgent (OpenMeter); set by WireTCP.
 	ownerOf func(agentID string) (string, error)
+	// reach is the dispatcher's Reach (ServeLinkTCP's re-check); set by
+	// WireTCP. Unset, a session with a caller is refused (fail closed).
+	reach func(p identity.Principal, agentID string, a Action) (bool, error)
 }
 
 // NewTCPDispatcher creates an empty TCP dispatcher.
@@ -298,7 +319,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		shareUnenforced()
 		return errTCPSessionRefused
 	}
-	open := &pb.TCPData{AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, E2Ee: ep.E2EE, ClientAddr: ep.ClientAddr}
+	open := &pb.TCPData{AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, E2Ee: ep.E2EE, ClientAddr: ep.ClientAddr, Caller: callerIdentity(ep.Caller)}
 	ctx := context.Background()
 	if traceOn {
 		ctx = traceHArrive(ctx, primaryOf(as))
@@ -339,7 +360,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 	firstByte := true
 
 	// Send open frame so the agent dials ep.TargetAddr.
-	as.send(&pb.TCPData{SessionId: sessionID, AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, Open: true, E2Ee: ep.E2EE, ClientAddr: ep.ClientAddr})
+	as.send(&pb.TCPData{SessionId: sessionID, AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, Open: true, E2Ee: ep.E2EE, ClientAddr: ep.ClientAddr, Caller: callerIdentity(ep.Caller)})
 	go d.pumpToAgent(conn, as, sessionID, sess)
 
 	// Deliver everything the agent sent before its close: the close frame
@@ -701,7 +722,7 @@ func (d *TCPDispatcher) onwardLocal(ctx context.Context, ep TCPEndpoint, as *tcp
 		}
 		ep.Answer = false
 	}
-	open := &pb.TCPData{AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, E2Ee: ep.E2EE, Answer: ep.Answer, ClientAddr: ep.ClientAddr}
+	open := &pb.TCPData{AgentId: ep.AgentID, TargetAddr: ep.TargetAddr, E2Ee: ep.E2EE, Answer: ep.Answer, ClientAddr: ep.ClientAddr, Caller: callerIdentity(ep.Caller)}
 	tctx := ctx
 	if traceOn {
 		tctx = traceHArrive(ctx, primaryOf(as))

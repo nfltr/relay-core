@@ -5,6 +5,7 @@ package grpcauth
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/nfltr/relay-core/core/identity"
@@ -52,7 +53,7 @@ func wantBalanceStatus(t *testing.T, where string, err error) {
 // that stops on Unauthenticated keeps retrying instead.
 func TestBalanceExhaustedTypedOnGRPC(t *testing.T) {
 	store := keyfile.NewAPIKeyStore()
-	store.Add("agent", "k")
+	store.Add(testMachine, "k")
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-api-key", "k"))
 
 	refuse := identity.NewAuthenticator("accounts", refusing{keyfile.Provider{Store: store}, identity.ErrBalanceExhausted})
@@ -67,4 +68,35 @@ func TestBalanceExhaustedTypedOnGRPC(t *testing.T) {
 		return ss.Context().Err()
 	})
 	wantBalanceStatus(t, "cut", err)
+}
+
+// TestUnenrolledKeyRefusedOnGRPC: a key whose provider states no machine
+// is refused at admission as Unauthenticated with the enrolment message,
+// never as an invalid key and never with a principal.
+func TestUnenrolledKeyRefusedOnGRPC(t *testing.T) {
+	auth := identity.NewAuthenticator("accounts", noMachine{})
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-api-key", "k", "x-agent-id", "svc"))
+	p, err := MetadataPrincipal(ctx, auth)
+	s, _ := status.FromError(err)
+	if s.Code() != codes.Unauthenticated || !strings.Contains(s.Message(), "machine_not_enrolled") || p.Provider != "" || !hasReason(s, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED) {
+		t.Fatalf("unenrolled key: %+v, %v; want Unauthenticated machine_not_enrolled", p, err)
+	}
+}
+
+// noMachine knows every token as a key with no machine.
+type noMachine struct{}
+
+func (noMachine) Name() string { return "accounts" }
+func (noMachine) Authenticate(context.Context, identity.Credential) (identity.Principal, error) {
+	return identity.Principal{Owner: "o", Subject: "cli-1", Names: []string{"svc"}}, nil
+}
+
+// hasReason reports whether s carries reason as its ErrorInfo.
+func hasReason(s *status.Status, reason relayv1.ErrorReason) bool {
+	for _, d := range s.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetReason() == reason.String() {
+			return true
+		}
+	}
+	return false
 }

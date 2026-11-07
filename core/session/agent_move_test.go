@@ -159,7 +159,7 @@ func TestAgentMovesBeforeTheReplicaLetsItGo(t *testing.T) {
 
 	drain()
 	waitMove(t, "MOVE_RECONNECT", func() bool { return len(sink.steps()) == 1 && sink.steps()[0] == pb.Move_MOVE_RECONNECT })
-	if !d.IsAgentConnected("agent-1") {
+	if !agentConnected(d, "agent-1") {
 		t.Fatal("the replica stopped routing to the agent before its new connection was up")
 	}
 
@@ -168,7 +168,7 @@ func TestAgentMovesBeforeTheReplicaLetsItGo(t *testing.T) {
 	mc.Data[directory.GetDispatcherCacheKey("agent-1")] = &directory.Value{PodIP: "10.0.0.2", Since: time.Now().UnixNano()}
 	mc.Mu.Unlock()
 	d.processHTTPInput(t.Context(), s, &pb.HTTPProxyResponse{Move: pb.Move_MOVE_CONNECTED}, time.Now()) //nolint:errcheck
-	waitMove(t, "routing stopped", func() bool { return !d.IsAgentConnected("agent-1") })
+	waitMove(t, "routing stopped", func() bool { return !agentConnected(d, "agent-1") })
 	if _, ok := d.RouteHere("agent-1"); ok {
 		t.Fatal("a route lease on a session that no longer routes")
 	}
@@ -321,7 +321,7 @@ func TestDrainBoundEndsOnceRoutingStopped(t *testing.T) {
 	mc.Data[directory.GetDispatcherCacheKey("agent-1")] = &directory.Value{PodIP: "10.0.0.2", Since: time.Now().UnixNano()}
 	mc.Mu.Unlock()
 	d.processHTTPInput(t.Context(), s, &pb.HTTPProxyResponse{Move: pb.Move_MOVE_CONNECTED}, time.Now()) //nolint:errcheck
-	waitMove(t, "routing stopped", func() bool { return !d.IsAgentConnected("agent-1") })
+	waitMove(t, "routing stopped", func() bool { return !agentConnected(d, "agent-1") })
 	select {
 	case err := <-done:
 		t.Fatalf("the drain's move bound ended the session (%v) while a request routed here was held", err)
@@ -363,7 +363,7 @@ func TestMovedAgentsTCPStreamTakesNoNewSessions(t *testing.T) {
 	mc.Data[directory.GetDispatcherCacheKey("agent-1")] = &directory.Value{PodIP: "10.0.0.2", Since: time.Now().UnixNano()}
 	mc.Mu.Unlock()
 	d.processHTTPInput(t.Context(), s, &pb.HTTPProxyResponse{Move: pb.Move_MOVE_CONNECTED}, time.Now()) //nolint:errcheck
-	waitMove(t, "routing stopped", func() bool { return !d.IsAgentConnected("agent-1") })
+	waitMove(t, "routing stopped", func() bool { return !agentConnected(d, "agent-1") })
 	if !td.yield("agent-1", as) { // its renewal found the agent's new record
 		t.Fatal("the moved stream's open session was not kept")
 	}

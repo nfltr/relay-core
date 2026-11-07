@@ -238,7 +238,7 @@ func TestPresenceHTTPAgentFailedReleaseDownsAgainAfterTheTTL(t *testing.T) {
 	if _, err := s.Header(); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, func() bool { return d.IsAgentConnected("agent-1") }, func() string { return "agent not registered" })
+	waitUntil(t, func() bool { return agentConnected(d, "agent-1") }, func() string { return "agent not registered" })
 	cursor := d.Presence.Cursor()
 	setCacheErr(mc, errors.New("store down"))
 	stop() // the agent goes; its release fails

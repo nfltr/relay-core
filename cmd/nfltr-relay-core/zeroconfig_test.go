@@ -79,9 +79,9 @@ func TestZeroConfigServe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	_, key, ok := strings.Cut(lines[len(lines)-1], ":")
-	if !ok || !strings.HasPrefix(key, "rpc_") {
+	_, rest, ok := strings.Cut(string(data), "# key: ")
+	key, _, _ := strings.Cut(rest, "\n")
+	if !ok || !strings.HasPrefix(key, "rpc_") || strings.Count(string(data), key) != 1 {
 		t.Fatalf("key file holds no generated key")
 	}
 	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "web", APIKey: key, Retries: 1,

@@ -107,6 +107,9 @@ func MetadataPrincipal(ctx context.Context, auth *identity.Authenticator) (ident
 		if errors.Is(err, identity.ErrBalanceExhausted) {
 			return p, BalanceExhaustedStatus().Err()
 		}
+		if errors.Is(err, identity.ErrMachineNotEnrolled) {
+			return p, relaystatus.New(codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED, err.Error()).Err() // says how to enrol
+		}
 		return p, status.Error(codes.Unauthenticated, "invalid API key or fleet token")
 	}
 	return p, nil

@@ -61,7 +61,7 @@ func main() {
 	m, _ := must2(dataplane.Upgrade(ctx, must(net.Dial("tcp", ls.Proxy.Addr().String())), "relay", key, 1<<20))
 	go func() { _ = m.Serve(nil) }()
 	for ctx.Err() == nil { // the agent registers its TCP stream just after Connect
-		s, err := m.Open(&pb.TCPData{AgentId: "echo", TargetAddr: "22"})
+		s, err := m.Open(&pb.TCPData{AgentId: identity.AgentRef{Machine: machines["blue"], Service: "echo"}.String(), TargetAddr: "22"})
 		if err == nil {
 			msg := []byte("hello through the relay core")
 			buf := make([]byte, len(msg))
@@ -77,9 +77,14 @@ func main() {
 	log.Fatal(ctx.Err())
 }
 
-// tokens is an identity.Provider: each token owns its team, whose agents
-// take any name under it; any other token is unknown.
+// tokens is an identity.Provider: each token is one machine of its team,
+// bound to the services the example's agents register; any other token is
+// unknown.
 type tokens map[string]string
+
+// machines is each team's machine id (a real provider reads it from its
+// machine store; it is never the client's choice).
+var machines = map[string]identity.MachineID{"blue": identity.NewMachineID()}
 
 func (tokens) Name() string { return "tokens" }
 
@@ -88,7 +93,7 @@ func (t tokens) Authenticate(_ context.Context, c identity.Credential) (identity
 	if !ok {
 		return identity.Principal{}, identity.ErrUnknownCredential
 	}
-	return identity.Principal{Owner: team, Subject: team, Names: identity.AnyName}, nil
+	return identity.Principal{Owner: team, Machine: machines[team], Subject: team, Names: []string{"echo"}}, nil
 }
 
 func must[T any](v T, err error) T {

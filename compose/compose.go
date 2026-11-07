@@ -132,7 +132,8 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 	}
 
 	d := session.NewDispatcher(ctx, logger.With("type", "dispatcher"), b, producer, dispInv, streamInv, grace)
-	d.AgentsGo = front.Clients.Drained() // no peers: agents go once clients drained
+	d.AgentsGo = front.Clients.Drained()   // no peers: agents go once clients drained
+	d.Policy = session.AccountIsOneGroup{} // the core has no groups
 	c.Dispatcher = d
 	c.PublishedDispatcher.Store(d)
 	if viper.GetBool("tcp.enabled") {
@@ -217,8 +218,8 @@ var ErrNoKeys = errors.New("no API keys")
 // ownRequests routes a share's visitor (<code>.<http.share_domain>,
 // visits: nil without shares) to the shared agent, and a key's own HTTP
 // request to its agent: the key (X-API-Key, Authorization: Bearer or
-// ApiKey) and X-Agent-Id name the agent as the gRPC wire does (the key's
-// namespace); the relay's credential never reaches the agent, and no
+// ApiKey) and X-Agent-Id name the agent as the gRPC wire does (a service
+// of the key's machine); the relay's credential never reaches the agent, and no
 // client sets the identity headers the relay sets. Anything else is 401.
 func ownRequests(auth *identity.Authenticator, serve http.Handler, visits *httpingress.Shares) http.Handler {
 	domain := "." + strings.ToLower(strings.TrimSuffix(strings.TrimSpace(viper.GetString("http.share_domain")), "."))
@@ -237,6 +238,10 @@ func ownRequests(auth *identity.Authenticator, serve http.Handler, visits *httpi
 		p, header, err := connect.RequestPrincipal(auth, r, identity.Credential{Name: r.Header.Get("X-Agent-Id")})
 		if errors.Is(err, identity.ErrBalanceExhausted) {
 			relaystatus.WriteHTTP(w, http.StatusPaymentRequired, codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, err.Error())
+			return
+		}
+		if errors.Is(err, identity.ErrMachineNotEnrolled) {
+			relaystatus.WriteHTTP(w, http.StatusUnauthorized, codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED, err.Error()) // says how to enrol
 			return
 		}
 		if err != nil || p.AgentID == "" {

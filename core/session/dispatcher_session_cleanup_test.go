@@ -24,16 +24,16 @@ func TestReaperEvictionKeepsSiblingSessionState(t *testing.T) {
 	loop := NewInternalAgentLoopback(context.Background(), id)
 	defer loop.Close()
 	d.Agents.Store(id, &HTTPStream{ID: id})
-	d.RegisterAgent(id, "acct", "", "")
+	d.RegisterAgent(id, "acct", "")
 	d.Upstreams.Store(id, loop.DispatcherSide())
-	d.RegisterAgent(id, "acct", "", "")
+	d.RegisterAgent(id, "acct", "")
 
 	d.disconnectAgent(id)
 	if _, ok := d.Upstreams.Load(id); ok {
 		t.Fatal("the reaper left the evicted stream")
 	}
-	if base, _ := d.AgentKeyBase.Load(id); base != "acct" {
-		t.Fatalf("the reaper removed the key base the agent's HTTP session uses (%q)", base)
+	if owner, _ := d.AgentOwners.Load(id); owner != "acct" {
+		t.Fatalf("the reaper removed the owner the agent's HTTP session uses (%q)", owner)
 	}
 }
 

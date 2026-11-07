@@ -19,6 +19,7 @@ import (
 
 	"github.com/nfltr/relay-core/broker"
 	"github.com/nfltr/relay-core/core/directory"
+	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/internal/platform/txnregistry"
 	"github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay-core/platform/metrics"
@@ -179,7 +180,7 @@ type Dispatcher struct {
 	ClusterRelayPeers bool
 
 	// SingleTenant makes every authenticated caller one tenant: set from
-	// security.trust_loopback (DEV ONLY), as agentTenantScope treats it.
+	// security.trust_loopback (DEV ONLY), Reach.
 	SingleTenant bool
 
 	// AgentOwners holds the owner of each agent connected here (its
@@ -188,14 +189,18 @@ type Dispatcher struct {
 	// (ownerForAgent).
 	AgentOwners *util.SyncMap[string, string]
 
-	// AgentKeyBase caches agentID → key base ID (pre-scoping identity) so
-	// A2A routing can resolve unscoped target names. When agent "key.worker"
-	// sends to target "listener", the router prepends "key." to try
-	// "key.listener" as a fallback. Populated during agent connect from
-	// principal's subject; empty for mTLS agents (no scoping).
-	AgentKeyBase *util.SyncMap[string, string]
+	// Policy is the reach policy Reach asks (agent_reach.go); nil refuses
+	// every reach (fail closed).
+	Policy Policy
+	// MachineOwner, when set, is the account a machine belongs to as the
+	// credential store records it (in the owner form principals carry,
+	// identity.Authenticator.Owner); "" when it does not know the machine.
+	// Reach reads an agent's owner from it (spec Reach.tla AgentIdOwned:
+	// the machine row, one lookup), so an agent not connected yet (a held
+	// open) or between sessions has its owner; else from the directory.
+	MachineOwner func(identity.MachineID) (string, error)
 	// agentStateMu orders registerAgent's writes of the state an agent's
-	// sessions share (agentKeyBase, agentOwners) with forgetAgent's removal.
+	// sessions share (agentOwners) with forgetAgent's removal.
 	agentStateMu sync.Mutex
 
 	// SessionHook is a frontend's part in agent sessions (session_hook.go);
@@ -301,7 +306,6 @@ func NewDispatcher(globalContext context.Context, logger *slog.Logger, msgBroker
 		a2aSessions:  &util.SyncMap[string, *a2aSession]{},
 		handoffStall: handoff.Stall,
 		AgentOwners:  &util.SyncMap[string, string]{},
-		AgentKeyBase: &util.SyncMap[string, string]{},
 
 		// PodDialer is set only in k8s-style multi-pod modes; nil otherwise.
 		// All protocol handlers guard usage with if d.podDialer == nil checks.
@@ -509,18 +513,15 @@ func newHeartbeatState(recvThreshold time.Duration) (heartbeats chan proto.Messa
 }
 
 // RegisterAgent counts a new session of agentID and records the state the
-// agent's sessions share: its key base (its principal's subject, "" none)
-// and owner (its principal's owner, "" none: an in-process agent).
+// agent's sessions share: its owner (its principal's owner, "" none: an
+// in-process agent).
 // A session calls it only once it holds the agent (stored in agents or
 // upstreams), so the teardown of a session it replaced, which runs
 // forgetAgent, leaves what it records.
-func (d *Dispatcher) RegisterAgent(agentID, keyBase, owner, tlsFingerprint string) {
+func (d *Dispatcher) RegisterAgent(agentID, owner, tlsFingerprint string) {
 	d.NumberOfAgentsConnected.Add(1)
 	d.Logger.Debug("number of agents connected", "AgentID", agentID, "count", d.NumberOfAgentsConnected.Load())
 	d.agentStateMu.Lock()
-	if keyBase != "" {
-		d.AgentKeyBase.Store(agentID, keyBase)
-	}
 	if owner != "" {
 		d.AgentOwners.Store(agentID, owner)
 	}
@@ -549,7 +550,7 @@ func (d *Dispatcher) DeregisterAgent(agentID string, s *HTTPStream, streamCtxErr
 	d.forgetAgent(agentID)
 }
 
-// forgetAgent removes the state an agent's sessions share (key base, owner,
+// forgetAgent removes the state an agent's sessions share (owner,
 // inventory refresh, last seen) and runs onAgentDisconnect, once no session of agentID
 // is registered here: an agent's ConnectHTTP and AgentTunnel sessions share
 // it, so the end of one leaves it to the other, and a replaced session's
@@ -565,7 +566,6 @@ func (d *Dispatcher) forgetAgent(agentID string) {
 	d.InventoryRefreshByAgentID.Delete(agentID)
 	d.lastSeenByAgentID.Delete(agentID)
 	d.AgentOwners.Delete(agentID)
-	d.AgentKeyBase.Delete(agentID)
 	d.agentStateMu.Unlock()
 	if d.OnAgentDisconnect != nil {
 		d.OnAgentDisconnect(agentID)
@@ -761,13 +761,6 @@ func (d *Dispatcher) onHeartbeatSendError(agentID string, sendErr error, ipInven
 }
 
 // ---------------------------------------------------------------------------
-
-// IsAgentConnected reports whether the agent with the given ID has an active
-// HTTP stream registered with this Dispatcher.
-func (d *Dispatcher) IsAgentConnected(agentID string) bool {
-	_, ok := d.Agents.Load(agentID)
-	return ok
-}
 
 // GetAllConnectedAgents returns a snapshot list of all currently connected
 // agent IDs registered with this Dispatcher.

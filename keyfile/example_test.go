@@ -15,9 +15,10 @@ import (
 	"github.com/nfltr/relay-core/keyfile"
 )
 
-// A key file holds one "agentID:sha256:<hex of the key's SHA-256>" (or,
-// legacy, "agentID:key") per line; the store keeps only the keys' hashes,
-// and the provider authenticates a credential against it.
+// A key file holds one machine per line: "<machine id> <name>
+// <service,...> sha256:<hex of the key's SHA-256>". The store keeps only
+// the keys' hashes, and the provider authenticates a credential as its
+// machine, which may register only its services.
 func Example() {
 	dir, err := os.MkdirTemp("", "keyfile")
 	if err != nil {
@@ -26,7 +27,8 @@ func Example() {
 	defer os.RemoveAll(dir) //nolint:errcheck
 	path := filepath.Join(dir, "api-keys")
 	sum := sha256.Sum256([]byte("rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa"))
-	if err := os.WriteFile(path, []byte("web:sha256:"+hex.EncodeToString(sum[:])+"\n"), 0o600); err != nil {
+	line := "m-aaaaaaaaaaaaaaaaaaaaaaaaaa web ssh,http sha256:" + hex.EncodeToString(sum[:]) + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
 		panic(err)
 	}
 
@@ -34,27 +36,15 @@ func Example() {
 	if err != nil {
 		panic(err)
 	}
-	id, ok := store.Validate("rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa")
-	fmt.Println(id, ok)
+	m, ok := store.Validate("rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa")
+	fmt.Println(m.ID, m.Name, m.Services, ok)
 	_, ok = store.Validate("rpc_wrong")
 	fmt.Println(ok)
 
 	p, err := keyfile.Provider{Store: store}.Authenticate(context.Background(), identity.Credential{Token: "rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa"})
-	fmt.Println(p.Subject, err)
+	fmt.Println(p.Machine, p.Names, err)
 	// Output:
-	// web true
+	// m-aaaaaaaaaaaaaaaaaaaaaaaaaa web [ssh http] true
 	// false
-	// web <nil>
-}
-
-// ExampleAPIKeyStore_Add adds a key to an empty store.
-func ExampleAPIKeyStore_Add() {
-	store := keyfile.NewAPIKeyStore()
-	store.Add("web", "rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa")
-	fmt.Println(store.Count())
-	id, ok := store.Validate("rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa")
-	fmt.Println(id, ok)
-	// Output:
-	// 1
-	// web true
+	// m-aaaaaaaaaaaaaaaaaaaaaaaaaa [ssh http] <nil>
 }

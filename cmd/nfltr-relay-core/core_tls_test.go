@@ -66,7 +66,7 @@ func TestCoreProcessTLSAndE2EE(t *testing.T) {
 	roots.AddCert(rc)
 	relayTLS := &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 	serveAgent(t, p.grpc, relayTLS, agent.WithTLSCert(agentCert, agentKey))
-	key := testKey[len("alice:"):]
+	key := testSecret
 
 	// Plaintext reaches neither port's service.
 	if res, err := http.Get("http://" + p.proxy + "/hello"); err == nil {
@@ -107,7 +107,7 @@ func TestCoreProcessTLSAndE2EE(t *testing.T) {
 	}
 
 	// tcp.e2ee_policy=require: a session the relay could read is refused.
-	s, err := m.Open(&pb.TCPData{AgentId: "web", TargetAddr: "22"})
+	s, err := m.Open(&pb.TCPData{AgentId: testAgent, TargetAddr: "22"})
 	if err == nil {
 		_, _ = s.Write([]byte("?"))
 		if n, err := s.Read(make([]byte, 8)); n != 0 || !errors.Is(err, link.ErrOpenRefused) {
@@ -120,7 +120,7 @@ func TestCoreProcessTLSAndE2EE(t *testing.T) {
 // e2eeGet opens an end-to-end encrypted session to agent web on m, ends
 // TLS with the agent under clientTLS and sends GET path through it.
 func e2eeGet(m *dataplane.Mux, clientTLS *tls.Config, path string) (string, error) {
-	s, err := m.Open(&pb.TCPData{AgentId: "web", TargetAddr: "22", E2Ee: true})
+	s, err := m.Open(&pb.TCPData{AgentId: testAgent, TargetAddr: "22", E2Ee: true})
 	if err != nil {
 		return "", err
 	}

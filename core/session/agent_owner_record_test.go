@@ -14,11 +14,10 @@ import (
 )
 
 // An agent's owner reaches every replica through its directory record: the
-// agent connects to replica B (its principal names owner "keys:bob.node"),
+// agent connects to replica B (its principal names owner "keys:<ref>"),
 // replica A, which never saw its connection, reads the owner from the
-// record, and reach follows it. A record an older replica wrote names no
-// owner: the agent is reached only from its caller's own namespace, as an
-// unowned agent was before.
+// record, and reach follows it. A record that names no owner is reached
+// by nobody (the hard cut: no namespace fallback).
 func TestAgentOwnerReachesAnotherReplicaThroughItsRecord(t *testing.T) {
 	viper.Set("pod_ip.env_var", "TEST_POD_IP") // records name a pod
 	t.Cleanup(func() { viper.Set("pod_ip.env_var", "") })
@@ -35,8 +34,10 @@ func TestAgentOwnerReachesAnotherReplicaThroughItsRecord(t *testing.T) {
 	shared(a)
 	shared(b)
 	a.SingleTenant, b.SingleTenant = false, false
+	a.Policy, b.Policy = AccountIsOneGroup{}, AccountIsOneGroup{}
 
-	const agent, owner = "bob.node", "keys:bob.node"
+	agent := testRef("bob", "node")
+	owner := "keys:" + agent
 	client, ctx := dialDispatcher(t, serveDispatcherAs(t, b, agent))
 	if _, err := client.AgentTunnel(ctx); err != nil {
 		t.Fatal(err)
@@ -73,28 +74,26 @@ func TestAgentOwnerReachesAnotherReplicaThroughItsRecord(t *testing.T) {
 	if got := mustOwner(t, a, agent); got != owner {
 		t.Fatalf("replica A: owner from the record = %q, want %q", got, owner)
 	}
-	a.RegisterAgent("bob.hub", "bob", owner, "")          // the same owner, on A
-	a.RegisterAgent("eve.hub", "eve", "keys:eve.hub", "") // another owner, on A
-	if !mustReach(t, a.A2AReaches, "bob.hub", "bob", agent) {
+	bobHub, eveHub := testRef("bob-2", "hub"), testRef("eve", "hub")
+	a.RegisterAgent(bobHub, owner, "")          // the same owner, on A
+	a.RegisterAgent(eveHub, "keys:"+eveHub, "") // another owner, on A
+	if !mustReach(t, a.A2AReaches, bobHub, agent) {
 		t.Error("the owner's agent on replica A must reach its agent on replica B")
 	}
-	if mustReach(t, a.A2AReaches, "eve.hub", "eve", agent) {
+	if mustReach(t, a.A2AReaches, eveHub, agent) {
 		t.Error("another owner's agent must not reach it")
 	}
 
-	// A record as an older relay writes it: no account.
-	if _, err := mc.Set(t.Context(), directory.GetStreamerCacheKey("old.node"), directory.Value{PodIP: "10.0.0.3", Since: time.Now().UnixNano(), Seq: 1, Credential: "tag"}, time.Minute); err != nil {
+	// A record that names no account.
+	old := testRef("old", "node")
+	if _, err := mc.Set(t.Context(), directory.GetStreamerCacheKey(old), directory.Value{PodIP: "10.0.0.3", Since: time.Now().UnixNano(), Seq: 1, Credential: "tag"}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if got := mustOwner(t, a, "old.node"); got != "" {
-		t.Fatalf("owner of an older replica's record = %q, want none", got)
+	if got := mustOwner(t, a, old); got != "" {
+		t.Fatalf("owner of a record with no account = %q, want none", got)
 	}
-	a.RegisterAgent("old.hub", "old", owner, "")
-	if !mustReach(t, a.A2AReaches, "old.hub", "old", "old.node") {
-		t.Error("an agent whose owner is unknown must still be reached from its own namespace")
-	}
-	if mustReach(t, a.A2AReaches, "bob.hub", "bob", "old.node") {
-		t.Error("an agent whose owner is unknown must not be reached from another namespace")
+	if mustReach(t, a.A2AReaches, bobHub, old) {
+		t.Error("an agent whose owner is unknown must not be reached")
 	}
 }
 
@@ -109,9 +108,9 @@ func mustOwner(t *testing.T, d *Dispatcher, agentID string) string {
 }
 
 // mustReach is a reach rule's answer for a test whose directory answers.
-func mustReach(t *testing.T, reaches func(caller, base, target string) (bool, error), caller, base, target string) bool {
+func mustReach(t *testing.T, reaches func(caller, target string) (bool, error), caller, target string) bool {
 	t.Helper()
-	ok, err := reaches(caller, base, target)
+	ok, err := reaches(caller, target)
 	if err != nil {
 		t.Fatalf("reach(%q, %q): %v", caller, target, err)
 	}

@@ -200,7 +200,7 @@ func TestConnectHTTP_FullLifecycle(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify agent is stored
-	if !d.IsAgentConnected("agentID-lifecycle") {
+	if !agentConnected(d, "agentID-lifecycle") {
 		t.Log("agent not yet connected, waiting more...")
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -219,7 +219,7 @@ func TestConnectHTTP_FullLifecycle(t *testing.T) {
 	}
 
 	// Verify cleanup
-	if d.IsAgentConnected("agentID-lifecycle") {
+	if agentConnected(d, "agentID-lifecycle") {
 		t.Fatal("agent should be disconnected after cancel")
 	}
 }
