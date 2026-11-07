@@ -674,6 +674,56 @@ replay found finding 36. Regenerate the walks when the spec changes.
 | `ClaimSession`, `nextSeq`, `PutSession` (renew), `DeleteSession`, `Session.Newer`, `seqKey` | `core/directory/session.go` |
 | `MemoryCache` (`Get`, `Set`, `Del`, `Incr`, expiry): the store the walks run on | `core/directory/memory.go` |
 
+## KeyAccount.tla: accounts of a key-file relay
+
+`KeyAccount.tla` models the key file of a relay without a database
+(`keyfile`, lane KEYACCT, nfltr/nfltr
+`docs/decisions/tenants-reach-policy-2026-11-07.md`): each line is a
+machine (an id the file assigns, never reused), a name and an account. A
+machine generated alone is its own account, whose id is that first
+machine's; `keys generate --account X` joins the account of X, a machine
+the file holds. The provider's owner is the line's account, so relay-core
+Reach (owner == owner) lets the machines of one account, and only they,
+reach each other's agents; a name resolves within the caller's account.
+A reload swaps keys and names in one step and is refused when it would
+change a kept machine's account; revoking an account's first machine
+leaves the account to the others.
+
+| action | Go |
+|---|---|
+| `Generate(m, n)` | `KeyManager.Generate` / `GenerateForOwner` (`generate` with no member) |
+| `Join(m, n, j)` | `KeyManager.Join` (`accountOfMember`: j by id, or a name one machine holds) |
+| `Revoke(m)` | `KeyManager.Revoke` |
+| `Reload(m, n, a)` | `KeyManager.Reload` (the edited file: `readAPIKeys`; refused when a kept machine's account changed) |
+
+`Owner(m)` is `Provider.Authenticate`'s owner (`Machine.AccountOf`) and
+`Resolve(c, n)` is `Policy.ResolveMachine` (`APIKeyStore.resolve`).
+Invariants (`KeyAccount.cfg`, `make spec`, 4 ids, 2 names: 53,273 states
+(10,329 distinct), 1 s; `COVERAGE=1` takes every action): `AccountStable`
+(a machine's account never changes after generate), `AccountRooted` (every
+account is the id of a machine generated as its own), `NamesUnique` (per
+account, among live machines), `SameAccountReaches` (one owner exactly for
+one account), `ResolveOwnAccount` (a name resolves to at most one machine,
+of the caller's account). Mutants (`make spec-mutants`), each caught:
+`join-outside` (`--account` naming a machine the file does not hold),
+`dup-name`, `revoke-reassigns` (the first machine's revoke orphaning the
+others), `reload-account` (a reload changing an account), `owner-own-id`
+(every line its own account: the key file before KEYACCT),
+`resolve-global` (a name looked up across accounts). Witnesses, each
+violated: `WitnessOutlivesFirst` (two machines of an account whose first
+machine was revoked), `WitnessNameReused` (a revoked machine's name taken
+again in its account at once), `WitnessNameInTwoAccounts`. Tests:
+keyfile `TestKeyFileAccounts`, `TestLoadAPIKeysRefuses`. No trace
+recorder yet (each manager call is one locked step of one process).
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `Generate`, `Join`, `Revoke`, the line's account | `keyfile/keymanager.go`, `keyfile/apikey.go` |
+| `Reload` | `keyfile/keyfile_reload.go` |
+| `Owner`, `Resolve` | `keyfile/provider.go` |
+
 ## Layer contract: what the layer above may assume
 
 relay-server (its `spec/Replicas.tla`), the relay's clients and the agent

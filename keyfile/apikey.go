@@ -3,7 +3,8 @@
 
 // Package keyfile is the static API key file: the machine store of a relay
 // without a database. Each line is one machine (an id the file assigns,
-// never a client's, and its name) and the SHA-256 of its key (APIKeyStore, LoadAPIKeys); KeyManager adds, reloads and revokes
+// never a client's, its name and, when it joined another machine's
+// account, that account) and the SHA-256 of its key (APIKeyStore, LoadAPIKeys); KeyManager adds, reloads and revokes
 // machines, and Provider authenticates them (nfltr
 // docs/decisions/tenants-reach-policy-2026-11-07.md, Decided 7).
 package keyfile
@@ -26,12 +27,27 @@ import (
 
 const hashPrefix = "sha256:"
 
-// Machine is one machine of the key file: its id and name. It may
+// Machine is one machine of the key file: its id, its name and its
+// account (spec/KeyAccount.tla): "" is its own (its id), else the id of
+// the first machine of the account it joined, fixed at generate. It may
 // register any valid service name (its agents are its own id's refs).
 type Machine struct {
-	ID   identity.MachineID
-	Name string
+	ID      identity.MachineID
+	Name    string
+	Account identity.MachineID
 }
+
+// AccountOf is m's account: the principal's owner (Provider), the scope of
+// its name (Policy.ResolveMachine).
+func (m Machine) AccountOf() identity.MachineID {
+	if m.Account == "" {
+		return m.ID
+	}
+	return m.Account
+}
+
+// accountField is the optional fourth field of a line: account=<id>.
+const accountField = "account="
 
 // ErrMachineName: a machine name the file cannot hold (1 to 63 of
 // [a-z0-9-], not starting or ending with '-').
@@ -44,6 +60,11 @@ func validMachine(m Machine) error {
 	}
 	if !identity.ValidMachineName(m.Name) {
 		return fmt.Errorf("%w: %q", ErrMachineName, m.Name)
+	}
+	if m.Account != "" {
+		if _, err := identity.ParseMachineID(string(m.Account)); err != nil {
+			return fmt.Errorf("account: %w", err)
+		}
 	}
 	return nil
 }
@@ -61,8 +82,9 @@ func NewAPIKeyStore() *APIKeyStore {
 	return &APIKeyStore{keys: make(map[[32]byte]Machine)}
 }
 
-// LoadAPIKeys reads a key file: one "<machine id> <name> sha256:<hex>" per
-// non-empty, non-comment line. A line of another form
+// LoadAPIKeys reads a key file: one "<machine id> <name> sha256:<hex>
+// [account=<machine id>]" per non-empty, non-comment line; a name is
+// unique in its account. A line of another form
 // (the agent-id files before machines) refuses the file: re-add its
 // machines with `nfltr-relay keys add`.
 func LoadAPIKeys(path string) (*APIKeyStore, error) {
@@ -87,7 +109,11 @@ func readAPIKeys(path string) (*APIKeyStore, error) {
 	defer f.Close() //nolint:errcheck
 
 	store := NewAPIKeyStore()
-	ids, names := map[identity.MachineID]bool{}, map[string]bool{}
+	type accountName struct {
+		account identity.MachineID
+		name    string
+	}
+	ids, names := map[identity.MachineID]bool{}, map[accountName]bool{}
 	scanner := bufio.NewScanner(f)
 	for n := 1; scanner.Scan(); n++ {
 		line := strings.TrimSpace(scanner.Text())
@@ -98,10 +124,11 @@ func readAPIKeys(path string) (*APIKeyStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("security: %s line %d: %w", path, n, err)
 		}
-		if ids[m.ID] || names[m.Name] {
-			return nil, fmt.Errorf("security: %s line %d: machine %s (%s) twice: each machine has one key", path, n, m.ID, m.Name)
+		an := accountName{m.AccountOf(), m.Name}
+		if ids[m.ID] || names[an] {
+			return nil, fmt.Errorf("security: %s line %d: machine %s (%s) twice: each machine has one key, each name one machine of its account", path, n, m.ID, m.Name)
 		}
-		ids[m.ID], names[m.Name] = true, true
+		ids[m.ID], names[an] = true, true
 		store.keys[h] = m
 	}
 	if err := scanner.Err(); err != nil {
@@ -189,13 +216,20 @@ func (s *APIKeyStore) Count() int {
 	return len(s.keys)
 }
 
-// parseLine reads one machine line: "<machine id> <name> sha256:<hex>".
+// parseLine reads one machine line: "<machine id> <name> sha256:<hex>
+// [account=<machine id>]".
 func parseLine(line string) (Machine, [32]byte, error) {
 	f := strings.Fields(line)
-	if len(f) != 3 || !strings.HasPrefix(f[2], hashPrefix) {
-		return Machine{}, [32]byte{}, errors.New(`want "<machine id> <name> sha256:<hex>" (a line with a services field, or a key file from before machines: re-add each machine with nfltr-relay keys add)`)
+	if (len(f) != 3 && (len(f) != 4 || !strings.HasPrefix(f[3], accountField))) || !strings.HasPrefix(f[2], hashPrefix) {
+		return Machine{}, [32]byte{}, errors.New(`want "<machine id> <name> sha256:<hex> [account=<machine id>]" (a line with a services field, or a key file from before machines: re-add each machine with nfltr-relay keys add)`)
 	}
 	m := Machine{ID: identity.MachineID(f[0]), Name: f[1]}
+	if len(f) == 4 {
+		m.Account = identity.MachineID(strings.TrimPrefix(f[3], accountField))
+		if m.Account == m.ID {
+			m.Account = ""
+		}
+	}
 	if err := validMachine(m); err != nil {
 		return Machine{}, [32]byte{}, err
 	}
@@ -209,7 +243,11 @@ func (m Machine) Line(key string) string { return m.line(sha256.Sum256([]byte(ke
 
 // line is m's key file line for the key hash h.
 func (m Machine) line(h [32]byte) string {
-	return fmt.Sprintf("%s %s %s%s", m.ID, m.Name, hashPrefix, hex.EncodeToString(h[:]))
+	l := fmt.Sprintf("%s %s %s%s", m.ID, m.Name, hashPrefix, hex.EncodeToString(h[:]))
+	if m.Account != "" && m.Account != m.ID {
+		l += " " + accountField + string(m.Account)
+	}
+	return l
 }
 
 // decodeHashPrefix decodes a 64-char hex string (the portion after "sha256:")

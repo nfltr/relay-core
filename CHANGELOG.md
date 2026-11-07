@@ -12,6 +12,18 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `keyfile`: accounts of a key-file relay (spec/KeyAccount.tla). A line
+  may carry a fourth field `account=<machine id>`: the machine belongs to
+  that account (`Machine.Account`, `Machine.AccountOf`; `KeyRecord.Account`,
+  `KeyGenerateResponse.Account`), and `Provider` gives it that owner, so the
+  machines of one account reach each other's agents. `KeyManager.Join(name,
+  member)` adds a machine to the account of a machine the file holds.
+  `Policy` (session `Policy` and `NameResolver`) resolves
+  `<machine name>.<service>` within the caller's account; `compose.Serve`
+  uses it with the key file. A name is unique per account (was: per file);
+  a reload that changes a kept machine's account is refused. Migration:
+  none for a file without the field (every line stays its own account).
+
 - `platform/ratelimit`: a limiter holds at most `DefaultMaxKeys` keys
   (`WithMaxKeys(n)` sets another cap); past it the least recently used
   key is evicted and counted by `platform/metrics.IncrRateLimitEvictions`

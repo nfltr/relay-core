@@ -5,6 +5,7 @@ package keyfile
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 
@@ -22,7 +23,9 @@ import (
 // takes a connection of the new key. The manager writes the file
 // atomically (writeFileAtomic), so a file without keys (empty, or comments
 // only) is meant: every key is revoked. A file that does not load
-// (missing, unreadable, malformed, a machine twice) changes nothing and
+// (missing, unreadable, malformed, a machine twice) or that changes a
+// kept machine's account (fixed at generate: spec/KeyAccount.tla
+// AccountStable; revoke it and generate it again) changes nothing and
 // returns the error. It returns the revoked machines.
 func (km *KeyManager) Reload() ([]identity.MachineID, error) {
 	next, err := readAPIKeys(km.filePath)
@@ -32,9 +35,17 @@ func (km *KeyManager) Reload() ([]identity.MachineID, error) {
 	km.mu.Lock()
 	defer km.mu.Unlock()
 
+	nextAccount := make(map[identity.MachineID]identity.MachineID, len(next.keys))
+	for _, n := range next.keys {
+		nextAccount[n.ID] = n.AccountOf()
+	}
 	gone := map[identity.MachineID]bool{}
 	km.store.mu.RLock()
 	for h, m := range km.store.keys {
+		if a, kept := nextAccount[m.ID]; kept && a != m.AccountOf() {
+			km.store.mu.RUnlock()
+			return nil, fmt.Errorf("security: %s: machine %s's account changed from %s to %s: an account is fixed at generate; revoke the machine and generate it again", km.filePath, m.ID, m.AccountOf(), a)
+		}
 		if n, ok := next.keys[h]; !ok || n.ID != m.ID {
 			gone[m.ID] = true
 		}

@@ -23,7 +23,7 @@ func testKeyManagerLogger() *slog.Logger {
 // TestKeyFileAssignsMachineID (Decided 7): adding a machine assigns it a
 // fresh id the caller never chose; the key validates at once as that
 // machine, is written hashed only, and the file loads back the same
-// machine. Two machines of one name are refused, and a later machine
+// machine. Two machines of one name in one account are refused, and a later machine
 // never gets an id again.
 func TestKeyFileAssignsMachineID(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "api-keys")
@@ -52,8 +52,8 @@ func TestKeyFileAssignsMachineID(t *testing.T) {
 		t.Fatalf("reloaded: %+v %v %v", m, ok, err)
 	}
 
-	if _, err := km.Generate("east"); err == nil {
-		t.Fatal("a second machine named east was added")
+	if _, err := km.Join("east", string(resp.MachineID)); err == nil {
+		t.Fatal("a second machine named east was added to east's account")
 	}
 	for _, bad := range []string{"", "West", "a:b", "-west"} {
 		if _, err := km.Generate(bad); err == nil {

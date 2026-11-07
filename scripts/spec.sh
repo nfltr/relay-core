@@ -328,7 +328,7 @@ checktraces() {
 # ways) and each trace module's event names against the recorder's Go.
 actions_check() {
 	ok=0
-	for m in AgentLink Handoff Move Presence Directory; do
+	for m in AgentLink Handoff Move Presence Directory KeyAccount; do
 		# A step: a definition whose body primes or keeps a variable (not a temporal formula).
 		acts=$(awk '
 			function flush() { if (name != "" && act && !tmp) print name; name = "" }
@@ -382,6 +382,7 @@ check)
 	run Move.cfg Move.tla
 	run Presence.cfg Presence.tla
 	run Directory.cfg Directory.tla
+	run KeyAccount.cfg KeyAccount.tla
 	# That race heals at the latest session's next renewal (finding 38).
 	run DirectoryHeal.cfg Directory.tla
 	;;
@@ -400,6 +401,13 @@ liveness)
 mutants)
 	m='s/Mutant = "none"/Mutant = "'
 	# A bug put back per invariant.
+	# KeyAccount.tla: the key file's accounts (KEYACCT).
+	for b in join-outside dup-name revoke-reassigns reload-account owner-own-id resolve-global; do
+		expect KeyAccount.cfg KeyAccount.tla "$b" -e "$m$b\"/"
+	done
+	for w in OutlivesFirst NameReused NameInTwoAccounts; do
+		expect KeyAccount.cfg KeyAccount.tla "witness:$w" -e "s/^    ResolveOwnAccount$/    Witness$w/"
+	done
 	expect AgentLink.cfg MCAgentLink.tla fin-overtakes -e "$m"'fin-overtakes"/'
 	expect AgentLink.cfg MCAgentLink.tla grant-early -e "$m"'grant-early"/'
 	expect AgentLink.cfg MCAgentLink.tla no-credit -e 's/Credit = TRUE/Credit = FALSE/' -e 's/MaxBytes = 2/MaxBytes = 3/' # a byte past the window

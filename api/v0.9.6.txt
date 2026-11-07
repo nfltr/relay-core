@@ -1,0 +1,7 @@
+Compatible changes:
+- ./keyfile.(*KeyManager).Join: added
+- ./keyfile.KeyGenerateResponse.Account: added
+- ./keyfile.KeyRecord.Account: added
+- ./keyfile.Machine.Account: added
+- ./keyfile.Machine.AccountOf: added
+- ./keyfile.Policy: added

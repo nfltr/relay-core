@@ -62,6 +62,8 @@ type Ports struct {
 // Serve returns an error wrapping ErrNoKeys.
 func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []frontend.Frontend, providers ...identity.Provider) error {
 	keys := -1 // keys loaded from the key file or environment; -1: providers given
+	// The core has no groups; the key file's accounts also resolve names.
+	var policy session.Policy = session.AccountIsOneGroup{}
 	if len(providers) == 0 {
 		store, err := keyfile.LoadAPIKeys(viper.GetString("security.apikey.file"))
 		if err != nil { // as nfltr-relay: the key file, else the key in the environment
@@ -70,6 +72,7 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 			}
 		}
 		keys, providers = store.Count(), []identity.Provider{keyfile.Provider{Store: store}}
+		policy = keyfile.Policy{Store: store}
 	}
 	grace := time.Duration(viper.GetInt("termination.grace.periodseconds")) * time.Second
 	rules := session.TargetRules{TargetHost: viper.GetString("ssh.proxy.target_host"), E2EEPolicy: viper.GetString("tcp.e2ee_policy"), E2EEDefault: viper.GetBool("tcp.e2ee_default")}
@@ -132,8 +135,8 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 	}
 
 	d := session.NewDispatcher(ctx, logger.With("type", "dispatcher"), b, producer, dispInv, streamInv, grace)
-	d.AgentsGo = front.Clients.Drained()   // no peers: agents go once clients drained
-	d.Policy = session.AccountIsOneGroup{} // the core has no groups
+	d.AgentsGo = front.Clients.Drained() // no peers: agents go once clients drained
+	d.Policy = policy
 	c.Dispatcher = d
 	c.PublishedDispatcher.Store(d)
 	if viper.GetBool("tcp.enabled") {

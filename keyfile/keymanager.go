@@ -22,6 +22,7 @@ import (
 type KeyRecord struct {
 	MachineID identity.MachineID `json:"machine_id"`
 	Name      string             `json:"name"`
+	Account   identity.MachineID `json:"account"`         // its account (Machine.AccountOf)
 	KeyPrefix string             `json:"key_prefix"`      // first chars for identification
 	Owner     string             `json:"owner,omitempty"` // email of the user who created this key
 	CreatedAt time.Time          `json:"created_at"`
@@ -32,6 +33,7 @@ type KeyRecord struct {
 type KeyGenerateResponse struct {
 	MachineID identity.MachineID `json:"machine_id"`
 	Name      string             `json:"name"`
+	Account   identity.MachineID `json:"account"`
 	APIKey    string             `json:"api_key"`
 	CreatedAt time.Time          `json:"created_at"`
 	Message   string             `json:"message"`
@@ -84,7 +86,7 @@ func NewKeyManager(filePath string, store *APIKeyStore, logger *slog.Logger) *Ke
 // fileRecord is the record of a key read from the file: its hash's prefix,
 // no owner, creation time unknown.
 func fileRecord(m Machine, hash [32]byte) KeyRecord {
-	return KeyRecord{MachineID: m.ID, Name: m.Name, KeyPrefix: hex.EncodeToString(hash[:4]) + "..."}
+	return KeyRecord{MachineID: m.ID, Name: m.Name, Account: m.AccountOf(), KeyPrefix: hex.EncodeToString(hash[:4]) + "..."}
 }
 
 // Generate adds a machine named name: the file assigns it a fresh id
@@ -97,6 +99,19 @@ func (km *KeyManager) Generate(name string) (*KeyGenerateResponse, error) {
 // GenerateForOwner is Generate recording the owner email for per-user
 // scoping. A name already in use, or an invalid name, is refused.
 func (km *KeyManager) GenerateForOwner(name, owner string) (*KeyGenerateResponse, error) {
+	return km.generate(name, owner, "")
+}
+
+// Join adds a machine named name to the account of member, a machine the
+// file holds, by its id or (unique in the file) its name: the machines of
+// one account reach each other (spec/KeyAccount.tla Join). The account is
+// member's (the id of that account's first machine), and stays when that
+// machine is revoked.
+func (km *KeyManager) Join(name, member string) (*KeyGenerateResponse, error) {
+	return km.generate(name, "", member)
+}
+
+func (km *KeyManager) generate(name, owner, member string) (*KeyGenerateResponse, error) {
 	m := Machine{ID: identity.NewMachineID(), Name: name}
 	if err := validMachine(m); err != nil {
 		return nil, err
@@ -104,9 +119,16 @@ func (km *KeyManager) GenerateForOwner(name, owner string) (*KeyGenerateResponse
 
 	km.mu.Lock()
 	defer km.mu.Unlock()
+	if member != "" {
+		a, err := km.accountOfMember(member)
+		if err != nil {
+			return nil, err
+		}
+		m.Account = a
+	}
 	for _, r := range km.records {
-		if r.Name == name {
-			return nil, fmt.Errorf("keyfile: a machine named %q exists; revoke it first", name)
+		if r.Name == name && r.Account == m.AccountOf() {
+			return nil, fmt.Errorf("keyfile: a machine named %q exists in this account; revoke it first", name)
 		}
 	}
 
@@ -123,17 +145,40 @@ func (km *KeyManager) GenerateForOwner(name, owner string) (*KeyGenerateResponse
 		return nil, fmt.Errorf("persist key: %w", err)
 	}
 
-	record := KeyRecord{MachineID: m.ID, Name: m.Name, KeyPrefix: apiKey[:12] + "...", Owner: owner, CreatedAt: time.Now().UTC()}
+	record := KeyRecord{MachineID: m.ID, Name: m.Name, Account: m.AccountOf(), KeyPrefix: apiKey[:12] + "...", Owner: owner, CreatedAt: time.Now().UTC()}
 	km.records[m.ID] = record
 	km.logger.Info("security: added machine", "machine_id", m.ID, "name", m.Name, "owner", owner, "prefix", record.KeyPrefix)
 
 	return &KeyGenerateResponse{
 		MachineID: m.ID,
 		Name:      m.Name,
+		Account:   m.AccountOf(),
 		APIKey:    apiKey,
 		CreatedAt: record.CreatedAt,
 		Message:   "Store this key securely — it will not be shown again.",
 	}, nil
+}
+
+// accountOfMember is the account of the machine member names (its id, or
+// a name only one machine of the file holds); km.mu held. A machine the
+// file does not hold is refused (spec/KeyAccount.tla AccountRooted).
+func (km *KeyManager) accountOfMember(member string) (identity.MachineID, error) {
+	if r, ok := km.records[identity.MachineID(member)]; ok {
+		return r.Account, nil
+	}
+	var found []KeyRecord
+	for _, r := range km.records {
+		if r.Name == member {
+			found = append(found, r)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return "", fmt.Errorf("keyfile: --account %q: no such machine in the key file", member)
+	case 1:
+		return found[0].Account, nil
+	}
+	return "", fmt.Errorf("keyfile: --account %q: %d machines have that name; give its machine id", member, len(found))
 }
 
 // Revoke removes machine id's key from both the live store and the on-disk
@@ -220,7 +265,7 @@ func (km *KeyManager) rewriteFile() error {
 	km.store.mu.RLock()
 	var lines []string
 	lines = append(lines, "# API keys managed by the relay (do not edit manually)")
-	lines = append(lines, "# Format: <machine id> <name> sha256:<hex_hash>")
+	lines = append(lines, "# Format: <machine id> <name> sha256:<hex_hash> [account=<machine id>]")
 	for hash, m := range km.store.keys {
 		lines = append(lines, m.line(hash))
 	}

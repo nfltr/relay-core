@@ -36,16 +36,18 @@ func TestLoadAPIKeys(t *testing.T) {
 }
 
 // The file refuses what it cannot hold as a machine: a line from before
-// machines (agent-id:key, agent-id:sha256:<hex>), a machine or a name
-// twice, a bad id or name, a line with a services field (the form before
-// any valid service name was allowed).
+// machines (agent-id:key, agent-id:sha256:<hex>), a machine twice, a name
+// twice in one account, a bad id, name or account, a line with a services
+// field (the form before any valid service name was allowed).
 func TestLoadAPIKeysRefuses(t *testing.T) {
 	ok := tmach("web")
 	for name, line := range map[string][]string{
 		"old plaintext":  {"agent-1:secret"},
 		"old hashed":     {"agent-1:sha256:" + strings.Repeat("ab", 32)},
 		"machine twice":  {kl("web", "a"), strings.Replace(kl("db", "b"), string(tm("db")), string(ok.ID), 1)},
-		"name twice":     {kl("web", "a"), strings.Replace(kl("db", "b"), " db ", " web ", 1)},
+		"name twice":     {kl("web", "a"), strings.Replace(kl("db", "b"), " db ", " web ", 1) + " account=" + string(ok.ID)},
+		"bad account":    {kl("web", "a") + " account=m-nope"},
+		"fifth field":    {kl("web", "a") + " account=" + string(ok.ID) + " x"},
 		"bad id":         {strings.Replace(kl("web", "a"), string(ok.ID), "m-nope", 1)},
 		"bad name":       {strings.Replace(kl("web", "a"), " web ", " Web ", 1)},
 		"services field": {strings.Replace(kl("web", "a"), " web ", " web svc ", 1)},
