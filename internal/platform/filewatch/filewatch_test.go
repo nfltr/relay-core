@@ -22,10 +22,16 @@ func TestWatchCatchesAChangeBeforeTheWatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	called := make(chan struct{}, 1)
-	go func() { _ = Watch(ctx, path, func() { called <- struct{}{} }, nil) }()
+	returned := make(chan error, 1)
+	go func() { returned <- Watch(ctx, path, func() { called <- struct{}{} }, nil) }()
+	// A bound only against a hang: the call back comes Settle after the
+	// watch is set, which on a loaded machine is seconds late (10 Settles
+	// once were not enough).
 	select {
 	case <-called:
-	case <-time.After(10 * Settle):
+	case err := <-returned:
+		t.Fatalf("Watch returned %v before it called back", err)
+	case <-time.After(time.Minute):
 		t.Fatal("no call back once the watch was set")
 	}
 }
