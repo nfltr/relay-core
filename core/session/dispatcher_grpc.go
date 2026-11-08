@@ -545,6 +545,12 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 		// Held until this stream's row is registered (removeEphemeralRegistration).
 		d.ephemeralMu.Lock()
 	}
+	// Routable from the Store below, but its ref header goes out only at
+	// SendHeader: a frame sent before it would make gRPC send empty
+	// headers, and the client would take its plain id as its ref. Sends
+	// wait on the stream's send lock until the header is out
+	// (TestAgentTunnelRefHeaderPrecedesARoutedFrame).
+	agentStream.sendMut.Lock()
 	d.agentTunnelMu.Lock()
 	d.Upstreams.Store(agentID, agentStream)
 	old, replaced := d.agentTunnelCancels.Swap(agentID, tunnelCancel)
@@ -598,6 +604,7 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 			d.Logger.Warn("failed to send response headers", "error", sendErr)
 		}
 	}
+	agentStream.sendMut.Unlock()
 
 	metrics.AgentUp(agentStream.account, agentID)
 	defer func(agentID string, currentStream *GRPCStream, currentLabels map[string]string) {
