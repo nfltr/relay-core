@@ -25,10 +25,20 @@ import (
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 )
 
-var errShareIPRefused = errors.New("client address is not in the share's IP allowlist")
+var (
+	errShareIPRefused = errors.New("client address is not in the share's IP allowlist")
+	// errShareSignIn: the share's rule is sign-in, which only a front that
+	// ends the visitor's TLS can check (the mux hands such a name to the
+	// relay's own TLS; an SNI router of its own port refuses it).
+	errShareSignIn = errors.New("the share's rule is sign-in, which an end-to-end encrypted connection cannot show the relay")
+)
 
-// admitClient checks the share's IP allowlist for a client at ip.
+// admitClient checks the share's IP allowlist for a client at ip, and
+// refuses a sign-in share.
 func (t target) admitClient(ip net.IP) error {
+	if t.Share != "" && t.Policy.Login {
+		return errShareSignIn
+	}
 	if t.Share != "" && !t.Policy.Admits(ip) {
 		return errShareIPRefused
 	}

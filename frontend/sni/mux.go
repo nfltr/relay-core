@@ -173,8 +173,15 @@ func (l *muxListener) isE2EE(sni string) bool {
 	// terminates TLS for a share's name (its certificate may cover it).
 	// Other names (e.g. "grpc", "www") are never a share's and stay with
 	// the relay's TLS, without a store lookup.
+	// A sign-in share is the exception: the relay must see its requests
+	// (httpingress.Shares.SignIn), so its name goes to the relay's TLS. A
+	// store that does not answer leaves it E2EE, where routeE2EE refuses.
 	if l.grants != nil {
-		return l.grants.IsCode(prefix)
+		if !l.grants.IsCode(prefix) {
+			return false
+		}
+		g, err := l.grants.Grant(prefix)
+		return err != nil || !g.Policy.Login
 	}
 
 	// No share grants — fall back to static suffix match (legacy behaviour).

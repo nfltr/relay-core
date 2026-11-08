@@ -43,6 +43,10 @@ type Policy struct {
 	// ExpiresAt mirrors the active server-side expiry in RFC3339 form so
 	// catalog and CLI views can show the actual lifetime of a reused share URL.
 	ExpiresAt string `json:"expires_at,omitempty"`
+	// Login admits only visitors signed in as the share's owner or as an
+	// email in LoginAllow (frontend.SharePolicy.Login).
+	Login      bool     `json:"login,omitempty"`
+	LoginAllow []string `json:"login_allow,omitempty"`
 }
 
 // Protected reports whether the policy has any access restriction configured.

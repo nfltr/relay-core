@@ -121,6 +121,12 @@ type SharePolicy struct {
 	// (RFC 3339, "" when unknown).
 	Preset    string `json:"preset,omitempty"`
 	ExpiresAt string `json:"expires_at,omitempty"`
+	// Login admits only visitors signed in to the relay's accounts as the
+	// share's owner or as an email in LoginAllow (lower case). Only a front
+	// that ends the visitor's TLS can check it (httpingress.Shares.SignIn);
+	// an E2EE share front never passes such a share through (frontend/sni).
+	Login      bool     `json:"login,omitempty"`
+	LoginAllow []string `json:"login_allow,omitempty"`
 }
 
 // Gated is true when the share has credentials only the agent can check

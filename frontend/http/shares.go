@@ -59,6 +59,11 @@ type Shares struct {
 	// prepaid enforcement: identity.ErrBalanceExhausted, answered 402
 	// typed) after the share's policy passed; nil: none.
 	Refuse func(agentID string) error
+	// SignIn checks a share whose rule is sign-in (Policy.Login) after its
+	// other checks: it reports whether the request is admitted, else it
+	// has answered it (the sign-in round trip, a refusal). nil: such a
+	// share answers 503, never open.
+	SignIn func(w http.ResponseWriter, r *http.Request, code string, g frontend.Grant) bool
 }
 
 // shareBalanceMessage is what a visitor of a share whose account's
@@ -106,6 +111,16 @@ func (s *Shares) Serve(w http.ResponseWriter, r *http.Request, next http.Handler
 	}) {
 		s.miss(clientIP)
 		return
+	}
+	if grantErr == nil && g.Policy.Login {
+		if s.SignIn == nil {
+			s.Log.Warn("share: a sign-in share on a front without sign-in", "share", sharecode.ID(code))
+			http.Error(w, "share sign-in is unavailable on this relay", http.StatusServiceUnavailable)
+			return
+		}
+		if !s.SignIn(w, r, code, g) {
+			return
+		}
 	}
 	if s.Refuse != nil {
 		if err := s.Refuse(agentID); errors.Is(err, identity.ErrBalanceExhausted) {
