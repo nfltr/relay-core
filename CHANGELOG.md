@@ -12,6 +12,13 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Share sign-in (nfltr docs/decisions/share-access-2026-11-08.md):
+  `core/frontend`: `SharePolicy.Login`, `SharePolicy.LoginAllow` (a share
+  only signed-in visitors the rule admits may visit); `frontend/http`:
+  `Shares.SignIn`, the composition's sign-in check for such a share (none:
+  503, fail closed). The SNI front never serves a sign-in share end to
+  end: it goes to the relay's TLS, or an SNI router of its own refuses it.
+  No migration: a policy without `Login` behaves as before.
 - `platform/connlimit`: `Accounts`, an account's own connection limits
   past the per-source floor (spec/AccountLimit.tla): open connections and
   new ones a second, per account and per (account, source address), under
