@@ -287,6 +287,7 @@ CONSTANTS
     Call = "$call"
     Txns <- TraceTxns
     N <- TraceLen
+    Retries <- TraceRetries
     Mutant = "$m"
 INIT TraceInit
 NEXT TraceNext
@@ -555,7 +556,7 @@ traces)
 	# steps the real relay pair leaves to chance (an open on the parked link,
 	# a refused adoption, a dial that gives up).
 	ctests=${CLIENT_TESTS:-'^(TestLazyAgentLink|TestLazyAgentLinkGivesUp|TestAgentLinkUpOnlyWhileBound|TestTCPTunnelReturnsAfterTheLinkIsParked|TestTCPTunnelAdoptRefusedWhileDialling)$'}
-	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces" "$work/cctraces" "$work/cltraces"
+	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces" "$work/cctraces" "$work/cltraces" "$work/ftraces"
 	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests|$cctests" ./core/session/ >"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
 		exit 1
@@ -576,6 +577,7 @@ traces)
 		presence-*) mv "$t" "$work/ptraces/" ;;
 		callcredit-*) mv "$t" "$work/cctraces/" ;;
 		calllifecycle-*) mv "$t" "$work/cltraces/" ;;
+		failover-*) mv "$t" "$work/ftraces/" ;;
 		*) mv "$t" "$work/traces/" ;;
 		esac
 	done
@@ -618,6 +620,9 @@ traces)
 	"$rs/scripts/spec.sh" cctraces "$work"/cctraces/*.ndjson || st=1
 	echo "== CallLifecycle, agent-to-agent calls (relay spec/TraceCallLifecycle.tla)"
 	checktraces "$work/cltraces" cltrace || st=1
+	# The accept/refuse recorder (trace_failover_on.go) has no checker yet:
+	# spec/TraceFailover.tla is lane RFTRACE's. Its traces are not AgentLink's.
+	echo "== Failover: $(ls "$work"/ftraces | wc -l | tr -d ' ') traces recorded, not checked (no spec/TraceFailover.tla yet)"
 	if [ -n "${COVERAGE:-}" ]; then
 		# Presence.tla's steps no presence trace took: test gaps.
 		cat "$work"/ptraces/presence-*.ndjson 2>/dev/null |
