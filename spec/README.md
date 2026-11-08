@@ -787,6 +787,102 @@ Environment assumptions:
 | `AdmitVisitor`, the account | `core/session/visitors.go` |
 | the refusal at the share | `frontend/sni/gate.go` |
 
+## Failover.tla: an agent and its clients with several relays
+
+`Failover.tla` is a design (lane RELAYFAILOVER, nfltr/nfltr
+`docs/decisions/relay-failover-2026-11-08.md`); no code implements it yet,
+so the Go column names what the implementation lanes will write and there
+is no code map or recorder. It is here because relay-core owns what the
+design rests on: the directory record a connect claims (`Directory.tla`'s
+guarantees: the newest claim wins, an older session's renewal yields), the
+connect's admission, where an endpoint's ingress routes an open
+(`dispatcherURL`, the replica link), and the share gate; the agent's and
+the client's halves are github.com/nfltr/relay `client/agent` and
+`client/rpcclient`, modelled here as `Move.tla` and `Handoff.tla` model
+theirs.
+
+The topology is fixed: the list `a, b1, b2`, where `a` is an independent
+relay (cluster A, nothing shared) and `b1`, `b2` are two endpoints of one
+relay (cluster B: replicas or regions sharing one directory). The agent
+learns an endpoint's relay from its Welcome (`relay_id`). It dials one
+endpoint at a time; each connect names the relays it holds links to, and
+an endpoint of a named relay refuses (`ALREADY_ATTACHED`) before it claims
+anything. Faults (at most `MaxFaults`): an endpoint crashes (its record
+stays until `Lapse`) and restarts, or the agent's path to it breaks while
+clients still reach it (`Cut`, `Heal`). A client session walks the list:
+`Skip` (unreachable before sending), `Send`, `Arrive` (no route: a typed
+NOT_FOUND, next entry; a delivering link: the agent runs it; a stale
+registration or a dead endpoint: swallowed), `Answer`, `Timeout` (no
+answer is coming: reported unknown, never resent), `Rewalk` or `HoldEnds`
+after a full walk. One share, issued by cluster B (`Share = TRUE`).
+
+| action | Go |
+|---|---|
+| `Dial(e)`, `DialFails(e)` | relay `client/agent` relay dialer: one connect in flight, `x-nfltr-agent-relays` naming the relay ids held |
+| `Detect(e)` | the agent's link liveness (`agentwire` Liveness presets), or the relay's end of the stream |
+| `Accept(e)` | `core/session` connect admission: refuse `ERROR_REASON_ALREADY_ATTACHED` when the header names this relay's id, else `ClaimSession` and register; `Welcome.relay_id` |
+| `Notice(e)` | the session watch ending a stale session: liveness timeout, or renewal `ErrSuperseded` (`Directory.tla` `Renew`), `DeleteSession` of its own record |
+| `Lapse(c)` | the record's TTL (`Directory.tla` `Expire`) |
+| `Crash(e)`, `Restart(e)`, `Cut(e)`, `Heal(e)` | the environment |
+| `Skip(s)`, `Send(s)`, `Arrive(s)`, `Answer(s)`, `Timeout(s)`, `Rewalk(s)`, `HoldEnds(s)` | relay `client/rpcclient` data-connection open walk (nfltr `transportcli` dial, mappings, `tcp-connect`), `frontend` routing (`dispatcherURL`) |
+| `Visit(e)`, `Revoke` | the share gate (relay-server shares) |
+
+Invariants (`Failover.cfg`, one session, two faults, `make spec`: 712,785
+states (159,931 distinct), depth 25, 38 s at load 4, 4 min at load 80;
+`FailoverShare.cfg`, the share, no sessions: 206,961 (45,028), depth 20,
+20 s; `COVERAGE=1` takes every action across the two: `Failover.cfg` all
+but `Visit` and `Revoke`, `FailoverShare.cfg` all but the session's): `OneLinkPerCluster` (no split
+brain: at most one up link per relay), `RecordFollowsAgent` (a relay's
+record names every link of the agent that delivers: no lost handover),
+`RunOnce` (no open run twice), `NotFoundTrue` (a `not_found` session was
+never run and every entry of its last walk refused it or was unreachable),
+`OpenedRan`, `ShareOneCluster` and `RevokedNotServed` (the share served by
+its issuing relay only, never after its revocation). Liveness
+(`FailoverLive.cfg`, `make spec-liveness`, the same 159,931 distinct
+states, 8 min at load 80): `Reattaches` (once the faults
+are over the agent holds a link to every relay it can reach), `StaleEnds`
+(no stale registration outlives its link), `Settles` (every session ends
+opened or reported: none lost silently).
+
+Mutants (`make spec-mutants`), each caught: `failover:parallel-connect`
+(duplicate registration: connects in flight together, each naming only
+the relays already up), `failover:claim-before-dedupe` (the endpoint
+claims the record, then refuses), `failover:renew-overwrites` (lost
+handover: the left endpoint's renewal writes the record back),
+`failover:stale-alt` (lost handover: an endpoint once refused as an
+alternate is never dialled again, caught by `Reattaches`),
+`failover:share-everywhere` (two relays serving one share),
+`failover:retry-ambiguous` (an unanswered open sent to the next relay:
+run twice), `failover:first-only` (reported `not_found` after the first
+relay's refusal); 7 mutants and 8 witnesses: about 8 min at load 80
+(`MUTANTS=failover`). Witnesses, each violated: `WitnessRefused`,
+`WitnessHandover` (the agent on b2 while b1 still holds its stale
+registration), `WitnessReturn` (back on b1 after it once refused as an
+alternate), `WitnessRevoked`, `WitnessWalk` (opened after the first entry
+refused), `WitnessAmbiguous` (reported unknown after the agent ran it),
+`WitnessStale` (an open swallowed by a live endpoint's stale
+registration), `WitnessNotFound`.
+
+What modelling it settled (each now a rule of the design doc): the
+endpoint cannot refuse a second session it sees in its own directory (it
+cannot tell a stale one from a live one, and failover needs the newest
+claim to win), so the agent names its relays; the connect check must come
+before the claim; the agent must not dial in parallel while an endpoint's
+relay is unknown; alternates are skipped only while their relay's link is
+up; either side's liveness may pass first, and the relay's end of a
+session must reach the agent (a link the relay ended delivers nothing,
+`Detect` on `~reg`), else after a healed partition the agent holds a link
+the relay no longer routes to (the first check's counterexample).
+
+Environment assumptions:
+
+| assumption | source |
+|---|---|
+| a cluster's directory: the newest claim names the record, an older session's renewal yields, a record goes with its own session's end or its TTL | `Directory.tla` (here) |
+| an endpoint's id and certificate are authenticated by the entry's key and pin, so a relay cannot claim another's id | `nfltr/nfltr docs/guides/self-hosted-relay-identity.md` |
+| an open is answered at most once, by the agent or by the hop that refused it | nfltr `docs/guides/connect-sidecar.md` ("The open is answered before any byte"), link chaining |
+| a client reaches every live endpoint (client-side partitions are `Skip`'s unreachable) | modelling choice |
+
 ## Layer contract: what the layer above may assume
 
 relay-server (its `spec/Replicas.tla`), the relay's clients and the agent
@@ -1128,6 +1224,8 @@ accepted, 4-6 s each.
 | `PresenceLive.cfg` | `Woken`, as `Presence.cfg` with a crash and the update in flight | 2,320,252 (402,327) | 24 | 1 min 46 s (2026-11-04) |
 | `PresenceLarge.cfg` (`make spec-nightly`) | `NoSilentStale`, as `Presence.cfg` with a crash | 1,438,047 (244,286) | | 26 s (2026-11-03) |
 | `make spec-mutants` | 9 mutants, each caught (on the CI config) | | 5-11 | 14 s |
+| `Failover.cfg`, `FailoverShare.cfg` (CI, 2026-11-08) | invariants: one session, two faults; the share, no sessions | 712,785 (159,931); 206,961 (45,028) | 25; 20 | 38 s; 20 s (load 4) |
+| `FailoverLive.cfg` (2026-11-08) | `Reattaches`, `StaleEnds`, `Settles` | 712,785 (159,931) | 25 | 8 min 20 s (load 80) |
 | `make spec-traces` | 16 AgentLink, 64 Move, 12 Handoff traces, all accepted; 14 reject fixtures rejected | | | 6 min 38 s (load 15-35) |
 | `make spec-traces`, agent-side Handoff (2026-11-04) | 18 agent traces accepted; 1 reject fixture rejected | | | 1-5 s a trace |
 | `make spec-traces`, presence only (2026-11-03) | 2 Presence traces accepted; 3 reject fixtures rejected | | | under 10 s at load 120-140 |

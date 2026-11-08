@@ -9,7 +9,7 @@
 #   check     actions, then TLC on spec/AgentLink.cfg (Refines left out),
 #             AgentLinkIface.cfg (Refines on fewer bytes), spec/Handoff.cfg,
 #             spec/Move.cfg, spec/Presence.cfg, spec/Directory.cfg and
-#             DirectoryHeal.cfg: invariants; spec/AgentLinkWrite.cfg:
+#             DirectoryHeal.cfg, spec/Failover.cfg and FailoverShare.cfg: invariants; spec/AgentLinkWrite.cfg:
 #             WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
@@ -17,7 +17,8 @@
 #   mutants   each Mutant must be caught, and each documented race found
 #             (spec/README.md "Findings") (CI).
 #   liveness  TLC on spec/AgentLinkLive.cfg, AgentLinkBreak.cfg,
-#             HandoffLive.cfg, MoveLive.cfg and PresenceLive.cfg (weekly).
+#             HandoffLive.cfg, MoveLive.cfg, PresenceLive.cfg and
+#             FailoverLive.cfg (weekly).
 #   simulate  random walks on two sessions with larger sizes (weekly).
 #   traces    the core/session tests in TRACE_TESTS run with -tags
 #             relaytrace; each stream's trace checked against spec/Trace.tla,
@@ -328,7 +329,7 @@ checktraces() {
 # ways) and each trace module's event names against the recorder's Go.
 actions_check() {
 	ok=0
-	for m in AgentLink Handoff Move Presence Directory KeyAccount AccountLimit; do
+	for m in AgentLink Handoff Move Presence Directory KeyAccount AccountLimit Failover; do
 		# A step: a definition whose body primes or keeps a variable (not a temporal formula).
 		acts=$(awk '
 			function flush() { if (name != "" && act && !tmp) print name; name = "" }
@@ -384,6 +385,8 @@ check)
 	run Directory.cfg Directory.tla
 	run KeyAccount.cfg KeyAccount.tla
 	run AccountLimit.cfg AccountLimit.tla
+	run Failover.cfg Failover.tla
+	run FailoverShare.cfg Failover.tla
 	# That race heals at the latest session's next renewal (finding 38).
 	run DirectoryHeal.cfg Directory.tla
 	;;
@@ -399,6 +402,7 @@ liveness)
 	run MoveLive.cfg Move.tla
 	run PresenceLive.cfg Presence.tla
 	run AccountLimitLive.cfg AccountLimit.tla
+	run FailoverLive.cfg Failover.tla
 	;;
 mutants)
 	m='s/Mutant = "none"/Mutant = "'
@@ -416,6 +420,22 @@ mutants)
 	done
 	for w in Refused Lowered Shared; do
 		expect AccountLimit.cfg AccountLimit.tla "witness:$w" -e "s/^    CountsMatch$/    Witness$w/"
+	done
+	# Failover.tla: several relays (RELAYFAILOVER, design): each failure the
+	# design prevents put back; witnesses.
+	for b in parallel-connect claim-before-dedupe renew-overwrites share-everywhere; do
+		expect FailoverShare.cfg Failover.tla "failover:$b" -e "$m$b\"/"
+	done
+	for b in retry-ambiguous first-only; do
+		expect Failover.cfg Failover.tla "failover:$b" -e "$m$b\"/"
+	done
+	expect FailoverLive.cfg Failover.tla failover:stale-alt -e "$m"'stale-alt"/' -e 's/Sess = {"s1"}/Sess = {}/' -e '/^    Settles$/d'
+	expect FailoverShare.cfg Failover.tla witness:failover-refused -e 's/^    OneLinkPerCluster$/    WitnessRefused/'
+	expect FailoverShare.cfg Failover.tla witness:failover-handover -e 's/^    RecordFollowsAgent$/    WitnessHandover/'
+	expect FailoverShare.cfg Failover.tla witness:failover-return -e 's/^    RecordFollowsAgent$/    WitnessReturn/'
+	expect FailoverShare.cfg Failover.tla witness:failover-revoked -e 's/^    RevokedNotServed$/    WitnessRevoked/'
+	for w in Walk Ambiguous Stale NotFound; do
+		expect Failover.cfg Failover.tla "witness:failover-$w" -e "s/^    RunOnce$/    Witness$w/"
 	done
 	expect AgentLink.cfg MCAgentLink.tla fin-overtakes -e "$m"'fin-overtakes"/'
 	expect AgentLink.cfg MCAgentLink.tla grant-early -e "$m"'grant-early"/'
