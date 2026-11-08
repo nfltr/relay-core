@@ -232,8 +232,8 @@ func SetDefaultFlags() {
 	_ = flag.String("security.oidc.scopes_claim", "scope", "claim holding a token's scopes (space-separated or a list; admin is never taken from an IdP)")
 	_ = flag.Duration("security.oidc.clock_skew", time.Minute, "clock skew allowed on exp, nbf and iat (at most 5m); a connection ends at exp plus this")
 
-	// ── SQL Key Store (database-backed API keys & fleet tokens) ─────────
-	_ = flag.Bool("security.sql.enable", false, "enable SQL-backed API key and fleet token store")
+	// ── SQL Key Store (database-backed API keys and machines) ─────────────
+	_ = flag.Bool("security.sql.enable", false, "enable SQL-backed API key and machine store")
 	_ = flag.String("security.sql.dsn", "/var/lib/rpcserver/keys.db", "database path (SQLite) or connection string (Postgres)")
 	_ = flag.String("security.sql.dialect", "sqlite", "SQL dialect: sqlite or postgres")
 	_ = flag.Bool("security.sql.migrate_on_startup", true, "run SQL schema migrations when the server starts")

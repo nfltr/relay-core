@@ -12,8 +12,10 @@ import (
 )
 
 // serverAssertedMetadataKeys are set by this package's interceptors from a
-// verified credential (API key, fleet token, mTLS certificate) and trusted
-// downstream by GetAgentIDFromContext and OPA. A client-sent copy is never
+// verified credential (API key, mTLS or machine certificate) and trusted
+// downstream by GetAgentIDFromContext and OPA. No interceptor sets the
+// x-fleet-* keys since fleet tokens were deleted (relay-server v0.49.21);
+// they stay here so a client-sent copy is still dropped. A client-sent copy is never
 // trusted: without this, a caller with no key could send
 // x-apikey-agentid and x-auth-method and register as any agent.
 var serverAssertedMetadataKeys = []string{

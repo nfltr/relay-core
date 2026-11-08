@@ -61,6 +61,10 @@ changes listed (from the first tag on).
 
 ### Changed
 
+- Fleet tokens (deleted in relay-server v0.49.21) are gone from the words:
+  `security.sql.enable`'s help ("API key and machine store"), an unknown
+  credential's message ("invalid API key") and comments. The x-fleet-*
+  metadata keys are still dropped from clients.
 - The flood floor's defaults rise to a level only an attack reaches, now
   that each account has limits of its own past it (nfltr/nfltr
   docs/decisions/relay-plan-conn-limits-2026-11-08.md): per source
