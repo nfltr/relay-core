@@ -790,9 +790,11 @@ Environment assumptions:
 ## Failover.tla: an agent and its clients with several relays
 
 `Failover.tla` is a design (lane RELAYFAILOVER, nfltr/nfltr
-`docs/decisions/relay-failover-2026-11-08.md`); no code implements it yet,
-so the Go column names what the implementation lanes will write and there
-is no code map or recorder. It is here because relay-core owns what the
+`docs/decisions/relay-failover-2026-11-08.md`). The endpoint's half is
+code (lanes RFRELAYID, RFDEDUPE: `Accept`, the Welcome's `relay_id`, and
+its recorder, code map below); the agent's and the client's are not yet
+(RFAGENT, RFCLIENT: the Go column names what those lanes will write), and
+no `TraceFailover.tla` checks the recorder yet (RFTRACE). It is here because relay-core owns what the
 design rests on: the directory record a connect claims (`Directory.tla`'s
 guarantees: the newest claim wins, an older session's renewal yields), the
 connect's admission, where an endpoint's ingress routes an open
@@ -882,6 +884,24 @@ Environment assumptions:
 | an endpoint's id and certificate are authenticated by the entry's key and pin, so a relay cannot claim another's id | `nfltr/nfltr docs/guides/self-hosted-relay-identity.md` |
 | an open is answered at most once, by the agent or by the hop that refused it | nfltr `docs/guides/connect-sidecar.md` ("The open is answered before any byte"), link chaining |
 | a client reaches every live endpoint (client-side partitions are `Skip`'s unreachable) | modelling choice |
+
+`Accept` assumes every endpoint of a cluster reports one id: the
+directory's (`directory.RelayID`, one key written once with SET NX). A
+store that loses its records (`Directory.tla` `StoreLoss`, not modelled
+here) loses the id too, and a replica that starts after that reads a new
+one: until the old ones restart, the cluster has two ids and an agent may
+hold a link through each. A move's reconnect (`Move.tla`) is a connect of
+the agent's link to this cluster: the agent must not name the cluster it
+moves within (RFAGENT), or the new endpoint refuses it.
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `Accept`: the refusal before any claim (`refuseAttached`), called first by every connect | `core/session/connect_attached.go`, `dispatcher_subscribe.go`, `dispatcher_grpc.go`, `dispatcher_tcp.go` |
+| `Accept`'s `known'`: the Welcome's `relay_id` | `core/directory/relay_id.go`, `grpcfactory/client_streams.go` |
+| the recorder of `Accept` (`accept`, `refuse`; for RFTRACE) | `core/session/trace_failover_on.go` |
+| `Dial`, `DialFails`, `Detect` | `relay:client/agent` (RFAGENT) |
 
 ## Layer contract: what the layer above may assume
 

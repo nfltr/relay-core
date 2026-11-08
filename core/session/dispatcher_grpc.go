@@ -470,6 +470,9 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 	if err := d.Config.Reserved.RefuseAgentName(agentID); err != nil {
 		return err
 	}
+	if err := d.refuseAttached(stream.Context(), agentID, "AgentTunnel"); err != nil {
+		return err
+	}
 
 	ctx, cancelCause := context.WithCancelCause(stream.Context()) // will cancel if `stream context` cancels
 	tunnelCancel := &agentTunnelCancel{cancel: cancelCause}
@@ -528,6 +531,7 @@ func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
 		d.Logger.Error("failed to set agentID dispatcher addr in cache", "AgentID", agentID, "error", err)
 		return err
 	}
+	traceFailover(d, stream.Context(), "accept", agentID, "AgentTunnel")
 
 	heartbeats, heartbeatsRecvThresholdTicker := newHeartbeatState(recvThreshold)
 	defer heartbeatsRecvThresholdTicker.Stop()

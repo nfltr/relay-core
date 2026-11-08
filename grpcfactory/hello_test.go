@@ -82,3 +82,30 @@ func TestProtocolV1HelloHardCut(t *testing.T) {
 		t.Fatalf("v1 client: no Welcome in %v (%v)", h, herr)
 	}
 }
+
+// The Welcome names the relay's id (WithRelayID): the agent learns which
+// relay an endpoint is (spec/Failover.tla).
+func TestWelcomeNamesRelayID(t *testing.T) {
+	lis := bufconn.Listen(1 << 20)
+	srv := NewGRPCServer(slog.New(slog.NewTextHandler(io.Discard, nil)), WithRelayID("RELAY-7"))
+	pb.RegisterDispatcherServer(srv, pb.UnimplementedDispatcherServer{})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	conn, err := grpc.NewClient("passthrough://bufnet", append(grpcclient.ClientIdentity(),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var header metadata.MD
+	stream, err := pb.NewDispatcherClient(conn).AgentTunnel(ctx, grpc.Header(&header))
+	if err == nil {
+		_, _ = stream.Recv()
+	}
+	if got := agentwire.WelcomeRelayID(header); got != "RELAY-7" {
+		t.Fatalf("Welcome relay id %q in %v, want RELAY-7", got, header)
+	}
+}

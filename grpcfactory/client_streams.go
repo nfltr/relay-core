@@ -60,19 +60,27 @@ func refusal(msg string) error {
 	return st.Err()
 }
 
-// welcome is the relay's Welcome header. allow:wrapper
-func welcome() metadata.MD { return metadata.Pairs(agentwire.WelcomePairs(buildinfo.Version)...) }
+// welcome is the relay's Welcome header, naming relayID ("": none).
+// allow:wrapper
+func welcome(relayID string) metadata.MD {
+	return metadata.Pairs(agentwire.WelcomeOf(buildinfo.Version, relayID)...)
+}
 
 // ProtocolOptions are the server options of the protocol v1 handshake
 // (helloRequired, the Welcome header) refusing clients below
 // minGeneration (0: none), first of every server's interceptor chain:
-// NewGRPCServer's, and a test server's that serves v1 clients.
+// NewGRPCServer's, and a test server's that serves v1 clients. Its
+// Welcome names no relay id (NewGRPCServer's names WithRelayID's).
 func ProtocolOptions(minGeneration int) []grpc.ServerOption {
+	return protocolOptions(minGeneration, "")
+}
+
+func protocolOptions(minGeneration int, relayID string) []grpc.ServerOption {
 	stream := func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if err := helloRequired(ss.Context(), minGeneration); err != nil {
 			return err
 		}
-		if err := ss.SetHeader(welcome()); err != nil {
+		if err := ss.SetHeader(welcome(relayID)); err != nil {
 			return err
 		}
 		return handler(srv, ss)
@@ -81,7 +89,7 @@ func ProtocolOptions(minGeneration int) []grpc.ServerOption {
 		if err := helloRequired(ctx, minGeneration); err != nil {
 			return nil, err
 		}
-		if err := grpc.SetHeader(ctx, welcome()); err != nil {
+		if err := grpc.SetHeader(ctx, welcome(relayID)); err != nil {
 			return nil, err
 		}
 		return handler(ctx, req)

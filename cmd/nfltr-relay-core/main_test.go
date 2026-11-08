@@ -17,6 +17,7 @@ import (
 	"github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay/client/grpcclient"
 	pb "github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/agentwire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -94,8 +95,12 @@ func TestCoreServesAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if md, err := agent.Header(); err != nil || len(md.Get("x-nfltr-tcp-bind")) != 1 {
+	md, err := agent.Header()
+	if err != nil || len(md.Get("x-nfltr-tcp-bind")) != 1 {
 		t.Fatalf("agent header %v, %v: want its data plane bound", md, err)
+	}
+	if agentwire.WelcomeRelayID(md) == "" { // its directory's (directory.RelayID)
+		t.Fatalf("agent header %v: the Welcome names no relay id", md)
 	}
 
 	stranger, err := client.ConnectTCP(keyed("rpc_unknownkeyaaaaaaaaaaaaaaaaaaaaaaaaaaa"))

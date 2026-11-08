@@ -12,6 +12,24 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Relay failover, the endpoint's half (nfltr
+  docs/decisions/relay-failover-2026-11-08.md, spec/Failover.tla `Accept`;
+  lanes RFRELAYID, RFDEDUPE): `core/directory.RelayID`, the directory's
+  relay id (one per directory, written once by the first replica that
+  asks; needs a store with `SetNX`: `SetNXCache`, `MemoryCache.SetNX`);
+  `session.Dispatcher.RelayID` and `grpcfactory.WithRelayID` send it in
+  every Welcome (`Welcome.relay_id`; `compose.AgentPort` passes the
+  dispatcher's, `compose.Serve` sets it). A connect (ConnectHTTP,
+  AgentTunnel, ConnectTCP, so the agent link) whose
+  `x-nfltr-agent-relays` names that id is refused `AlreadyExists`
+  `ERROR_REASON_ALREADY_ATTACHED` before it takes a session over or
+  claims the record. With `-tags relaytrace`: the `accept`/`refuse`
+  recorder (`failover-<relay id>-<n>.ndjson`). Migration: a composition
+  that sets no `RelayID` sends none and refuses nothing, as before; to
+  opt in, set `Dispatcher.RelayID` from `directory.RelayID` (its store
+  must implement `SetNX`). Requires github.com/nfltr/relay/proto with
+  `Welcome.relay_id`.
+
 - Share sign-in (nfltr docs/decisions/share-access-2026-11-08.md):
   `core/frontend`: `SharePolicy.Login`, `SharePolicy.LoginAllow` (a share
   only signed-in visitors the rule admits may visit); `frontend/http`:

@@ -55,6 +55,13 @@ type GRPCServerOption func(*grpcServerConfig)
 type grpcServerConfig struct {
 	auth      *identity.Authenticator
 	peerCerts bool
+	relayID   string
+}
+
+// WithRelayID names the relay's id (session.Dispatcher.RelayID) in the
+// Welcome of every call (Welcome.relay_id).
+func WithRelayID(id string) GRPCServerOption {
+	return func(cfg *grpcServerConfig) { cfg.relayID = id }
 }
 
 // WithPeerCertificates gives handlers each connection's TLS client
@@ -156,7 +163,7 @@ func NewGRPCServer(logger *slog.Logger, opts ...GRPCServerOption) *grpc.Server {
 
 	// The protocol v1 Hello comes first of all: a pre-v1 client is told to
 	// update, not refused for whatever else it sends.
-	grpcOpts := append(ProtocolOptions(clientgen.Min()),
+	grpcOpts := append(protocolOptions(clientgen.Min(), cfg.relayID),
 		grpc.ChainUnaryInterceptor(
 			unaryInterceptors...,
 		),

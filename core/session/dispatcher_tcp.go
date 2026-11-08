@@ -565,6 +565,9 @@ func (d *Dispatcher) ConnectTCP(stream pb.Dispatcher_ConnectTCPServer) error {
 		d.Logger.Debug("agent bound an auxiliary ConnectTCP connection", "agent_id", agentID)
 		return d.TCPDispatcher.RegisterAuxStream(agentID, v[0], stream)
 	}
+	if err := d.refuseAttached(stream.Context(), agentID, "ConnectTCP"); err != nil {
+		return err
+	}
 
 	if d.agentsGone(agentID) { // relay-server finding M6
 		return status.Error(codes.Unavailable, "this relay is stopping: connect again")
@@ -580,6 +583,8 @@ func (d *Dispatcher) ConnectTCP(stream pb.Dispatcher_ConnectTCPServer) error {
 			d.Logger.Error("ConnectTCP: failed to set streamer IP", "agent_id", agentID, "error", setErr)
 			// Non-fatal: TCP still works locally; cross-pod routing cannot find this agent
 			// (until a renewal writes the record; without a Seq it is ordered by its start time).
+		} else {
+			traceFailover(d, stream.Context(), "accept", agentID, "ConnectTCP")
 		}
 		defer func() {
 			if d.TCPDispatcher.agentStream(agentID) != nil {

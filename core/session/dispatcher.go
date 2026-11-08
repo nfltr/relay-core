@@ -99,6 +99,13 @@ type Dispatcher struct {
 	IPInventory         directory.IPInventory
 	StreamerIPInventory directory.IPInventory
 
+	// RelayID is which relay this is (directory.RelayID: one per
+	// directory), sent in the Welcome (grpcfactory.WithRelayID); a connect
+	// naming it among the relays its agent holds is refused
+	// ALREADY_ATTACHED before it claims anything (refuseAttached). "":
+	// none, no connect refused for it.
+	RelayID string
+
 	Logger *slog.Logger
 
 	podIDTopicProducer broker.Producer

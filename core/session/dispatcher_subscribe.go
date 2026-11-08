@@ -40,6 +40,9 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	if err := d.Config.Reserved.RefuseAgentName(agentID); err != nil {
 		return err
 	}
+	if err := d.refuseAttached(stream.Context(), agentID, "ConnectHTTP"); err != nil {
+		return err
+	}
 
 	// The API key identifies the principal allowed to take this session over.
 	var apiKeyHash, keyBase string
@@ -146,6 +149,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 		d.Logger.Error("failed to set agentID dispatcher addr in cache", "agent_id", agentID, "error", err)
 		return err
 	}
+	traceFailover(d, stream.Context(), "accept", agentID, "ConnectHTTP")
 
 	defer func() {
 		err = releaseAgentRecord(context.Background(), d.IPInventory, agentID, session)

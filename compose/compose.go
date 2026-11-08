@@ -136,6 +136,9 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 
 	d := session.NewDispatcher(ctx, logger.With("type", "dispatcher"), b, producer, dispInv, streamInv, grace)
 	d.AgentsGo = front.Clients.Drained() // no peers: agents go once clients drained
+	if d.RelayID, err = directory.RelayID(ctx, dir); err != nil {
+		return err
+	}
 	d.Policy = policy
 	c.Dispatcher = d
 	c.PublishedDispatcher.Store(d)
@@ -179,7 +182,7 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 				mux.Handle("/", ownRequests(auth, ingress.Serve, visits))
 			}
 			proxy.Handler = mux
-			attrs := []any{"proxy", ls.Proxy.Addr().String(), "grpc", ls.GRPC.Addr().String(), "internal", ls.Internal.Addr().String(), "shares", shares != nil}
+			attrs := []any{"proxy", ls.Proxy.Addr().String(), "grpc", ls.GRPC.Addr().String(), "internal", ls.Internal.Addr().String(), "shares", shares != nil, "relay_id", d.RelayID}
 			if keys >= 0 {
 				attrs = append(attrs, "keys", keys)
 			}
