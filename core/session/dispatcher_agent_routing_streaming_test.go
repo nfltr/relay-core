@@ -119,7 +119,9 @@ func TestDispatcher_A2ALocal_MultiResponseAfterCloseSend_E2EE(t *testing.T) {
 	}
 	target := rpcclient.NewAgent("worker-target-e2ee", targetTunnel)
 	awaitUpstreamRegistered(t, d, "worker-target-e2ee")
-	target.EnableA2AE2EE()
+	if err := target.EnableA2AE2EE(testA2AKeyring{}); err != nil {
+		t.Fatalf("target EnableA2AE2EE: %v", err)
+	}
 	defer target.Close() //nolint:errcheck
 
 	target.Handle(func(stream rpcclient.ServerStream) error {
@@ -152,7 +154,9 @@ func TestDispatcher_A2ALocal_MultiResponseAfterCloseSend_E2EE(t *testing.T) {
 		t.Fatalf("source AgentTunnel: %v", err)
 	}
 	source := rpcclient.NewAgent("planner-source-e2ee", sourceTunnel)
-	source.EnableA2AE2EE()
+	if err := source.EnableA2AE2EE(testA2AKeyring{}); err != nil {
+		t.Fatalf("source EnableA2AE2EE: %v", err)
+	}
 	defer source.Close() //nolint:errcheck
 
 	stream, err := source.NewStream(ctx, "worker-target-e2ee")
@@ -207,7 +211,9 @@ func TestDispatcher_A2ALocal_MultiResponseWhileTargetRecvBlocked_E2EE(t *testing
 	}
 	target := rpcclient.NewAgent("worker-target-blocked-e2ee", targetTunnel)
 	awaitUpstreamRegistered(t, d, "worker-target-blocked-e2ee")
-	target.EnableA2AE2EE()
+	if err := target.EnableA2AE2EE(testA2AKeyring{}); err != nil {
+		t.Fatalf("target EnableA2AE2EE: %v", err)
+	}
 	defer target.Close() //nolint:errcheck
 
 	recvDone := make(chan error, 1)
@@ -244,7 +250,9 @@ func TestDispatcher_A2ALocal_MultiResponseWhileTargetRecvBlocked_E2EE(t *testing
 		t.Fatalf("source AgentTunnel: %v", err)
 	}
 	source := rpcclient.NewAgent("planner-source-blocked-e2ee", sourceTunnel)
-	source.EnableA2AE2EE()
+	if err := source.EnableA2AE2EE(testA2AKeyring{}); err != nil {
+		t.Fatalf("source EnableA2AE2EE: %v", err)
+	}
 	defer source.Close() //nolint:errcheck
 
 	stream, err := source.NewStream(ctx, "worker-target-blocked-e2ee")
@@ -298,7 +306,9 @@ func TestDispatcher_A2ALocal_ManyResponsesWhileTargetRecvBlocked_E2EE(t *testing
 	}
 	target := rpcclient.NewAgent("worker-target-many-blocked-e2ee", targetTunnel)
 	awaitUpstreamRegistered(t, d, "worker-target-many-blocked-e2ee")
-	target.EnableA2AE2EE()
+	if err := target.EnableA2AE2EE(testA2AKeyring{}); err != nil {
+		t.Fatalf("target EnableA2AE2EE: %v", err)
+	}
 	defer target.Close() //nolint:errcheck
 
 	recvDone := make(chan error, 1)
@@ -340,7 +350,9 @@ func TestDispatcher_A2ALocal_ManyResponsesWhileTargetRecvBlocked_E2EE(t *testing
 		t.Fatalf("source AgentTunnel: %v", err)
 	}
 	source := rpcclient.NewAgent("planner-source-many-blocked-e2ee", sourceTunnel)
-	source.EnableA2AE2EE()
+	if err := source.EnableA2AE2EE(testA2AKeyring{}); err != nil {
+		t.Fatalf("source EnableA2AE2EE: %v", err)
+	}
 	defer source.Close() //nolint:errcheck
 
 	stream, err := source.NewStream(ctx, "worker-target-many-blocked-e2ee")
@@ -370,3 +382,15 @@ func TestDispatcher_A2ALocal_ManyResponsesWhileTargetRecvBlocked_E2EE(t *testing
 		t.Fatal("background Recv() did not unblock")
 	}
 }
+
+// testA2AKeyring is a root holder's keyring with one pairing key (key id ""):
+// A2A E2EE is keyed only.
+type testA2AKeyring struct{}
+
+func (testA2AKeyring) For(string) (string, []byte, error) {
+	return "", []byte("relay-core-test-a2a-e2ee-root-key"), nil
+}
+
+func (testA2AKeyring) Valid(id string) bool { return id == "" }
+
+func (testA2AKeyring) Machine() bool { return false }
