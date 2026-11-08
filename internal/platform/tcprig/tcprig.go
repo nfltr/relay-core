@@ -522,9 +522,11 @@ func StartHarness[D Relay](tb testing.TB, o Options[D], rtt time.Duration, old H
 	return h
 }
 
+// WaitUntil polls ok; the bound is only against a hang: a starved machine
+// (make test-under-load) settles a fleet or a stream count far slower than 5 s.
 func WaitUntil(tb testing.TB, ok func() bool, msg func() string) {
 	tb.Helper()
-	for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(time.Minute); !ok(); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			tb.Fatal(msg())
 		}

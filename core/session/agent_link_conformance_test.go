@@ -36,7 +36,7 @@ func newTestAgentLink(t *testing.T) *agentLink {
 // TestAgentLinkConformanceTCP runs peerlink's suite with the relay's TCP
 // agent-link Node as A (it opens sessions on the connections B dialled)
 // and an agent's Node as B: the magic after the dial, the bind token in
-// the hello, liveness fast.
+// the hello, liveness default.
 func TestAgentLinkConformanceTCP(t *testing.T) {
 	peerlinktest.Run(t, func(t *testing.T) peerlinktest.Pair {
 		l := newTestAgentLink(t)
@@ -75,7 +75,7 @@ func TestAgentLinkConformanceTCP(t *testing.T) {
 				return nc, err
 			},
 			Connect: []string{"relay"},
-			Link:    link.Config{Auth: dataplane.BindToken(agentLinkTestToken), Liveness: link.LivenessFast},
+			Link:    link.Config{Auth: dataplane.BindToken(agentLinkTestToken), Liveness: link.LivenessDefault},
 			Pool:    link.PoolConfig{Min: 1},
 		}))
 		return peerlinktest.Pair{
@@ -112,7 +112,7 @@ func TestAgentLinkConformanceQUIC(t *testing.T) {
 				return dialAgentLinkQUIC(ctx, px.Addr(), tc, qc, agentLinkTestToken)
 			},
 			Connect:  []string{"relay"},
-			Liveness: link.LivenessFast,
+			Liveness: link.LivenessDefault,
 		}))
 		return peerlinktest.Pair{
 			A: l.quic, B: b, AName: "relay", BName: agentLinkTestToken, Reverse: true,
