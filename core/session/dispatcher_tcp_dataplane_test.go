@@ -50,6 +50,9 @@ func dialData(t *testing.T, addr, token string) (net.Conn, *dataplane.Conn, erro
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	dc, err := dataplane.Dial(ctx, nc, token, link.Config{Window: 1 << 20})
+	if err == nil { // its liveness runs until it is closed, read or not (leakcheck)
+		t.Cleanup(func() { _ = dc.Close() })
+	}
 	return nc, dc, err
 }
 

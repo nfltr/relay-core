@@ -111,6 +111,13 @@ spec-mutants:
 .PHONY: spec-proverif
 spec-proverif:
 	./spec/proverif/run.sh
+# The model's bindings against the code (spec/proverif/README.md
+# "Bindings"): each BIND id of e2ee_share.pv has a test row that sends a
+# protected share where the attacker can and requires a refusal; the test
+# fails when the model's ids and its rows differ (in make ci).
+.PHONY: spec-bindings
+spec-bindings:
+	go test -count=1 -run 'ModelBindings' ./core/session/
 
 # spec-nightly: AgentLink's invariants at larger sizes (minutes; not in make ci).
 spec-nightly:

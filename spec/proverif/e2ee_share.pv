@@ -30,6 +30,19 @@
      relay client/agent/session_plan.go:78-80          every E2EE session of the certificate, whatever SNI
      nfltr cmd/nfltr/internal/tunnelcli/main_tunnel_routes.go:179-196  the policy as the relay returned it *)
 
+(* Bindings (README "Bindings"): what query 1 relies on that the
+   attacker (a visitor, the network) could change: where a protected
+   share's connection goes. Each BIND:<id> has one row in
+   core/session/e2ee_share_bindings_test.go (TestE2EEShareModelBindings,
+   make spec-bindings) that sends it there and requires a refusal; relay.*
+   rows are in github.com/nfltr/relay client/agent, relayserver.* in
+   relay-server core/replicas. The test fails when its rows and these ids
+   differ. Query 2 is an attack by design: no row.
+     BIND:gate.here               Gate on replica X (gate-skipped-here)
+     BIND:gate.link               Gate on replica Y (gate-skipped-on-link)
+     BIND:relayserver.link.share  the open on the link carries the share (share-not-carried-on-link)
+     BIND:relay.agent.cred        the agent checks h(cred) (agent-skips-credential) *)
+
 free c: channel.
 free link: channel [private].       (* the replica link: mTLS between replicas *)
 free toEnf, toPass, toPassY: channel [private].  (* an agent's ConnectTCP streams *)
