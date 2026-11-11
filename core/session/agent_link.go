@@ -201,7 +201,7 @@ func (d *TCPDispatcher) AgentLinkQUIC(pc net.PacketConn, tc *tls.Config) (serve 
 // listenQUIC makes the QUIC Node on pc (Serve starts it).
 func (l *agentLink) listenQUIC(pc net.PacketConn, tc *tls.Config) error {
 	tc = tc.Clone()
-	tc.NextProtos = dataplane.AgentLinkALPNs() // FeatureChain where the agent offers it
+	tc.NextProtos = append(dataplane.AgentLinkALPNs(), qadALPN) // FeatureChain where the agent offers it; QAD (qad.go)
 	tc.MinVersion = tls.VersionTLS13
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
@@ -216,8 +216,12 @@ func (l *agentLink) listenQUIC(pc net.PacketConn, tc *tls.Config) error {
 }
 
 // quicPeer names an accepted QUIC connection by the bind token its first
-// stream carries (dataplane.WriteLinkHello).
+// stream carries (dataplane.WriteLinkHello); a QAD connection it answers
+// and closes (qad.go).
 func (l *agentLink) quicPeer(q *quic.Conn) (string, error) {
+	if q.ConnectionState().TLS.NegotiatedProtocol == qadALPN {
+		return "", answerQAD(q)
+	}
 	ctx, cancel := context.WithTimeout(q.Context(), DataPlaneSniffTimeout)
 	defer cancel()
 	st, err := q.AcceptStream(ctx)

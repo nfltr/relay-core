@@ -342,6 +342,22 @@ of this repository (a path with `/`); another repository's is named
 | `moveAgent`'s `carriesSessions` check | `core/session/agent_rebalance.go` |
 | `lazyLink` (`open`, `end`, `adopt`, `drainNow`), `linkPark`, the resume header | `relay:client/agent/agent_link.go`, `tcp.go` |
 
+### QAD on the agent link's UDP port (lane DIRECTPATH, 2026-11-11)
+
+`quicPeer` answers a connection that negotiates ALPN `nfltr-qad/1`
+(`core/session/qad.go`) with the address its packets came from, on one
+unidirectional stream, and closes it; it binds nothing, so the agent
+link's model above is unchanged (no token, no `bind`, no session). It has
+no state of its own to model: one request, one answer, the connection's
+end. What the answer may do is in the direct-path design (nfltr
+`docs/decisions/direct-paths-2026-11-11.md`): it is the relay's word, an
+endpoint uses it only as a candidate, and link's `spec/DirectPath.tla`
+(`Offer` with another holder, `OnlyPeer`, mutant `no-bind`) and relay's
+`spec/proverif/e2ee_tcp.pv` (queries 21-24) show a forged or withheld
+answer costs the direct path only, never a byte or the peer. Candidate
+exchange is end to end, inside the session (the design's "Layers"), so
+relay-core holds no candidate state either.
+
 ## Move.tla: moving an agent's HTTP session to another replica
 
 `Move.tla` models one make-before-break move (`pb.Move`) of an agent's

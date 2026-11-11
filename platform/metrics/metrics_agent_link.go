@@ -16,7 +16,7 @@ var (
 	agentLinkConnections = auto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: dispatcherNamespace,
 		Name:      "agent_link_connections_total",
-		Help:      "Agent-link connections, by transport (tcp, quic) and result (bound; refused: an unknown token or one past its connections; silent: it ended silent past its liveness timeout, which ends its primary stream).",
+		Help:      "Agent-link connections, by transport (tcp, quic) and result (bound; refused: an unknown token or one past its connections; silent: it ended silent past its liveness timeout, which ends its primary stream; qad: a QUIC address discovery connection, answered with its observed address).",
 	}, []string{"transport", "result"})
 	agentLinkSessions = auto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: dispatcherNamespace,
