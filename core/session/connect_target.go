@@ -151,13 +151,13 @@ func SessionE2EEAnswer(e2ee bool, svc *agentservices.Decl, policy string, def bo
 	case e2ee && policy == config.E2EEForbid:
 		return relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "this relay forbids end-to-end encrypted TCP sessions (tcp.e2ee_policy=forbid)"
 	case !e2ee && policy == config.E2EERequire:
-		return relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED, "this relay requires end-to-end encrypted TCP sessions (tcp.e2ee_policy=require): pin the agent's certificate"
+		return relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED, "this relay requires end-to-end encrypted TCP sessions (tcp.e2ee_policy=require): open them from a machine of the agent's organisation (nfltr org join)"
 	case svc == nil:
 		return 0, ""
 	case e2ee && !ServiceE2EE(*svc, policy, def):
 		return relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, fmt.Sprintf("service %s is not end-to-end encrypted", svc.Name)
 	case !e2ee && ServiceE2EE(*svc, policy, def):
-		return relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED, fmt.Sprintf("service %s takes end-to-end encrypted sessions only: pin the agent's certificate", svc.Name)
+		return relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED, fmt.Sprintf("service %s takes end-to-end encrypted sessions only: open them from a machine of the agent's organisation (nfltr org join)", svc.Name)
 	}
 	return 0, ""
 }
