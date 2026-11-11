@@ -257,7 +257,8 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
 | `Adopt`, `AdoptRefused` | relay `client/agent` `tcp.go` after `stream.Header()`: `lazyLink.adopt`; refused while dialling, or the park's TTL first: `drainNow` |
 | `Dial`, `Bind` | the agent's `lazyLink.open`/`run` on `AgentLinkDial`; `agentLink.verify`+`bind` |
 | `AgentEnd(g)`, `Park` | the agent's primary's context ends: `lazyLink.end` takes the up link off it, then parks it (`linkPark.park`); `runTCPTunnel` returns, and the agent's next primary connects (`Register`), only after both (the bug before: `end` ran in `context.AfterFunc`'s goroutine, finding 43) |
-| `PrimEnd(g)` | `unregister` -> `primaryEnded` (closes the token's connections unless resumed), `CloseAll` |
+| `PrimEnd(g)` | `unregister` -> `primaryEnded` under `d.Mu` (an unresumed primary's live connections kept in their resume grace, `agentLink.grace`, G7), `CloseAll` |
+| `GraceEnd(t)` | `agentLinkResumeGrace` passed with no primary resuming the token: `agentLink.graceEnd` closes its connections; a resume (`resumeToken`) or the connections' end (`unbind`) ends the grace first (`endGraceLocked`) |
 | `LinkDrop(t)`, `DropAs` | a link connection closes (park TTL, agent stop, network); the agent's up link redials it (its peerlink Node, `linkBackoff`: finding 30) |
 | `Silent(t, tr)` | a link connection dead past its liveness: link/TCP `agentLinkObserver.ConnDown` -> `agentLink.silent` (ends the primary bound to the token); QUIC's idle timeout (`quicPeer`): `unbind` only |
 | `PathDown` | the agent's TCP path dies (the frame streams' heartbeats, `WatchAgentSession`, take over once no link vouches) |
@@ -272,7 +273,9 @@ sessions (`carriesSessions`, which a rebalance asks before moving it).
   connection bound with the token of an up primary; also after a failed
   link open (finding 19).
 - `NoOrphanLink`: a relay link connection exists only for a token an up
-  primary holds.
+  primary holds, or one in its resume grace (G7, finding 5).
+- `ResumeNotCut`: a primary's end cuts no session of a live link; the
+  link waits in its grace for the agent's next primary (finding 5).
 - `CarriesExact`: the relay counts the agent as carrying sessions exactly
   when one is open (finding 18): every primary here, its frame streams'
   sessions and the link sessions of the token it holds, whichever primary
@@ -334,7 +337,7 @@ of this repository (a path with `/`); another repository's is named
 
 | what the spec models | file |
 |---|---|
-| `resumeToken`, `verify`, `bind`, `unbind`, `silent`, `quicPeer`, `agentLinkObserver`, `open` (the link-session count), `primaryEnded`, `dialNow` | `core/session/agent_link.go` |
+| `resumeToken`, `verify`, `bind`, `unbind`, `silent`, `quicPeer`, `agentLinkObserver`, `open` (the link-session count), `primaryEnded`, `graceEnd`, `carriesGraced`, `dialNow` | `core/session/agent_link.go` |
 | `RegisterStream`, `unregister`, `leaveRotationLocked`, `carriesSessions`, `carries`, `yield`, `sendLoop`'s silent and supersede cases | `core/session/dispatcher_tcp_streams.go` |
 | `handleLocalConn`, `onwardLocal`, `attach` | `core/session/dispatcher_tcp.go` |
 | the Handoff trace recorder (`TraceHandoff.tla`) | `core/session/trace_handoff_on.go`, `trace_off.go` |
@@ -1037,10 +1040,11 @@ agent's relay-side steps of `Handoff.tla` to
 rotation), `Bind` and `LinkDrop` (the token's link went from no
 connection to one and back), `Silent` (with its transport), `Arrive`,
 `Wait`, `Open` (link: the token; grpc: the primary), `Refused`, `End`,
-and `Carries` (what `carriesSessions` answered). Each is written under
+`GraceEnd` (the token's resume grace ended unresumed: its connections
+close), and `Carries` (what `carriesSessions` answered). Each is written under
 `traceMu` inside the lock that orders its change (`d.Mu`, the link's
 `Mu`; `traceMu` is the innermost lock). `TraceHandoff.tla` checks a
-trace against the model with Handoff's four invariants on every state:
+trace against the model with Handoff's five invariants (`ResumeNotCut` too) on every state:
 the agent's steps (`Dial`, `AgentEnd`, `Adopt`, `AdoptRefused`), a
 refused or second connection's bind and the TCP path's failure are not
 logged and TLC chooses them; a `LinkDrop` of a connection the agent
@@ -1400,14 +1404,23 @@ acknowledgement, and `inproc-enqueue-blocks`).
    ports). The agent's control connection reconnects on its watchdog and
    every session on its live link is cut (the NAT lab's matrix rows with a
    cone agent; a plain session reset at once, measured). Design, checked
-   in `Handoff.tla` on branch `RELAYREL-wip` (code not written yet):
+   in `Handoff.tla` (lane RELAYREL), code lane HANDOFFGRACE:
    `PrimEnd` keeps an unresumed primary's live connections in a resume
    grace (`grace`), `Register` resumes a graced token, `GraceEnd` closes
    them; `NoOrphanLink` and `CarriesExact` widened to graced tokens, new
    `ResumeNotCut` (a primary's end cuts no session of a live link) and
    `GraceEnds` (liveness), mutants `close-at-end` (the code today:
    `ResumeNotCut`) and `carries-no-grace` (`CarriesExact`), witness
-   `WitnessGraceResumed`. Severity: medium (open).
+   `WitnessGraceResumed`. Severity: medium. Fixed (lane HANDOFFGRACE):
+   `primaryEnded` (now under `d.Mu`, so a resume sees the token bound or
+   graced, never neither) keeps an unresumed primary's live connections
+   for `agentLinkResumeGrace` (10 s, the agent's `linkParkTTL`);
+   `resumeToken` resumes a graced token of the same agent; `graceEnd`
+   closes them unresumed (trace event `GraceEnd`); `unbind` ends a grace
+   whose connections are gone; `carriesSessions` counts a graced token's
+   link sessions. Guard: `TestAgentLinkResumedByTheNextPrimary/late`
+   (failed before: a new token, the session cut), `/expired` (the cut
+   after the grace), and its traces in `make spec-traces`.
 
 6. **`MOVE_DONE` could overtake a request** (model, `Move.tla`
    `race:settle-timer`). `MOVE_DONE` went out from the watch goroutine

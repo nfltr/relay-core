@@ -33,25 +33,28 @@ import (
 // (agentLinkResumeHeader) and the relay hands it the old token, so a
 // session open on the link goes on, and a new one rides it at once. The
 // old primary's end, noticed later, leaves the link alone (resumed).
-// When the relay noticed first (refused), the next primary gets a new
-// token: the agent drains its parked link (AdoptRefused), the session on
-// it ends, and a new session works (spec/README.md finding 5).
+// When the relay noticed first (late: the agent's own end of the primary
+// reached it, G7), the link waits in its resume grace and the next
+// primary resumes it the same way: the session goes on (Handoff.tla
+// ResumeNotCut; before, primaryEnded closed it: spec/README.md finding
+// 5). Only once the grace passed (expired) does the next primary get a
+// new token: the agent drains its parked link (AdoptRefused), the session
+// on it ends, and a new session works.
 func TestAgentLinkResumedByTheNextPrimary(t *testing.T) {
-	for _, refused := range []bool{false, true} {
-		t.Run(map[bool]string{false: "resumed", true: "refused"}[refused], func(t *testing.T) {
-			testAgentLinkResume(t, refused)
-		})
+	for _, mode := range []string{"resumed", "late", "expired"} {
+		t.Run(mode, func(t *testing.T) { testAgentLinkResume(t, mode) })
 	}
 }
 
-func testAgentLinkResume(t *testing.T, refused bool) {
+func testAgentLinkResume(t *testing.T, mode string) {
+	relayFirst, refused := mode != "resumed", mode == "expired"
 	d, cancel := newTestDispatcher(t)
 	defer cancel()
 	const id = "resume-agent"
 	logger := slog.New(slog.DiscardHandler)
 	td := NewTCPDispatcher(logger, nil, nil)
 	d.TCPDispatcher = td
-	r := &cutPrimaryRelay{Dispatcher: d, cut: make(chan struct{}), release: make(chan struct{}), oldEnded: make(chan struct{}), waitOld: refused}
+	r := &cutPrimaryRelay{Dispatcher: d, cut: make(chan struct{}), release: make(chan struct{}), oldEnded: make(chan struct{}), waitOld: relayFirst}
 	defer r.releaseOld()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -66,6 +69,24 @@ func testAgentLinkResume(t *testing.T, refused bool) {
 		md.Set("x-apikey-agentID", id)
 		return h(srv, identityStream{ss, testPrincipal(metadata.NewIncomingContext(ss.Context(), md))})
 	}))
+	var old *tcpAgentStream
+	if refused {
+		td.Link.graceFor = time.Millisecond
+	}
+	r.beforeNext = func() { // on the relay's goroutine: t.Error, not t.Fatal
+		if !refused { // in its grace, the link's session counts (Handoff.tla CarriesGraced)
+			if !td.carriesSessions(id) {
+				t.Error("the agent carries no session while its link is in its grace")
+			}
+			return
+		}
+		for deadline := time.Now().Add(10 * time.Second); tokenConns(td, old.token) > 0; time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Error("the grace did not close the link")
+				return
+			}
+		}
+	}
 	pb.RegisterDispatcherServer(srv, r)
 	go func() { _ = srv.Serve(lis) }()
 	defer srv.Stop()
@@ -87,11 +108,11 @@ func testAgentLinkResume(t *testing.T, refused bool) {
 		t.Fatal(err)
 	}
 	echoOn(t, held, "before")
-	old := td.agentStream(id)
+	old = td.agentStream(id)
 	waitUntil(t, func() bool { return tokenConns(td, old.token) > 0 }, func() string { return "no agent link bound to the primary" })
 
 	close(r.cut) // the agent's primary ends; the relay's goes on
-	if refused {
+	if relayFirst {
 		r.releaseOld() // the relay notices first: nothing to resume
 	}
 	waitUntil(t, func() bool { p := td.agentStream(id); return p != nil && p != old }, func() string { return "the agent's next primary did not register" })
@@ -104,7 +125,7 @@ func testAgentLinkResume(t *testing.T, refused bool) {
 			t.Fatalf("the session on the parked link did not end: %v", err)
 		}
 	} else {
-		echoOn(t, held, "after the resume") // the link's session went on
+		echoOn(t, held, "after the resume") // the link's session went on, byte-exact
 		r.releaseOld()                      // the relay notices the old primary's end
 		waitUntil(t, func() bool { return !streamListed(td, id, old) }, func() string { return "the old primary is still listed" })
 		echoOn(t, held, "after the old primary ended")
@@ -129,6 +150,7 @@ type cutPrimaryRelay struct {
 	cut, release chan struct{}
 	oldEnded     chan struct{} // the held primary's ConnectTCP returned
 	waitOld      bool          // a later primary waits for oldEnded: the relay noticed first
+	beforeNext   func()        // then runs this, if set
 	first        sync.Once
 	releaseOnce  sync.Once
 }
@@ -143,6 +165,9 @@ func (r *cutPrimaryRelay) ConnectTCP(st pb.Dispatcher_ConnectTCPServer) error {
 	if !held {
 		if r.waitOld && len(metadata.ValueFromIncomingContext(st.Context(), TCPBindHeader)) == 0 {
 			<-r.oldEnded
+			if r.beforeNext != nil {
+				r.beforeNext()
+			}
 		}
 		return r.Dispatcher.ConnectTCP(st)
 	}

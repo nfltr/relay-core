@@ -61,6 +61,15 @@ const agentLinkMaxConns = tcpAgentStreams
 // frame streams.
 const agentLinkDialWait = time.Second
 
+// agentLinkResumeGrace is how long the live connections of a primary that
+// ended unresumed wait for the agent's next primary to resume them
+// (resumeToken; spec/Handoff.tla grace, G7): the agent parks its link as
+// long (relay client's linkParkTTL), and its own end of the primary can
+// reach the relay before its next primary does (a path black-holed toward
+// the agent only), when closing them at once would cut every session on a
+// link that is still up.
+const agentLinkResumeGrace = 10 * time.Second
+
 // linkUse is a primary's agent link (tcpAgentStream.link, under
 // agentLink.mu): on the stream itself, so an idle agent's link costs the
 // relay no allocation of its own.
@@ -71,6 +80,13 @@ type linkUse struct {
 	resumed bool          // a newer primary of the agent took its connections over (resumeToken)
 	dial    chan struct{} // closed once a connection binds; nil: no request out
 	dialBy  time.Time     // when sessions stop waiting for that request
+}
+
+// linkGrace is a token in its resume grace: its agent's next primary may
+// resume it until the timer closes its connections (graceEnd).
+type linkGrace struct {
+	agent string
+	timer *time.Timer
 }
 
 // linkConn is a bound agent-link connection.
@@ -89,6 +105,8 @@ type agentLink struct {
 	Mu       sync.Mutex
 	Conns    map[string]map[io.Closer]linkConn // by token: each connection, its transport and generation
 	sessions map[string]int                    // by token: the sessions open on its link (carriesSessions)
+	grace    map[string]*linkGrace             // by token: the live connections of an ended, unresumed primary (primaryEnded)
+	graceFor time.Duration                     // agentLinkResumeGrace; a test's own
 	offer    metadata.MD                       // the response header's offer, made at the first ask
 
 	drained sync.Once
@@ -123,6 +141,7 @@ func (l *agentLink) drain() {
 
 func newAgentLink(d *TCPDispatcher, addr net.Addr) *agentLink {
 	l := &agentLink{d: d, Conns: map[string]map[io.Closer]linkConn{}, sessions: map[string]int{},
+		grace: map[string]*linkGrace{}, graceFor: agentLinkResumeGrace,
 		ln: &agentLinkListener{conns: make(chan net.Conn), addr: addr, done: make(chan struct{})}}
 	l.tcp = mustNode(peerlink.New(peerlink.Config{
 		Listener: l.ln,
@@ -374,6 +393,7 @@ func (l *agentLink) unbind(token string, c io.Closer) {
 			if traceOn && had {
 				traceHConn(token, false)
 			}
+			l.endGraceLocked(token) // nothing left to resume (Handoff.tla DropAs)
 		}
 	}
 }
@@ -388,22 +408,29 @@ const agentLinkResumeHeader = "x-nfltr-agent-link-resume"
 // agentID's, here, and its agent link has a connection, which the new
 // primary then takes over (its sessions go on, new ones ride it at once:
 // an agent reconnecting after its TCP path broke while its QUIC link
-// migrated); a new token otherwise. The token is a secret only that
-// primary's agent holds.
+// migrated); or when that primary ended and its link's connections are in
+// their resume grace (primaryEnded: the agent's own end reached the relay
+// first, G7); a new token otherwise. The token is a secret only that
+// primary's agent holds. Under d.Mu and the link's Mu (that order, as
+// unregister), so a primary's end is seen whole: bound, or graced.
 func (d *TCPDispatcher) resumeToken(agentID, token string) string {
 	if token == "" || d.Link == nil {
 		return newBindToken()
 	}
 	d.Mu.RLock()
-	p := d.bound[token]
-	d.Mu.RUnlock()
-	if p == nil || p.agent != agentID {
-		return newBindToken()
-	}
+	defer d.Mu.RUnlock()
 	l := d.Link
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
-	if p.link.ended || p.link.resumed || !l.upLocked(p) {
+	p := d.bound[token]
+	if p == nil {
+		if g := l.grace[token]; g != nil && g.agent == agentID && len(l.Conns[token]) > 0 {
+			l.endGraceLocked(token)
+			return token
+		}
+		return newBindToken()
+	}
+	if p.agent != agentID || p.link.ended || p.link.resumed || !l.upLocked(p) {
 		return newBindToken()
 	}
 	p.link.resumed = true
@@ -481,15 +508,21 @@ func (l *agentLink) ask(ctx context.Context, p *tcpAgentStream) metadata.MD {
 	return l.offer
 }
 
-// primaryEnded closes the connections primary p bound, and counts a
-// primary that asked for the agent link and bound none.
+// primaryEnded ends primary p's use of its agent link, and counts a
+// primary that asked for the agent link and bound none. Its token's live
+// connections, unless a newer primary resumed them, are kept for
+// graceFor: the agent's next primary resumes them (resumeToken), or the
+// grace's end closes them (graceEnd). Closing them here cut every session
+// on a link still up whenever the agent's own end of the primary reached
+// the relay first (spec/README.md finding 5, G7: Handoff.tla PrimEnd,
+// ResumeNotCut). Under d.Mu (unregister), with bound[p.token] gone.
 func (l *agentLink) primaryEnded(p *tcpAgentStream) {
 	l.Mu.Lock()
 	u := &p.link
-	var conns map[io.Closer]linkConn
-	if !u.resumed {
-		conns = l.Conns[p.token]
-		delete(l.Conns, p.token)
+	if !u.resumed && l.upLocked(p) {
+		token, g := p.token, &linkGrace{agent: p.agent}
+		l.grace[token] = g
+		g.timer = time.AfterFunc(l.graceFor, func() { l.graceEnd(token, g) })
 	}
 	u.ended = true
 	asked, unbound := u.asked, u.asked != "" && !u.counted
@@ -501,9 +534,50 @@ func (l *agentLink) primaryEnded(p *tcpAgentStream) {
 	if unbound {
 		metrics.RecordAgentLinkTransport(asked, "grpc")
 	}
+}
+
+// graceEnd closes token's connections once its resume grace g passed with
+// no primary resuming it (Handoff.tla GraceEnd): their sessions are cut.
+func (l *agentLink) graceEnd(token string, g *linkGrace) {
+	l.Mu.Lock()
+	if l.grace[token] != g {
+		l.Mu.Unlock()
+		return
+	}
+	delete(l.grace, token)
+	conns := l.Conns[token]
+	delete(l.Conns, token)
+	if traceOn {
+		traceHGraceEnd(token)
+	}
+	l.Mu.Unlock()
 	for c := range conns {
 		_ = c.Close()
 	}
+}
+
+// endGraceLocked ends token's resume grace, if any: resumed, or its
+// connections gone. Under the link's Mu.
+func (l *agentLink) endGraceLocked(token string) {
+	if g := l.grace[token]; g != nil {
+		g.timer.Stop()
+		delete(l.grace, token)
+	}
+}
+
+// carriesGraced reports whether a token of agentID in its resume grace
+// has a session open on its link (Handoff.tla CarriesGraced).
+// ponytail: a scan of the graces (agents reconnecting in the last
+// graceFor); index them by agent if a mass reconnect makes it show.
+func (l *agentLink) carriesGraced(agentID string) bool {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	for t, g := range l.grace {
+		if g.agent == agentID && l.sessions[t] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // open opens a session for open to the agent of primary p on its agent

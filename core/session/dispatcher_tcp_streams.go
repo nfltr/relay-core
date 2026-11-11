@@ -582,10 +582,10 @@ func (d *TCPDispatcher) unregister(agentID string, as *tcpAgentStream) {
 	} else if d.bound[as.token] == as { // not resumed by a newer primary (resumeToken)
 		delete(d.bound, as.token)
 	}
-	d.Mu.Unlock()
 	if as.primary == nil && d.Link != nil {
-		d.Link.primaryEnded(as)
+		d.Link.primaryEnded(as) // under d.Mu: a resume sees the token bound or graced
 	}
+	d.Mu.Unlock()
 	as.CloseAll()
 	if as.cr != nil {
 		as.cr.Close() // senders waiting for credit give up
@@ -644,7 +644,8 @@ func (d *TCPDispatcher) carriesSessions(agentID string) bool {
 	d.Mu.RLock()
 	all := slices.Clone(d.All[agentID])
 	d.Mu.RUnlock()
-	c := slices.ContainsFunc(all, func(s *tcpAgentStream) bool { return s.primary == nil && d.carries(agentID, s) })
+	c := slices.ContainsFunc(all, func(s *tcpAgentStream) bool { return s.primary == nil && d.carries(agentID, s) }) ||
+		d.Link != nil && d.Link.carriesGraced(agentID)
 	if traceOn {
 		traceHCarries(d, agentID, c)
 	}

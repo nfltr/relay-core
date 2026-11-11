@@ -180,6 +180,7 @@ NEXT TraceNext
 INVARIANTS
     PlacedOnLive
     NoOrphanLink
+    ResumeNotCut
     CarriesExact
     SilenceOnDeadPath
     TraceNotDone

@@ -35,7 +35,9 @@ TSilent == Logged("Silent") /\ Silent(E.t, E.via) /\ bound[E.t] # NoTok /\ sil'[
 TSilentAfterDrop ==
     /\ Logged("Silent") /\ E.via = "tcp" /\ ~conn[E.t] /\ ~tcpUp /\ bound[E.t] # NoTok
     /\ sil' = [sil EXCEPT ![bound[E.t]] = TRUE]
-    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, hdr, tcpUp, sst, via, on, by>>
+    /\ UNCHANGED <<prim, aend, tok, resumed, bound, conn, dial, lz, pk, pkg, pend, asked, hdr, tcpUp, sst, via, on, by, grace, endcut>>
+\* The resume grace of token E.t ended unresumed: its connections close.
+TGraceEnd == Logged("GraceEnd") /\ GraceEnd(E.t)
 \* carriesSessions answered (a rebalance's check): what the model counts.
 TCarries == Logged("Carries") /\ Carries = (E.via = "yes") /\ UNCHANGED vars
 TArrive == Logged("Arrive") /\ Arrive(E.s)
@@ -47,7 +49,7 @@ TEnd == Logged("End") /\ End(E.s)
 TEndGone == Logged("End") /\ sst[E.s] \in {"lost", "cut", "refused"} /\ UNCHANGED vars
 TUnknown ==
     /\ l <= Len(Log)
-    /\ E.ev \notin {"Register", "PrimEnd", "Bind", "LinkDrop", "Silent", "Carries", "Arrive", "Wait", "Open", "Refused", "End"}
+    /\ E.ev \notin {"Register", "PrimEnd", "GraceEnd", "Bind", "LinkDrop", "Silent", "Carries", "Arrive", "Wait", "Open", "Refused", "End"}
     /\ Print(<<"unknown event", E>>, FALSE)
 
 \* Steps no line records: the agent's, a refused or second connection's
@@ -66,7 +68,7 @@ USkipWait == Unl /\ E.ev \in {"Open", "Refused"} /\ sst[E.s] = "arrived" /\ Plac
 TraceInit == Init /\ l = 1
 
 TraceNext ==
-    \/ TRegister \/ TPrimEnd \/ TBind \/ TLinkDrop \/ TLinkDropGone \/ TSilent \/ TSilentAfterDrop
+    \/ TRegister \/ TPrimEnd \/ TGraceEnd \/ TBind \/ TLinkDrop \/ TLinkDropGone \/ TSilent \/ TSilentAfterDrop
     \/ TCarries \/ TArrive \/ TWait \/ TPlace \/ TWake \/ TEnd \/ TEndGone \/ TUnknown
     \/ UDial \/ UAgentEnd \/ UPark \/ UAdopt \/ UAdoptRefused \/ UPathDown \/ UBind \/ USkipWait
 

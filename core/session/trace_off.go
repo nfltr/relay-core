@@ -37,6 +37,7 @@ func traceHRegister(*TCPDispatcher, *tcpAgentStream)                      {}
 func traceHPrimEnd(*tcpAgentStream)                                       {}
 func traceHConn(string, bool)                                             {}
 func traceHSilent(string, string)                                         {}
+func traceHGraceEnd(string)                                               {}
 func traceHArrive(ctx context.Context, _ *tcpAgentStream) context.Context { return ctx }
 func traceHWait(context.Context)                                          {}
 func traceHPlaced(context.Context, *tcpAgentStream, string)               {}

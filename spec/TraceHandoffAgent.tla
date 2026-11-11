@@ -45,7 +45,7 @@ AUnknown ==
 Unl == l <= Len(Log) /\ UNCHANGED l
 UPrimEnd == Unl /\ \E g \in Gens : PrimEnd(g)
 UBind == Unl /\ Bind /\ lz'.st = "up" \* the Node's redial (DropAs redial)
-ULinkDrop == Unl /\ \E t \in Gens : LinkDrop(t) \/ \E tr \in {"tcp", "quic"} : Silent(t, tr)
+ULinkDrop == Unl /\ \E t \in Gens : LinkDrop(t) \/ GraceEnd(t) \/ \E tr \in {"tcp", "quic"} : Silent(t, tr)
 UPathDown == Unl /\ PathDown
 \* lazyLink.end parks the link it took off its ended primary (linkPark.park).
 UPark == Unl /\ Park

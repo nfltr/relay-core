@@ -130,6 +130,16 @@ func traceHSilent(token, transport string) {
 	}
 }
 
+// traceHGraceEnd: token's resume grace ended unresumed and its
+// connections close (agentLink.graceEnd), under the link's Mu.
+func traceHGraceEnd(token string) {
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	if h := handoffTokens[token]; h != nil {
+		h.log(handoffEvent{Ev: "GraceEnd", T: h.toks[token]})
+	}
+}
+
 // traceHCarries: carriesSessions answered c (via "yes" or "no").
 func traceHCarries(d *TCPDispatcher, agentID string, c bool) {
 	traceMu.Lock()
