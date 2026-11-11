@@ -38,3 +38,19 @@ func TestRetry(t *testing.T) {
 		t.Fatal("Reset kept the backoff")
 	}
 }
+
+// TestRetryDoesNotSpin: a listener that fails every Accept (a process at
+// its descriptor limit) is retried a handful of times in 300 ms, not in a
+// busy loop (iroh-relay issue 4636); every accept loop of the relay core
+// answers its errors with Retry.
+func TestRetryDoesNotSpin(t *testing.T) {
+	var b Backoff
+	calls := 0
+	for end := time.Now().Add(300 * time.Millisecond); time.Now().Before(end); calls++ {
+		b.Retry(nil, "t", syscall.EMFILE)
+	}
+	// 5+10+20+40+80+160 ms: 6 calls; a spin makes millions.
+	if calls > 10 {
+		t.Fatalf("%d retries in 300 ms of EMFILE: Retry spins", calls)
+	}
+}
