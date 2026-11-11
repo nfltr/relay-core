@@ -216,10 +216,17 @@ func NewGRPCServer(logger *slog.Logger, opts ...GRPCServerOption) *grpc.Server {
 	if d := viper.GetDuration("grpc.keepalive.server_parameters.timeout"); d > 0 {
 		srvTimeout = d
 	}
+	// A connection with no stream for grpc.max_connection_idle gets
+	// GOAWAY and is closed: an identity arrives only with a stream's
+	// headers, so a client that finished the preface and opens none
+	// (answering pings keeps it alive) held its memory for good
+	// (TestServerClosesAConnectionThatOpensNoStream,
+	// docs/decisions/grpc-max-connection-idle-2026-11-11.md).
 	grpcOpts = append(grpcOpts,
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			Time:    srvTime,
-			Timeout: srvTimeout,
+			Time:              srvTime,
+			Timeout:           srvTimeout,
+			MaxConnectionIdle: viper.GetDuration("grpc.max_connection_idle"),
 		}),
 	)
 

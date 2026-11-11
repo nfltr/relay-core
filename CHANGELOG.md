@@ -12,6 +12,12 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `grpc.max_connection_idle` (default 5 min, 0 = never): a gRPC connection
+  with no stream for that long gets GOAWAY and is closed. A client that
+  finished the HTTP/2 preface, answered pings and opened no stream (its
+  identity comes with a stream's headers) was held for good
+  (docs/decisions/grpc-max-connection-idle-2026-11-11.md). Migration: none;
+  an idle client reconnects at its next call.
 - Relay failover, the endpoint's half (nfltr
   docs/decisions/relay-failover-2026-11-08.md, spec/Failover.tla `Accept`;
   lanes RFRELAYID, RFDEDUPE): `core/directory.RelayID`, the directory's

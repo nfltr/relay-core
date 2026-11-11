@@ -344,6 +344,7 @@ func SetDefaultFlags() {
 	_ = flag.Duration("grpc.keepalive.server_parameters.timeout", 10*time.Second, "time to wait for a keepalive ping ack from client")
 	_ = flag.Uint32("grpc.max_concurrent_streams", 250, "max concurrent gRPC streams per connection (0 = unlimited)")
 	_ = flag.Duration("grpc.connection_timeout", 10*time.Second, "time a new gRPC connection has to finish its TLS handshake and HTTP/2 preface (grpc-go's default is 120s, which let stalled handshakes hold memory)")
+	_ = flag.Duration("grpc.max_connection_idle", 5*time.Minute, "a gRPC connection with no stream for this long gets GOAWAY and is closed (0 = never; a client reconnects at its next call)")
 
 	// ── Behavior Flags ──────────────────────────────────────────────────
 	_ = flag.Bool("on_downstream_errors.drop_agent_connection", defaultOnDownstreamErrorsDropAgentConn, "disconnect the agent when a downstream gRPC call fails")
