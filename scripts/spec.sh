@@ -464,6 +464,11 @@ mutants)
 	for b in count-per-primary carries-newest quic-silent-ends park-primary-ctx end-async; do
 		expect Handoff.cfg Handoff.tla "$b" -e "$m$b\"/"
 	done
+	# G7: the resume grace (close-at-end: the code before, finding 5).
+	for b in close-at-end carries-no-grace; do
+		expect Handoff.cfg Handoff.tla "$b" -e "$m$b\"/"
+	done
+	expect Handoff.cfg Handoff.tla witness:grace-resumed -e 's/^    ResumeNotCut$/    WitnessGraceResumed/'
 	expect Handoff.cfg Handoff.tla witness:link-open -e 's/^    PlacedOnLive$/    WitnessLinkOpen/'
 	expect Handoff.cfg Handoff.tla witness:fallback -e 's/^    PlacedOnLive$/    WitnessFallback/'
 	expect Handoff.cfg Handoff.tla witness:resumed -e 's/^    NoOrphanLink$/    WitnessResumed/'
