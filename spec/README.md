@@ -1393,6 +1393,21 @@ acknowledgement, and `inproc-enqueue-blocks`).
    (typed, link's `CodeConnLost`). As designed (the agent then
    reconnects); the window is the relay's detection of the old stream's
    end (gRPC keepalive while the link is up). Severity: info.
+   Reopened 2026-11-11 (lane RELAYREL, G7 in nfltr
+   `docs/decisions/direct-paths-2026-11-11.md`): the window is zero
+   whenever the agent's own end of the primary reaches the relay (a path
+   black-holed toward the agent only: a NAT that lost its state and keeps
+   ports). The agent's control connection reconnects on its watchdog and
+   every session on its live link is cut (the NAT lab's matrix rows with a
+   cone agent; a plain session reset at once, measured). Design, checked
+   in `Handoff.tla` on branch `RELAYREL-wip` (code not written yet):
+   `PrimEnd` keeps an unresumed primary's live connections in a resume
+   grace (`grace`), `Register` resumes a graced token, `GraceEnd` closes
+   them; `NoOrphanLink` and `CarriesExact` widened to graced tokens, new
+   `ResumeNotCut` (a primary's end cuts no session of a live link) and
+   `GraceEnds` (liveness), mutants `close-at-end` (the code today:
+   `ResumeNotCut`) and `carries-no-grace` (`CarriesExact`), witness
+   `WitnessGraceResumed`. Severity: medium (open).
 
 6. **`MOVE_DONE` could overtake a request** (model, `Move.tla`
    `race:settle-timer`). `MOVE_DONE` went out from the watch goroutine
