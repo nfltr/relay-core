@@ -5,6 +5,7 @@ package grpcfactory
 
 import (
 	"errors"
+	"io"
 	"net"
 	"os"
 	"testing"
@@ -68,4 +69,32 @@ func TestServerClosesAConnectionThatOpensNoStream(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestServerClosesAStalledHandshake: a connection that sends nothing (or
+// stops inside its TLS handshake) is closed at grpc.connection_timeout,
+// not grpc-go's 120 s (relay-flood-hardening-2026-11-05).
+func TestServerClosesAStalledHandshake(t *testing.T) {
+	defer viper.Reset()
+	const timeout = time.Second
+	viper.Set("grpc.connection_timeout", timeout)
+	s := NewGRPCServer(testLogger())
+	defer s.Stop()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = s.Serve(ln) }()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	bound := timeout + 3*time.Second
+	_ = c.SetReadDeadline(time.Now().Add(bound))
+	start := time.Now()
+	if _, err := io.Copy(io.Discard, c); errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a connection that sent nothing still open after %v", bound)
+	}
+	t.Logf("closed after %v", time.Since(start).Round(time.Millisecond))
 }
