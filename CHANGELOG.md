@@ -18,6 +18,9 @@ changes listed (from the first tag on).
   identity comes with a stream's headers) was held for good
   (docs/decisions/grpc-max-connection-idle-2026-11-11.md). Migration: none;
   an idle client reconnects at its next call.
+- `compose.Serve`'s proxy port closes a keep-alive connection idle for
+  `http.server.idle_timeout` (default 120 s); it held one for good before.
+  Migration: none.
 - Relay failover, the endpoint's half (nfltr
   docs/decisions/relay-failover-2026-11-08.md, spec/Failover.tla `Accept`;
   lanes RFRELAYID, RFDEDUPE): `core/directory.RelayID`, the directory's

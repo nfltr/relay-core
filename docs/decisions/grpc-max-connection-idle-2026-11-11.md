@@ -39,3 +39,17 @@ machine, ordering or protocol change.
 Test: `grpcfactory/idle_conn_test.go`
 `TestServerClosesAConnectionThatOpensNoStream` (preface, settings, pings
 answered, no stream: closed within the bound; fails without the option).
+
+## The proxy port's idle keep-alive connections
+
+Same audit, same class: `compose.Serve`'s proxy `http.Server` set
+`ReadHeaderTimeout` only. With `IdleTimeout` and `ReadTimeout` both zero,
+net/http waits for a keep-alive connection's next request without a bound,
+so a client that made one request and then sent nothing was held for good
+(HTTP/1.1 and HTTP/2). It now takes `http.server.idle_timeout` (default
+120 s), the setting relay-server's own proxy server already uses. A request
+in progress is not affected (the idle timer runs only between requests).
+
+Test: `compose/proxy_idle_test.go` `TestProxyClosesAnIdleKeepAliveConnection`
+(one request, then silence: closed within the bound; fails without the
+field).

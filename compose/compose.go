@@ -156,7 +156,9 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 	internal.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	internal.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	host := &frontend.CoreHost{C: c, Log: logger, Ports: ls.Ports, Shares: shares}
-	proxy := &http.Server{ReadHeaderTimeout: 10 * time.Second, HTTP2: connect.HTTP2}
+	// IdleTimeout: with it and ReadTimeout zero net/http holds an idle
+	// keep-alive connection for good (TestProxyClosesAnIdleKeepAliveConnection).
+	proxy := &http.Server{ReadHeaderTimeout: 10 * time.Second, IdleTimeout: viper.GetDuration("http.server.idle_timeout"), HTTP2: connect.HTTP2}
 	comp := &Composition{
 		Core: c, Logger: logger, Internal: ls.Internal, InternalHandler: internal, Metrics: ls.Metrics, Clients: &front.Clients,
 		// The frontends this binary links (frontends.go) attach to the core.
