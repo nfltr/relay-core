@@ -185,6 +185,53 @@ func TestKeyManagerWatch(t *testing.T) {
 	}
 }
 
+// TestKeyManagerWatchWithAJournalBeside: a sqlite journal that comes and
+// goes beside the key file while the watch is set (nfltr-relay's
+// shares.db-journal) does not fail the watch, and a key removed from the
+// file afterwards is revoked without a restart. On macOS the watch failed
+// ("lstat .../shares.db-journal: no such file or directory") and a removed
+// key stayed valid until the relay restarted.
+func TestKeyManagerWatchWithAJournalBeside(t *testing.T) {
+	for range 20 {
+		km, _, path, revoked := reloadingManager(t, "a:key-a", "b:key-b")
+		journal := filepath.Join(filepath.Dir(path), "shares.db-journal")
+		stop := make(chan struct{})
+		var churn sync.WaitGroup
+		churn.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = os.WriteFile(journal, nil, 0o600)
+				_ = os.Remove(journal)
+			}
+		})
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- km.Watch(ctx) }()
+		time.Sleep(100 * time.Millisecond) // the watch is set up, under churn
+		close(stop)
+		churn.Wait()
+		writeKeys(t, path, "a:key-a")
+		deadline := time.After(time.Minute) // only against a hang
+		for !slices.Equal(revoked(), ids("b")) {
+			select {
+			case err := <-done:
+				t.Fatalf("the watch ended (%v): a removed key stays valid until a restart", err)
+			case <-deadline:
+				t.Fatalf("revoked %v, want b", revoked())
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // The manager replaces the key file whole (rename over it), keeping its
 // mode, and leaves no temporary file; revoking the last key leaves a file
 // without keys that a reload reads as such.

@@ -31,7 +31,7 @@ func Watch(ctx context.Context, path string, changed func(), failed func(error))
 		return err
 	}
 	defer func() { _ = w.Close() }()
-	if err := w.Add(filepath.Dir(path)); err != nil {
+	if err := Add(w, filepath.Dir(path)); err != nil {
 		return err
 	}
 	base := filepath.Base(path)

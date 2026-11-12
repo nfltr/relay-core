@@ -11,7 +11,7 @@ import (
 
 	"github.com/nfltr/relay-core/core/identity"
 
-	"github.com/nfltr/relay-core/internal/platform/filewatch"
+	"github.com/nfltr/relay-core/platform/filewatch"
 )
 
 // Reload reads the key file again into the live store: the keys the file

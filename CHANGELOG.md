@@ -12,6 +12,14 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `platform/filewatch` (was internal): `Watch` calls back when a file
+  changes (its directory watched, event-driven, `Settle`), and `Add`
+  watches a directory with an fsnotify watcher without failing when an
+  entry of it vanishes meanwhile: on macOS fsnotify's `Add` lstat's every
+  entry and returned a vanished one's "no such file or directory", so a
+  sqlite journal beside the API key file left the key file unwatched (a
+  removed key valid until a restart). relay-server's watchers use it.
+  Migration: none.
 - Services by name (nfltr docs/decisions/service-discovery-2026-11-12.md):
   `session.ParseAgentAddress` reads `<service>@<group>` (`AgentAddress.Group`);
   `Dispatcher.ResolveService` picks one instance per open among the agents
