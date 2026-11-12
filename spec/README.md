@@ -523,7 +523,7 @@ relay-core v0.7.2, which has none of them; review r2 F8).
 | `CrashR`, `Expire` | a replica gone without its teardown; a record's TTL (its replica gone, or a failed release's leftover) |
 | `OtherClaim` | mutant `shared-counter` only: a claim of the agent's other record taking the same counter (finding 34, the code before) |
 
-The design (`Presence.cfg`, `make spec`, 17k states): a label update is a
+The design (`Presence.cfg`, `make spec`, 235k states): a label update is a
 fenced renewal of the stream's own session (refused when superseded), and
 a renewal and an update write the record under the stream's record lock;
 every directory write that changes a listing is published after it (a
