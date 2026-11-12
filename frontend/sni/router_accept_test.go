@@ -5,7 +5,9 @@ package sni
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net"
 	"testing"
 	"time"
 
@@ -33,5 +35,27 @@ func TestRouterServeSurvivesAcceptError(t *testing.T) {
 	cancel()
 	if err := <-served; err != nil {
 		t.Fatalf("Serve after ctx end = %v, want nil", err)
+	}
+}
+
+// TestMuxSurvivesAcceptError: the E2EE SNI mux in front of the HTTPS port
+// retries an EMFILE (backing off) and keeps the port: its Accept reports
+// only the listener's close.
+func TestMuxSurvivesAcceptError(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	ln := acceptlooptest.New()
+	mux := NewMux(t.Context(), ln, "e2ee.test.local", nil, session.NewTCPDispatcher(logger, nil, directory.NewNoOpInventory()), logger)
+	accepted := make(chan error, 1)
+	go func() { _, err := mux.Accept(); accepted <- err }()
+	select {
+	case err := <-accepted:
+		t.Fatalf("Accept returned after one EMFILE: %v", err)
+	case <-ln.Again:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the mux did not call Accept again")
+	}
+	_ = ln.Close()
+	if err := <-accepted; !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Accept after close = %v, want net.ErrClosed", err)
 	}
 }
