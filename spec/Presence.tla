@@ -55,11 +55,12 @@ VARIABLES
             \* records expired (finding 12)
     uq,     \* replica -> the session (seq) whose update request was received
             \* there and is not yet applied (0: none; InFlight, finding 14)
-    sent    \* the sessions that sent an update (history)
+    sent,   \* the sessions that sent an update (history)
+    ended   \* the sessions whose stream ended by End (history)
 
-vars == <<live, st, seqs, top, upds, rec, rd, pw, pub, due, bus, sub, rs, wpc, view, stale, late, fails, gone, uq, sent>>
-recv == <<rd, pw, stale, late, fails, gone, uq, sent>>
-updv == <<uq, sent>>
+vars == <<live, st, seqs, top, upds, rec, rd, pw, pub, due, bus, sub, rs, wpc, view, stale, late, fails, gone, uq, sent, ended>>
+recv == <<rd, pw, stale, late, fails, gone, uq, sent, ended>>
+updv == <<uq, sent, ended>>
 feedv == <<due, bus, sub, rs>>
 watchv == <<wpc, view>>
 
@@ -82,7 +83,7 @@ Init ==
     /\ view = [r \in W |-> None]
     /\ stale = [r \in R |-> FALSE] /\ late = [r \in R |-> FALSE] /\ fails = 0
     /\ gone = {}
-    /\ uq = [r \in R |-> 0] /\ sent = {}
+    /\ uq = [r \in R |-> 0] /\ sent = {} /\ ended = {}
 
 (* ---------------- the feed and the bus ----------------------------------- *)
 
@@ -191,8 +192,9 @@ End(r) ==
        /\ rd' = [rd EXCEPT ![r] = "-"] /\ pw' = [pw EXCEPT ![r] = "-"]
        /\ pub' = [pub EXCEPT ![r] = TRUE]
        /\ stale' = [stale EXCEPT ![r] = FALSE]
+       /\ ended' = ended \cup {st[r].seq}
        /\ UNCHANGED <<live, seqs, top, upds, late, fails, feedv, watchv, gone>>
-    /\ UNCHANGED updv
+    /\ UNCHANGED <<uq, sent>>
 
 \* The release fails (finding 27): the record stays, naming an ended
 \* session, until its TTL; every replica lists the agent meanwhile. The
@@ -298,7 +300,7 @@ Update(r, l) ==
     /\ ~InFlight /\ live[r] /\ st[r].on /\ upds < MaxUpd
     /\ upds' = upds + 1 /\ sent' = sent \cup {st[r].seq}
     /\ Apply(r, l)
-    /\ UNCHANGED uq
+    /\ UNCHANGED <<uq, ended>>
 
 \* InFlight (finding 14): serveUpdateLabels received the request on the
 \* agent's stream of session uq[r]; UpdateAgentLabels applies it only to
@@ -309,15 +311,27 @@ UpdateRecv(r) ==
     /\ InFlight /\ live[r] /\ st[r].on /\ upds < MaxUpd /\ uq[r] = 0
     /\ upds' = upds + 1 /\ sent' = sent \cup {st[r].seq}
     /\ uq' = [uq EXCEPT ![r] = st[r].seq]
-    /\ UNCHANGED <<live, st, seqs, top, rec, rd, pw, pub, stale, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED <<live, st, seqs, top, rec, rd, pw, pub, stale, late, fails, feedv, watchv, gone, ended>>
 
+\* A ConnectHTTP agent's LabelUpdate frame is such a request too: received
+\* on its stream, applied by the stream's receive loop, which drains frames
+\* after the session ended. The design: the teardown marks the stream ended
+\* under its record lock before the release, and an update finding it
+\* ended applies nothing. Mutant update-after-end (the code without the
+\* mark): the drained update makes the fenced write of its ended session,
+\* which the store takes while no newer session claimed the record.
 UpdateApply(r, l) ==
     /\ InFlight /\ live[r] /\ uq[r] # 0
     /\ uq' = [uq EXCEPT ![r] = 0]
     /\ IF st[r].on /\ (uq[r] = st[r].seq \/ Mutant = "update-by-agent")
        THEN Apply(r, l)
-       ELSE UNCHANGED <<live, st, seqs, top, rec, rd, pw, pub, stale, late, fails, feedv, watchv, gone>>
-    /\ UNCHANGED <<upds, sent>>
+       ELSE IF Mutant = "update-after-end" /\ ~st[r].on
+               /\ ~(rec.on /\ rec.seq > uq[r]) /\ ~(~rec.on /\ seqs > uq[r])
+            THEN /\ rec' = [on |-> TRUE, pod |-> r, seq |-> uq[r], lab |-> l]
+                 /\ pub' = [pub EXCEPT ![r] = TRUE]
+                 /\ UNCHANGED <<live, st, seqs, top, rd, pw, stale, late, fails, feedv, watchv, gone>>
+            ELSE UNCHANGED <<live, st, seqs, top, rec, rd, pw, pub, stale, late, fails, feedv, watchv, gone>>
+    /\ UNCHANGED <<upds, sent, ended>>
 
 \* The update's write fails (finding 27): the stream's labels change and
 \* are published (this replica lists them), the record keeps the old ones
@@ -328,7 +342,7 @@ UpdateFail(r, l) ==
     /\ st' = [st EXCEPT ![r].lab = l] /\ pub' = [pub EXCEPT ![r] = TRUE]
     /\ stale' = [stale EXCEPT ![r] = TRUE]
     /\ UNCHANGED <<live, seqs, top, rec, rd, pw, late, feedv, watchv, gone>>
-    /\ sent' = sent \cup {st[r].seq} /\ UNCHANGED uq
+    /\ sent' = sent \cup {st[r].seq} /\ UNCHANGED <<uq, ended>>
 
 UpdateWrite(r) ==
     /\ live[r] /\ pw[r] # "-" /\ ~pub[r]
@@ -442,6 +456,10 @@ NoSilentStale == \A r \in W : Stale(r) => Owed(r)
 \* A stream's labels change only by an update its own session sent
 \* (finding 14: not one received on the connection it replaced).
 OwnUpdate == \A r \in R : st[r].on /\ st[r].lab = "l1" => st[r].seq \in sent
+\* No update or renewal writes back the record of a session whose stream
+\* ended (a drained LabelUpdate frame, HEALTHLABEL): no stale label, up
+\* or down, outlives the agent's leaving.
+NoResurrect == rec.on => rec.seq \notin ended
 \* Witness: an update in flight from a connection a newer one replaced.
 WitnessUpdateReplaced == ~\E r \in R : uq[r] # 0 /\ st[r].on /\ uq[r] # st[r].seq
 

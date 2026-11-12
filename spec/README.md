@@ -513,7 +513,7 @@ relay-core v0.7.2, which has none of them; review r2 F8).
 |---|---|
 | `Connect`, `End`, `Supersede` | `ConnectAgentTunnel`: `claimAgentRecord`, `notifyUpstreamRegistered`; `ConnectHTTP` (`Presence.up` after `Agents.Store`; `DeregisterAgent`), `ConnectTCP`; their teardowns `releaseAgentRecord`, `departed`, `publishDeparture`; a renewal's `directory.ErrSuperseded` |
 | `Renew` (`RenewWrite`) | `refreshAgentInventoryOnInboundActivity`, `renewAgentRecord`, `PutSession` renew |
-| `Update` (`UpdateWrite`), `Apply`, `UpdateRecv`, `UpdateApply` | `UpdateAgentLabels` (relay-server `serveUpdateLabels`); with `InFlight` the request received on a stream (`rpcclient.SourceSession`), applied under the stream's record lock only to that session (finding 14) |
+| `Update` (`UpdateWrite`), `Apply`, `UpdateRecv`, `UpdateApply` | `UpdateAgentLabels` (relay-server `serveUpdateLabels`); with `InFlight` the request received on a stream (`rpcclient.SourceSession`), applied under the stream's record lock only to that session (finding 14); a `ConnectHTTP` agent's `LabelUpdate` frame (`processHTTPInput`, `applyLabelUpdate`), applied only while its stream is not marked ended |
 | `Publish`, `PublishFail`, `Deliver` | `presenceOutbox` (`publish`, `requeue` on a failed send), `BindBus`'s subscriber: `bump` |
 | `Drop`, `Resubscribe` | Redis dropping a subscriber, go-redis resubscribing; redisbus's empty payload, `presenceFeed.resync` |
 | `Wake`, `Cursor`, `Snap` | `presenceFeed.Watch` answering, `ListAgents` (`Presence.Cursor`, `myAgents`) or `handleMyAgents` |
@@ -564,7 +564,13 @@ a0154c2 fixed), `silent-rewrite`, `no-late-down` (27),
 `shared-counter` (34), `release-by-agent` (an agent replacing its
 stream on the same replica, review r2 F9: the old stream's teardown
 released the agent's record whatever session it named, the code before
-2a1cf33; the new session's renewal wrote it back unannounced);
+2a1cf33; the new session's renewal wrote it back unannounced),
+`update-after-end` (lane HEALTHLABEL: a `ConnectHTTP` agent's
+`LabelUpdate` frame, which the stream's receive loop drains after the
+session ended, applied then: its fenced write brings back the ended
+session's record, `NoResurrect`; the design marks the stream ended
+under its record lock before the release,
+`docs/decisions/http-agent-label-updates-2026-11-12.md`);
 on `PresenceLive.cfg` (`Woken`): `subscriber-stops` and `outbox-stops`
 (the subscriber or the outbox gone while the replica drains and serves:
 the safety config cannot see them, finding 26) and `publish-drop`;
