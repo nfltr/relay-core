@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/nfltr/relay/proto/wire/agentwire"
 	"github.com/nfltr/relay/proto/wire/chunking"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -90,6 +92,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	// to the key's stored identity).
 	md := metadata.Pairs("x-resolved-agent-id", agentID)
 	md.Append(chunking.FlowControlMetadataKey, "1") // this relay sends cancel/ack frames
+	md.Append(agentwire.LabelUpdatesKey, "1")       // and applies the agent's LabelUpdate frames
 	if msg := d.Config.AdminMessage; msg != "" {
 		md.Append("x-admin-message", msg)
 	}
@@ -165,6 +168,8 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	agentStream := NewHTTPStream(agentID, stream, stream.Context(), heartbeats, heartbeatsRecvThresholdTicker)
 	agentStream.connectedAt, agentStream.seq, agentStream.credential, agentStream.account = session.Since, session.Seq, session.Credential, session.Account
 	agentStream.Services = services
+	agentStream.labelRate = rate.NewLimiter(labelUpdateRate, labelUpdateBurst)
+	defer agentStream.markEnded()     // before the record's release (deferred above): no update writes it back
 	defer d.failInflight(agentStream) // the session ended: its unanswered transactions get agent-gone
 	if services != nil {
 		d.Logger.Info("agent declared services", "agent_id", agentID, "services", agentservices.Format(services))
@@ -184,6 +189,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 			d.Logger.Info("agent advertised routes", "agent_id", agentID, "routes", agentStream.routes)
 		}
 		agentStream.labels = parseLabelsMetadata(md)
+		agentStream.connectLabels = maps.Clone(agentStream.labels)
 		if len(agentStream.labels) > 0 {
 			d.Logger.Info("agent advertised labels", "agent_id", agentID, "labels", agentStream.labels)
 		}
@@ -420,6 +426,9 @@ func (d *Dispatcher) processHTTPInput(ctx context.Context, stream *HTTPStream, i
 	logger := logging.With(d.Logger, "AgentID", stream.ID)
 	if input.Response == nil && input.GetMove() == pb.Move_MOVE_CONNECTED {
 		traceMoveStep(stream, moveEvent{Ev: "RecvA", M: "CONNECTED"}, func() bool { stream.noteMoveConnected(); return true }) // agent_move.go
+	}
+	if input.Response == nil && input.GetLabels() != nil {
+		return d.applyHTTPLabelUpdate(ctx, stream, input.GetLabels().GetLabels())
 	}
 	if input.Response == nil || len(input.Response.TransactionId) == 0 {
 		logger.Debug("received a heartbeat")

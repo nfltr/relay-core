@@ -15,6 +15,7 @@ import (
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 	"github.com/nfltr/relay/proto/wire/agentwire"
+	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -93,6 +94,8 @@ type Stream[S, R proto.Message] struct {
 	labelsMu                      sync.RWMutex         // guards labels once the stream is published
 	recordMu                      sync.Mutex           // orders this stream's directory record writes (renewal, label update)
 	recordStale                   bool                 // under recordMu: a write failed or the store lost the record; the next that lands publishes
+	ended                         bool                 // under recordMu: the teardown began (markEnded); no record write follows
+	labelRate                     *rate.Limiter        // LabelUpdate frames (an HTTP agent's): at most labelUpdateRate
 	connectLabels                 map[string]string    // labels advertised at connect (an update never changes them)
 	capabilities                  []string             // advertised capabilities (p2p, ssh, http, a2a)
 	tlsFingerprint                string               // SHA-256 fingerprint of agent's E2EE TLS cert
@@ -278,6 +281,19 @@ func (a *Stream[S, R]) recordLock() *sync.Mutex { return &a.recordMu }
 
 // staleRecord is recordStale, read and written under recordLock.
 func (a *Stream[S, R]) staleRecord() *bool { return &a.recordStale }
+
+// markEnded is the start of the stream's teardown, before its record's
+// release: a label update or renewal still running (the receive loop
+// drains frames after the session ended) writes no record after it
+// (Presence.tla NoResurrect).
+func (a *Stream[S, R]) markEnded() {
+	a.recordMu.Lock()
+	a.ended = true
+	a.recordMu.Unlock()
+}
+
+// recordEnded is ended, read under recordLock.
+func (a *Stream[S, R]) recordEnded() bool { return a.ended }
 
 // Labels returns the key-value labels the agent advertised on connect.
 func (a *Stream[S, R]) Labels() map[string]string {

@@ -604,23 +604,34 @@ func (d *Dispatcher) UpdateAgentLabels(agentID string, session uint64, labels ma
 		// it keeps its own labels (spec/README.md finding 14).
 		return nil, false
 	}
-	// The update renews the stream's own session record with the new
-	// labels, under the record lock the renewal takes: a session a newer
-	// one superseded writes nothing, and no renewal writes the labels this
-	// replaces (spec/README.md findings 8, 10).
-	grpc.recordMu.Lock()
-	defer grpc.recordMu.Unlock()
+	return applyLabelUpdate(d, d.StreamerIPInventory, agentID, grpc, labels, patch)
+}
+
+// applyLabelUpdate is a label update of s, agentID's session here, whose
+// record is in inv: a gRPC agent's UpdateLabels, an HTTP agent's
+// LabelUpdate frame (docs/decisions/http-agent-label-updates-2026-11-12.md).
+// The update renews the stream's own session record with the new labels,
+// under the record lock the renewal takes: a session a newer one
+// superseded writes nothing, and no renewal writes the labels this
+// replaces (spec/README.md findings 8, 10); a stream whose teardown began
+// (markEnded) writes nothing either (Presence.tla NoResurrect).
+func applyLabelUpdate[S, R proto.Message](d *Dispatcher, inv directory.IPInventory, agentID string, s *Stream[S, R], labels map[string]string, patch bool) (map[string]string, bool) {
+	s.recordMu.Lock()
+	defer s.recordMu.Unlock()
+	if s.ended {
+		return nil, false
+	}
 	next := map[string]string{}
 	if patch {
-		maps.Copy(next, grpc.Labels())
+		maps.Copy(next, s.Labels())
 	}
 	for k, v := range labels {
 		if k, v = strings.TrimSpace(k), strings.TrimSpace(v); k != "" && v != "" {
 			next[k] = v
 		}
 	}
-	maps.Copy(next, grpc.connectLabels)
-	err := renewAgentRecord(context.Background(), d.StreamerIPInventory, agentID, grpc.Session(), next, grpc.Capabilities(), d.Config.HeartbeatRecvThreshold)
+	maps.Copy(next, s.connectLabels)
+	err := renewAgentRecord(context.Background(), inv, agentID, s.Session(), next, s.Capabilities(), d.Config.HeartbeatRecvThreshold)
 	if errors.Is(err, directory.ErrSuperseded) {
 		if traceOn {
 			tracePresRecord(d, agentID, "Superseded", true, nil)
@@ -635,10 +646,10 @@ func (d *Dispatcher) UpdateAgentLabels(agentID string, session uint64, labels ma
 		// renewal that lands publishes again, asked for at the next epoch
 		// tick (spec/README.md finding 27).
 		d.Logger.Warn("label update: redis inventory failed", "agent_id", agentID, "error", err)
-		grpc.recordStale = true
+		s.recordStale = true
 		d.RecordWriteFailed.Store(true)
 	}
-	grpc.SetLabels(next)
+	s.SetLabels(next)
 	d.Presence.labels(agentID, next)
 	return maps.Clone(next), true
 }

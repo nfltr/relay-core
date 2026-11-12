@@ -147,6 +147,9 @@ func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context,
 		lock.Lock()
 		defer lock.Unlock()
 	}
+	if e, ok := tracker.(interface{ recordEnded() bool }); ok && e.recordEnded() {
+		return nil // its teardown began: the release is the last write (Presence.tla NoResurrect)
+	}
 	labels, caps := streamLabels(tracker), streamCapabilities(tracker)
 	err := renewAgentRecord(ctx, inv, agentID, s, labels, caps, recvThreshold)
 	if traceOn && inv == d.StreamerIPInventory {

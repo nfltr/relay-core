@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2" // nosemgrep: math-random-used -- spreads opens over instances, not a secret
 	"slices"
 
@@ -116,23 +117,46 @@ func (d *Dispatcher) serviceDown(ctx context.Context, agentID, service string) b
 }
 
 // agentLabels are agentID's current labels, the one source of its
-// services' health: its stream's here (UpdateLabels sets them), else its
-// stream record's. A record that cannot be read has none (every service
-// counts as up).
+// services' health: its streams' here (an HTTP stream's LabelUpdate
+// frames, an AgentTunnel stream's UpdateLabels; the HTTP stream's win a
+// key both set), else its records' (the dispatcher record, the HTTP
+// stream's on another replica, over the streamer record). A record that
+// cannot be read has none (every service counts as up).
 func (d *Dispatcher) agentLabels(ctx context.Context, agentID string) map[string]string {
-	if s, ok := d.Upstreams.Load(agentID); ok {
-		if l, ok := s.(interface{ Labels() map[string]string }); ok {
-			return l.Labels()
-		}
+	var tunnel, http map[string]string
+	s, inTunnel := d.Upstreams.Load(agentID)
+	if l, ok := s.(interface{ Labels() map[string]string }); inTunnel && ok {
+		tunnel = l.Labels()
+	}
+	h, inHTTP := d.Agents.Load(agentID)
+	if inHTTP {
+		http = h.Labels()
+	}
+	if !inTunnel && !inHTTP {
+		tunnel, http = recordLabels(ctx, d.StreamerIPInventory, agentID), recordLabels(ctx, d.IPInventory, agentID)
+	}
+	if len(tunnel) == 0 {
+		return http
+	}
+	if len(http) == 0 {
+		return tunnel
+	}
+	out := maps.Clone(tunnel)
+	maps.Copy(out, http)
+	return out
+}
+
+// recordLabels are the labels agentID's record in inv carries (nil: none,
+// or unreadable).
+func recordLabels(ctx context.Context, inv directory.IPInventory, agentID string) map[string]string {
+	r, ok := inv.(interface {
+		AgentLabels(context.Context, string) (map[string]string, error)
+	})
+	if !ok {
 		return nil
 	}
-	if r, ok := d.StreamerIPInventory.(interface {
-		AgentLabels(context.Context, string) (map[string]string, error)
-	}); ok {
-		labels, _ := r.AgentLabels(ctx, agentID)
-		return labels
-	}
-	return nil
+	labels, _ := r.AgentLabels(ctx, agentID)
+	return labels
 }
 
 // openService is Open of a service by name: an instance that cannot be

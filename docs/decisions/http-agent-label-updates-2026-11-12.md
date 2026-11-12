@@ -40,8 +40,10 @@ agent's labels there.
   and a prefix would make the two update paths differ.
 - **Bounds.** At most 64 labels, keys and values non-empty and at most 256
   bytes (`agentwire.CheckLabelUpdate`, used by the agent before it sends and
-  by the relay before it applies; the relay ends a stream that sends an
-  update past them: a conforming agent never does). At most 5 updates a
+  by the relay before it applies; the relay refuses an update past them,
+  applying nothing, and logs it: a conforming agent never sends one; it
+  does not end the stream, whose receive loop waits on the agent's next
+  frame). At most 5 updates a
   second per stream, burst 10 (`golang.org/x/time/rate`): past it the
   stream's receive loop waits, so a flapping agent slows only its own
   stream; every update is one record write and one presence publish.
@@ -102,7 +104,7 @@ E2EE binding changes).
 relay-core `core/session/http_label_update_test.go`: an HTTP agent's update
 reaches its stream, record, presence and the instance pick; connect labels
 stay; an update after the stream ended writes nothing; an update past the
-bounds ends the stream; a relay without updates is not sent one. relay
+bounds applies nothing (the next one applies). relay
 `client/agent`: `SetLabels` sends on the current stream, resends after a
 reconnect, refuses past the bounds and on a relay without the header.
 relay-server `relaytest` `TestReplicasHTTPAgentLabels`: an `nfltr up`-style
