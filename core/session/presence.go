@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	presencev1 "github.com/nfltr/relay/proto/nfltr/presence/v1"
+	"github.com/nfltr/relay/proto/wire/agentservices"
 )
 
 // presenceHistory bounds the events kept for resume; a cursor older than it
@@ -104,10 +105,39 @@ func presenceChangeName(ev *presencev1.PresenceEvent) string {
 	}
 }
 
-// up publishes an agent connecting on this replica. allow:wrapper (event builder)
-func (f *presenceFeed) up(agentID string, labels map[string]string, capabilities []string) {
+// up publishes an agent connecting on this replica, with the services it
+// declared (PresenceServices). allow:wrapper (event builder)
+func (f *presenceFeed) up(agentID string, labels map[string]string, capabilities []string, services []*presencev1.Service) {
 	f.publish(&presencev1.PresenceEvent{AgentId: agentID, Change: &presencev1.PresenceEvent_Up{Up: &presencev1.AgentUp{
-		Labels: maps.Clone(labels), Capabilities: slices.Clone(capabilities)}}})
+		Labels: maps.Clone(labels), Capabilities: slices.Clone(capabilities), Services: services}}})
+}
+
+// PresenceServices is decls as presence lists them (Agent.services,
+// AgentUp.services), in their order, each one's health from labels
+// (agentservices.HealthLabel).
+func PresenceServices(decls []agentservices.Decl, labels map[string]string) []*presencev1.Service {
+	if len(decls) == 0 {
+		return nil
+	}
+	out := make([]*presencev1.Service, len(decls))
+	for i, d := range decls {
+		out[i] = &presencev1.Service{Name: d.Name, Kind: string(d.Kind), E2Ee: string(d.E2EE), Group: d.Group, Direct: string(d.Direct),
+			Down: labels[agentservices.HealthLabel(d.Name)] == agentservices.HealthDown}
+	}
+	return out
+}
+
+// presenceServices is what agentID declared on its session here, as
+// presence lists it (nil: none, or no session here).
+func (d *Dispatcher) presenceServices(agentID string, labels map[string]string) []*presencev1.Service {
+	if d.Agents == nil {
+		return nil
+	}
+	s, ok := d.Agents.Load(agentID)
+	if !ok {
+		return nil
+	}
+	return PresenceServices(s.Services, labels)
 }
 
 // down publishes an agent leaving this replica. allow:wrapper (event builder)
@@ -292,7 +322,7 @@ func (d *Dispatcher) notifyUpstreamRegistered(agentID string) {
 			if traceOn {
 				tracePresRecord(d, agentID, "Connect", true, l)
 			}
-			d.Presence.up(agentID, l, c)
+			d.Presence.up(agentID, l, c, d.presenceServices(agentID, l))
 		}
 	}
 	d.wakeArrivals() // upstreamArriving

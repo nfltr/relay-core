@@ -89,7 +89,7 @@ func (f *Frontend) serveSession(r *http.Request, caller identity.Principal, open
 	session.Forward(f.Logger, session.ChainConnect, s, open.GetAnswer(), func(ctx context.Context) (peerlink.Session, func(), error) {
 		// The agent's answer is the client's when it reads answers either
 		// way; an owner's session either way (the agent's service table).
-		t := session.Target{Agent: open.GetAgentId(), Service: open.GetTargetAddr(), E2EE: e2ee, Answer: open.GetAnswer() || session.AnswersNatively(s), Hold: true}
+		t := session.Target{Agent: open.GetAgentId(), Service: open.GetTargetAddr(), E2EE: e2ee, Answer: open.GetAnswer() || session.AnswersNatively(s), Hold: true, Exclude: open.GetExclude()}
 		out, err := f.Core.Open(ctx, caller, t)
 		var refusal *session.Refusal
 		var dial *session.DialError

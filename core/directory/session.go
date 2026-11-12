@@ -133,8 +133,10 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 	if _, err := d.inventory.Set(ctx, key, value, expiration); err != nil {
 		return err
 	}
-	_, err := d.inventory.SAdd(ctx, d.activeAgentSetKey(), agentID)
-	return err
+	if _, err := d.inventory.SAdd(ctx, d.activeAgentSetKey(), agentID); err != nil {
+		return err
+	}
+	return d.indexSession(ctx, agentID, s, true) // a renewal restores what a restarted store lost
 }
 
 // DeleteSession removes the agent's record when it names this pod's
@@ -160,6 +162,9 @@ func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Sessi
 		return nil // gone, or another session's
 	}
 	if _, err := d.inventory.SRem(ctx, d.activeAgentSetKey(), agentID); err != nil {
+		return err
+	}
+	if err := d.indexSession(ctx, agentID, s, false); err != nil {
 		return err
 	}
 	_, err = d.inventory.Del(ctx, key)

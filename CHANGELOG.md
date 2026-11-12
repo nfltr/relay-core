@@ -12,6 +12,23 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Services by name (nfltr docs/decisions/service-discovery-2026-11-12.md):
+  `session.ParseAgentAddress` reads `<service>@<group>` (`AgentAddress.Group`);
+  `Dispatcher.ResolveService` picks one instance per open among the agents
+  of the caller's account that publish the service under the organisation
+  group (`agentservices.Decl.Group`) and `Reach` allows, minus
+  `Target.Exclude` (`pb.TCPData.exclude`: agent refs or machine names),
+  healthy first (`agentservices.HealthLabel`), the down ones when none is
+  healthy, uniform random; none online is `AGENT_OFFLINE` (a held open
+  waits). `Core.Open` picks again among the instances not yet tried when
+  one cannot be reached or its agent refuses (target refused or
+  unreachable), and answers the last refusal once every one refused.
+  `directory.ServiceIndex` (the shared inventory's (account, group,
+  service) index, kept by `PutSession`/`DeleteSession`, pruned on read);
+  `session.PresenceServices` fills presence `AgentUp.services` (relay-server's
+  `ListAgents` fills `Agent.services` with it). Migration: `session.Target`
+  is no longer comparable (`Exclude` is a slice): compare its fields (no
+  caller in relay-server or nfltr does); the release is a minor one.
 - The relay fault hook, for test labs only: a relay built with the
   `relayfault` tag (`frontend/connect/fault_on.go`; a shipped relay has
   none) resets a `/connect` session to the service named in the file

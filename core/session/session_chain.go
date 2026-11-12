@@ -245,6 +245,9 @@ func inbandReason(a *link.Abort) relayv1.ErrorReason {
 // ChainSession for Forward: Answered reads the answer.
 type inbandOut struct {
 	peerlink.Session
+	mu       sync.Mutex
+	answered bool  // read once: a service open waits for it before Forward does (openService)
+	answer   error // what it read
 }
 
 var _ peerlink.ChainSession = (*inbandOut)(nil)
@@ -254,6 +257,15 @@ func (s *inbandOut) Answers() bool { return true }
 // Answered reads the far end's answer, or gives up when ctx ends (the
 // session then closes).
 func (s *inbandOut) Answered(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.answered {
+		s.answer, s.answered = s.readAnswer(ctx), true
+	}
+	return s.answer
+}
+
+func (s *inbandOut) readAnswer(ctx context.Context) error {
 	type result struct {
 		a   *relayv1.SessionAnswer
 		err error

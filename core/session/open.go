@@ -46,6 +46,10 @@ type Target struct {
 	// it the offline answer comes at once (a route that tries the next
 	// agent).
 	Hold bool
+	// Exclude, on an open of a service by name (<service>@<group>), names
+	// the instances not to pick (pb.TCPData.exclude): agent refs or
+	// machine names.
+	Exclude []string
 }
 
 // Reach is the access rule and target resolution the composition sets
@@ -130,10 +134,20 @@ type Opened struct {
 // retrying a dial as DialPolicy says. It answers with a *Refusal or a
 // *DialError (ErrRefused, ErrOffline, ErrUnknownService, ErrDraining,
 // ErrReplicaUnreachable).
+// A service by name (<service>@<group>) is opened on one instance, another
+// picked while one fails before its answer (openService).
 func (c *Core) Open(ctx context.Context, caller identity.Principal, t Target) (Opened, error) {
 	if c.TCPDispatcher == nil || c.Reach == nil {
 		return Opened{}, &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_FEATURE_UNSUPPORTED, Msg: "TCP tunneling is not enabled (set tcp.enabled=true)", AgentID: t.Agent}
 	}
+	if a, _ := ParseAgentAddress(t.Agent); a.Group != "" {
+		return c.openService(ctx, caller, t)
+	}
+	return c.openOnce(ctx, caller, t)
+}
+
+// openOnce is Open of one agent.
+func (c *Core) openOnce(ctx context.Context, caller identity.Principal, t Target) (Opened, error) {
 	budget := c.routeBudget
 	if budget == 0 {
 		budget = routeBudget

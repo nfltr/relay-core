@@ -31,6 +31,18 @@ func TestParseAgentAddress(t *testing.T) {
 		{".db", AgentAddress{}, false},
 		{"home.", AgentAddress{}, false},
 		{"-db", AgentAddress{}, false},
+		{"pg@db", AgentAddress{Service: "pg", Group: "db"}, true},
+		{"pg-1@db-west", AgentAddress{Service: "pg-1", Group: "db-west"}, true},
+		{"pg@", AgentAddress{}, false},
+		{"@db", AgentAddress{}, false},
+		{"Pg@db", AgentAddress{}, false},
+		{"pg@Db", AgentAddress{}, false},
+		{"1pg@db", AgentAddress{}, false}, // a service name starts with a letter
+		{"pg@db@x", AgentAddress{}, false},
+		{"pg@db.x", AgentAddress{}, false},
+		{"home.pg@db", AgentAddress{}, false},
+		{"pg@-db", AgentAddress{}, false},
+		{ref.String() + "@db", AgentAddress{}, false},
 	} {
 		got, ok := ParseAgentAddress(tc.in)
 		if ok != tc.ok || got != tc.want {

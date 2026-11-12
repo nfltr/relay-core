@@ -60,14 +60,14 @@ func TestPresenceFanoutOrderedAndBounded(t *testing.T) {
 	for range flaps {
 		for a := range agents {
 			id := fmt.Sprint("agent-", a)
-			f.up(id, map[string]string{"v": "1"}, []string{"cap"})
+			f.up(id, map[string]string{"v": "1"}, []string{"cap"}, nil)
 			f.down(id)
 		}
 	}
 	for a := range agents { // odd agents end up, with a label change after
 		if a%2 == 1 {
 			id := fmt.Sprint("agent-", a)
-			f.up(id, map[string]string{"v": "1"}, []string{"cap"})
+			f.up(id, map[string]string{"v": "1"}, []string{"cap"}, nil)
 			f.labels(id, map[string]string{"v": "2"})
 		}
 	}
@@ -150,10 +150,10 @@ func TestPresenceOutboxRepublishesAFailedSend(t *testing.T) {
 	bus.failing.Store(true)
 	var f presenceFeed
 	f.BindBus(ctx, bus)
-	f.up("a", map[string]string{"v": "1"}, nil)
+	f.up("a", map[string]string{"v": "1"}, nil, nil)
 	<-bus.failed
 	f.labels("a", map[string]string{"v": "2"}) // newer than the failed up
-	f.up("b", nil, nil)
+	f.up("b", nil, nil, nil)
 	<-bus.failed
 	f.down("b") // a pending or failed up of b becomes its down
 	bus.failing.Store(false)

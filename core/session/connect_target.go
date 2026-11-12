@@ -30,8 +30,16 @@ type TargetRules struct {
 // caller, who reaches what reaches says: the agent's address resolved once
 // to its ref (ResolveAgent; the session carries the ref), ConnectTarget,
 // then the operator's E2EE policy. It refuses with a *Refusal.
+// A service by name (<service>@<group>) resolves to the instance
+// ResolveService picks, minus t.Exclude.
 func (d *Dispatcher) ResolveTarget(ctx context.Context, caller identity.Principal, reaches func(string) (bool, error), t Target, rules TargetRules) (string, string, error) {
 	agent, refusal := d.ResolveAgent(caller, t.Agent)
+	if a, _ := ParseAgentAddress(t.Agent); a.Group != "" {
+		if refusal = checkServiceTarget(a, t.Service); refusal == nil {
+			agent, refusal = d.ResolveService(ctx, caller, reaches, a, t.Exclude)
+		}
+		t.Service = a.Service
+	}
 	if refusal != nil {
 		return "", "", refusal
 	}

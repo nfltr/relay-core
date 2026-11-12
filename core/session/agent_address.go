@@ -8,6 +8,7 @@ import (
 
 	"github.com/nfltr/relay-core/core/identity"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
+	"github.com/nfltr/relay/proto/wire/agentservices"
 )
 
 // AgentAddress is an agent as a caller names it (relay-server
@@ -22,7 +23,10 @@ import (
 //   - "<machine name>.<service>" (Machine set): the service of the
 //     machine of the caller's account holding that name, resolved once at
 //     the edge (a '.' is in neither label, and a '/' cannot go in a
-//     /connect path segment).
+//     /connect path segment);
+//   - "<service>@<group>" (Group set): one instance of the service
+//     published under that organisation group by the agents of the
+//     caller's account, picked per open (ResolveService).
 //
 // A2A routing takes refs only: the caller's E2EE prologue binds the
 // callee ref it states and the callee checks it against its own ref, so a
@@ -31,6 +35,7 @@ import (
 type AgentAddress struct {
 	Ref     identity.AgentRef
 	Machine string // a machine name
+	Group   string // an organisation group (agentservices.ValidLabel)
 	Service string
 	Own     bool
 }
@@ -40,6 +45,12 @@ type AgentAddress struct {
 func ParseAgentAddress(s string) (AgentAddress, bool) {
 	if ref, err := identity.ParseAgentRef(s); err == nil {
 		return AgentAddress{Ref: ref, Service: ref.Service}, true
+	}
+	if svc, group, ok := strings.Cut(s, "@"); ok {
+		if agentservices.ValidName(svc) && identity.ValidService(svc) && agentservices.ValidLabel(group) {
+			return AgentAddress{Service: svc, Group: group}, true
+		}
+		return AgentAddress{}, false
 	}
 	name, svc, dotted := strings.Cut(s, ".")
 	switch {
@@ -67,7 +78,7 @@ type NameResolver interface {
 func (d *Dispatcher) ResolveAgent(p identity.Principal, address string) (string, *Refusal) {
 	a, ok := ParseAgentAddress(address)
 	switch {
-	case !ok || a.Ref.Machine != "":
+	case !ok || a.Ref.Machine != "" || a.Group != "": // a group's instance is ResolveService's
 		return address, nil
 	case a.Own:
 		if p.Machine == "" {
