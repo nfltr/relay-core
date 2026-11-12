@@ -110,20 +110,29 @@ func (d *Dispatcher) excludedMachines(caller identity.Principal, exclude []strin
 }
 
 // serviceDown reports whether agentID marks service down (its label
-// agentservices.HealthLabel is HealthDown): its stream's labels here, else
-// its stream record's. A record that cannot be read counts as up.
+// agentservices.HealthLabel is HealthDown, agentLabels).
 func (d *Dispatcher) serviceDown(ctx context.Context, agentID, service string) bool {
-	var labels map[string]string
+	return d.agentLabels(ctx, agentID)[agentservices.HealthLabel(service)] == agentservices.HealthDown
+}
+
+// agentLabels are agentID's current labels, the one source of its
+// services' health: its stream's here (UpdateLabels sets them), else its
+// stream record's. A record that cannot be read has none (every service
+// counts as up).
+func (d *Dispatcher) agentLabels(ctx context.Context, agentID string) map[string]string {
 	if s, ok := d.Upstreams.Load(agentID); ok {
 		if l, ok := s.(interface{ Labels() map[string]string }); ok {
-			labels = l.Labels()
+			return l.Labels()
 		}
-	} else if r, ok := d.StreamerIPInventory.(interface {
+		return nil
+	}
+	if r, ok := d.StreamerIPInventory.(interface {
 		AgentLabels(context.Context, string) (map[string]string, error)
 	}); ok {
-		labels, _ = r.AgentLabels(ctx, agentID)
+		labels, _ := r.AgentLabels(ctx, agentID)
+		return labels
 	}
-	return labels[agentservices.HealthLabel(service)] == agentservices.HealthDown
+	return nil
 }
 
 // openService is Open of a service by name: an instance that cannot be

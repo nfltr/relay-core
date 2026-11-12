@@ -25,7 +25,8 @@ changes listed (from the first tag on).
   unreachable), and answers the last refusal once every one refused.
   `directory.ServiceIndex` (the shared inventory's (account, group,
   service) index, kept by `PutSession`/`DeleteSession`, pruned on read);
-  `session.PresenceServices` fills presence `AgentUp.services` (relay-server's
+  `session.PresenceServices` fills presence `AgentUp.services`, each service's
+  health from the agent's current labels, as the pick reads it (relay-server's
   `ListAgents` fills `Agent.services` with it). Migration: `session.Target`
   is no longer comparable (`Exclude` is a slice): compare its fields (no
   caller in relay-server or nfltr does); the release is a minor one.

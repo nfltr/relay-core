@@ -128,16 +128,19 @@ func PresenceServices(decls []agentservices.Decl, labels map[string]string) []*p
 }
 
 // presenceServices is what agentID declared on its session here, as
-// presence lists it (nil: none, or no session here).
-func (d *Dispatcher) presenceServices(agentID string, labels map[string]string) []*presencev1.Service {
+// presence lists it (nil: none, or no session here), its health from the
+// agent's current labels (agentLabels: what the relay's pick reads), never
+// from the labels of the connection whose up publishes it. Every up goes
+// through it. Guard: TestPresenceUpReadsCurrentHealth.
+func (d *Dispatcher) presenceServices(agentID string) []*presencev1.Service {
 	if d.Agents == nil {
 		return nil
 	}
 	s, ok := d.Agents.Load(agentID)
-	if !ok {
+	if !ok || len(s.Services) == 0 {
 		return nil
 	}
-	return PresenceServices(s.Services, labels)
+	return PresenceServices(s.Services, d.agentLabels(context.Background(), agentID)) // bounded by the inventory's op timeout
 }
 
 // down publishes an agent leaving this replica. allow:wrapper (event builder)
@@ -322,7 +325,7 @@ func (d *Dispatcher) notifyUpstreamRegistered(agentID string) {
 			if traceOn {
 				tracePresRecord(d, agentID, "Connect", true, l)
 			}
-			d.Presence.up(agentID, l, c, d.presenceServices(agentID, l))
+			d.Presence.up(agentID, l, c, d.presenceServices(agentID))
 		}
 	}
 	d.wakeArrivals() // upstreamArriving

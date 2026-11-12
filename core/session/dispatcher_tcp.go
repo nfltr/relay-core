@@ -595,7 +595,7 @@ func (d *Dispatcher) ConnectTCP(stream pb.Dispatcher_ConnectTCPServer) error {
 			}
 			d.departed(agentID, session, nil)
 		}()
-		d.Presence.up(agentID, nil, nil, d.presenceServices(agentID, nil))
+		d.Presence.up(agentID, nil, nil, d.presenceServices(agentID))
 	}
 
 	d.Logger.Info("agent opened ConnectTCP stream", "agent_id", agentID)

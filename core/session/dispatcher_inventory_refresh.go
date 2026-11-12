@@ -162,7 +162,7 @@ func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context,
 		// The other replicas listed what the failed write or the lost
 		// record left: wake their watchers (spec/README.md finding 27).
 		*stale = false
-		d.Presence.up(agentID, labels, caps, d.presenceServices(agentID, labels))
+		d.Presence.up(agentID, labels, caps, d.presenceServices(agentID))
 	}
 	if errors.Is(err, directory.ErrSuperseded) {
 		d.Logger.Info("agent reconnected to another pod: ending its old session here", "AgentID", agentID)

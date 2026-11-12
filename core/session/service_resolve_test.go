@@ -24,6 +24,7 @@ import (
 	"github.com/nfltr/relay/proto/wire/agentservices"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -312,5 +313,42 @@ func TestPresenceServices(t *testing.T) {
 	resp := f.Watch(t.Context(), base.GetCursor(), time.Second, nil)
 	if evs := resp.GetEvents(); len(evs) != 1 || len(evs[0].GetUp().GetServices()) != 3 {
 		t.Fatalf("watch %v: want the up with its 3 services", resp)
+	}
+}
+
+// TestPresenceUpReadsCurrentHealth: the up of an agent's HTTP connection
+// lists its services' health from its current labels (the ones the relay's
+// pick reads), not the labels that connection carried: health set by
+// UpdateLabels before the up is never stale in it.
+func TestPresenceUpReadsCurrentHealth(t *testing.T) {
+	d, cancel := newTestDispatcher(t)
+	defer cancel()
+	stream := NewGRPCStream("svc-agent", nil, nil, nil, nil)
+	d.Upstreams.Store("svc-agent", stream)
+	if _, ok := d.UpdateAgentLabels("svc-agent", serialOf(d, "svc-agent"), pgDown, true); !ok {
+		t.Fatal("UpdateAgentLabels: agent not found")
+	}
+	base := d.Presence.Watch(t.Context(), "", 0, nil).GetCursor()
+	client, ctx := dialDispatcher(t, serveDispatcherAs(t, d, "svc-agent"))
+	ctx = metadata.AppendToOutgoingContext(ctx, agentservices.Header, pgAtDB, agentservices.ModesHeader, "1")
+	hs, err := client.ConnectHTTP(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hs.Header(); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		for _, ev := range d.Presence.Watch(t.Context(), base, time.Second, nil).GetEvents() {
+			if svcs := ev.GetUp().GetServices(); len(svcs) > 0 {
+				if len(svcs) != 1 || svcs[0].GetName() != "pg" || !svcs[0].GetDown() {
+					t.Fatalf("up services %v, want pg down", svcs)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no up event with services")
+		}
 	}
 }
