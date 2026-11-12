@@ -122,7 +122,7 @@ func (f *Frontend) serveSession(r *http.Request, caller identity.Principal, open
 		// The agent's owner pays for the session.
 		session.MeterChain(ctx, f.Core.Dispatcher.OpenMeter(metrics.PathConnect, out.AgentID))
 		began := metrics.TransferBegin(metrics.PathConnect)
-		return out.Session, func() {
+		return faultSession(t.Service, out.Session), func() {
 			if out.Release != nil {
 				out.Release()
 			}

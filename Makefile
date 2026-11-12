@@ -31,6 +31,7 @@ test:
 
 test-race:
 	go test -count=1 -race -timeout 30m ./...
+	go test -count=1 -race -tags relayfault -run TestFault ./frontend/connect/
 
 # test-under-load: PKGS with -count LOAD_COUNT (5) on a starved machine
 # (scripts/test-under-load.sh, the same file in link, relay and relay-core):
