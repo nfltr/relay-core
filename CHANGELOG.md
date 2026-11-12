@@ -12,6 +12,14 @@ changes listed (from the first tag on).
 
 ### Added
 
+- The relay fault hook, for test labs only: a relay built with the
+  `relayfault` tag (`frontend/connect/fault_on.go`; a shipped relay has
+  none) resets a `/connect` session to the service named in the file
+  `RELAY_FAULT_WITHHOLD_FILE` names at its client's first byte when that
+  byte opens a TLS record (a direct-path control exchange), and passes one
+  that starts otherwise (a relayed re-attach): nfltr's NAT lab withholds
+  `nfltr-direct` with it (nfltr docs/decisions/direct-paths-2026-11-11.md).
+  Migration: none.
 - `grpc.max_connection_idle` (default 5 min, 0 = never): a gRPC connection
   with no stream for that long gets GOAWAY and is closed. A client that
   finished the HTTP/2 preface, answered pings and opened no stream (its
