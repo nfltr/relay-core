@@ -82,13 +82,25 @@ type gatedCache struct {
 	first         bool
 }
 
-func (g *gatedCache) Set(ctx context.Context, key string, value any, exp time.Duration) (string, error) {
-	if _, ok := value.(directory.Value); ok && !g.first {
+func (g *gatedCache) gate() {
+	if !g.first {
 		g.first = true
 		close(g.held)
 		<-g.release
 	}
+}
+
+func (g *gatedCache) Set(ctx context.Context, key string, value any, exp time.Duration) (string, error) {
+	if _, ok := value.(directory.Value); ok {
+		g.gate()
+	}
 	return g.MockCache.Set(ctx, key, value, exp)
+}
+
+// SetAdd is the record write PutSession makes (directory.Cache.SetAdd).
+func (g *gatedCache) SetAdd(ctx context.Context, key string, value directory.Value, exp time.Duration, member string, sets ...string) error {
+	g.gate()
+	return g.MockCache.SetAdd(ctx, key, value, exp, member, sets...)
 }
 
 // Finding 10 (Presence.tla renew-race): a renewal that read the stream's
