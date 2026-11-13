@@ -145,6 +145,18 @@ func (f *fixture) dial() net.Conn {
 	return c
 }
 
+// refused reports whether a new visit is refused: the dial fails (a
+// refusal's RST can reach the dialer first, as Linux does) or the
+// connection ends.
+func (f *fixture) refused() bool {
+	c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(f.port)))
+	if err != nil {
+		return true
+	}
+	defer c.Close()
+	return closed(c)
+}
+
 // echoes reports whether c echoes a probe within a second.
 func echoes(c net.Conn) bool {
 	_ = c.SetDeadline(time.Now().Add(time.Second))
@@ -171,7 +183,7 @@ func isTimeout(err error) bool {
 
 func TestNoGrantClosed(t *testing.T) {
 	f := newFixture(t, nil)
-	if !closed(f.dial()) {
+	if !f.refused() {
 		t.Fatal("a port with no lease stayed open")
 	}
 }
@@ -199,7 +211,7 @@ func TestRoutesAndAudits(t *testing.T) {
 func TestAllowlist(t *testing.T) {
 	f := newFixture(t, nil)
 	f.set(Grant{ShareID: "s1", AgentID: "a1", Service: "mc", Policy: frontend.SharePolicy{AllowedIPs: []string{"192.0.2.0/24"}}})
-	if !closed(f.dial()) {
+	if !f.refused() {
 		t.Fatal("a source outside the allowlist was routed")
 	}
 	f.set(Grant{ShareID: "s1", AgentID: "a1", Service: "mc", Policy: frontend.SharePolicy{AllowedIPs: []string{"127.0.0.0/8"}}})
@@ -216,7 +228,7 @@ func TestEndpointCap(t *testing.T) {
 	if !echoes(c) {
 		t.Fatal("first visit refused")
 	}
-	if !closed(f.dial()) {
+	if !f.refused() {
 		t.Fatal("a visit over the endpoint's cap routed")
 	}
 	c.Close()
@@ -233,7 +245,7 @@ func TestSourceCap(t *testing.T) {
 	if !echoes(c) {
 		t.Fatal("first visit refused")
 	}
-	if !closed(f.dial()) {
+	if !f.refused() {
 		t.Fatal("a second connection from one source routed over source_max")
 	}
 }
@@ -256,7 +268,7 @@ func TestCutEndsVisitsAndForgets(t *testing.T) {
 	if !closed(c) {
 		t.Fatal("a held visit outlived its lease's end")
 	}
-	if !closed(f.dial()) {
+	if !f.refused() {
 		t.Fatal("a cut lease admitted a new visit")
 	}
 }
@@ -300,7 +312,7 @@ func TestHardEnd(t *testing.T) {
 	if !closed(c) {
 		t.Fatal("a visit outlived its hard end")
 	}
-	if !closed(f.dial()) {
+	if !f.refused() {
 		t.Fatal("a visit after the hard end routed")
 	}
 }
