@@ -52,14 +52,19 @@ func (d *ipInventory) serviceKeys(s Session) []string {
 	return keys
 }
 
-// indexSession adds (add) or removes agentID in the index sets of s.
-func (d *ipInventory) indexSession(ctx context.Context, agentID string, s Session, add bool) error {
-	for _, key := range append(d.serviceKeys(s), d.nf1Keys(s)...) {
-		op := d.inventory.SRem
-		if add {
-			op = d.inventory.SAdd
-		}
-		if _, err := op(ctx, key, agentID); err != nil {
+// sessionSets are the sets an agent's record for session s puts it in:
+// the active set and the index sets of its declaration.
+func (d *ipInventory) sessionSets(s Session) []string {
+	return append(append([]string{d.activeAgentSetKey()}, d.serviceKeys(s)...), d.nf1Keys(s)...)
+}
+
+// prune removes from set the members whose record is gone, each in one
+// store step with that check: a claim landing meanwhile keeps its entry
+// (spec/README.md finding 47).
+func (d *ipInventory) prune(ctx context.Context, set string, members []string) error {
+	gone := func(v *Value) bool { return v == nil }
+	for _, m := range members {
+		if _, err := d.inventory.DelIf(ctx, d.getCacheKey(m), gone, m, set); err != nil {
 			return err
 		}
 	}
@@ -89,10 +94,8 @@ func (d *ipInventory) ServiceAgents(ctx context.Context, account, group, service
 			out = append(out, agentID)
 		}
 	}
-	if len(stale) > 0 {
-		if _, err := d.inventory.SRem(ctx, key, stale...); err != nil {
-			d.logger.Warn("failed to prune stale service index members", "count", len(stale), "error", err)
-		}
+	if err := d.prune(ctx, key, stale); err != nil {
+		d.logger.Warn("failed to prune stale service index members", "count", len(stale), "error", err)
 	}
 	return out, nil
 }

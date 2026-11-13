@@ -195,30 +195,12 @@ func (d *ipInventory) DeleteIPs(ctx context.Context, agentIDs ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, d.opTimeout)
 	defer cancel()
 	self := GetPodIP()
-	mine := agentIDs[:0:0]
+	mine := func(v *Value) bool { return v == nil || v.PodIP == self }
 	for _, agentID := range agentIDs {
-		// ponytail: get-then-delete, not atomic; a Lua compare-and-delete
-		// closes the remaining microsecond window if it ever matters.
-		if v, err := d.inventory.Get(ctx, d.getCacheKey(agentID)); err == nil && v != nil && v.PodIP != self {
-			continue
-		}
-		mine = append(mine, agentID)
-	}
-	agentIDs = mine
-	if len(agentIDs) == 0 {
-		return nil
-	}
-	if len(agentIDs) > 0 {
-		if _, err := d.inventory.SRem(ctx, d.activeAgentSetKey(), agentIDs...); err != nil {
+		// The check and the delete in one store step (Cache.DelIf).
+		if _, err := d.inventory.DelIf(ctx, d.getCacheKey(agentID), mine, agentID, d.activeAgentSetKey()); err != nil {
 			return err
 		}
-	}
-	var keys []string
-	for _, agentID := range agentIDs {
-		keys = append(keys, d.getCacheKey(agentID))
-	}
-	if _, err := d.inventory.Del(ctx, keys...); err != nil {
-		return err
 	}
 	return nil
 }
@@ -247,18 +229,18 @@ func (d *ipInventory) ListAgentRecords(ctx context.Context) ([]AgentRecord, erro
 		return nil, err
 	}
 	records := make([]AgentRecord, 0, len(agentIDs))
-	var stale []string
+	var stale, podless []string
 	for _, agentID := range agentIDs {
 		value, err := d.inventory.Get(ctx, d.getCacheKey(agentID))
-		if err != nil {
-			if errors.Is(err, ErrNotFound) {
-				stale = append(stale, agentID)
-				continue
-			}
+		if err != nil && !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
-		if value == nil || value.PodIP == "" {
+		if value == nil {
 			stale = append(stale, agentID)
+			continue
+		}
+		if value.PodIP == "" {
+			podless = append(podless, agentID)
 			continue
 		}
 		podIP := value.PodIP
@@ -272,10 +254,12 @@ func (d *ipInventory) ListAgentRecords(ctx context.Context) ([]AgentRecord, erro
 			Capabilities: cloneStringSlice(value.Capabilities),
 		})
 	}
-	if len(stale) > 0 {
-		if _, err := d.inventory.SRem(ctx, d.activeAgentSetKey(), stale...); err != nil {
-			d.logger.Warn("failed to prune stale active inventory members", "count", len(stale), "error", err)
-		}
+	err = d.prune(ctx, d.activeAgentSetKey(), stale)
+	if err == nil && len(podless) > 0 {
+		_, err = d.inventory.SRem(ctx, d.activeAgentSetKey(), podless...)
+	}
+	if err != nil {
+		d.logger.Warn("failed to prune stale active inventory members", "count", len(stale)+len(podless), "error", err)
 	}
 	return records, nil
 }

@@ -30,7 +30,9 @@ import (
 // (claimAgentRecord, renewAgentRecord, releaseAgentRecord, enterRotation,
 // yield, unregister, agentStream, attach, GetIP), each store write of the
 // record its own step as in the model (the store holds a call at its SET
-// or DEL until the walk's next step releases it). After every step the
+// or DEL until the walk's next step releases it; the delete compares and
+// deletes in one step, Cache.DelIf, the model's Atomic "delete", so it is
+// not held). After every step the
 // record, the Seq counter, each connection's Seq, phase and pending write,
 // each replica's routing and each session's outcome must be the model's.
 //
@@ -138,6 +140,15 @@ func (s *rwStore) Set(ctx context.Context, key string, v any, exp time.Duration)
 		}
 	}
 	return s.Cache.Set(ctx, key, v, exp)
+}
+
+func (s *rwStore) SetAdd(ctx context.Context, key string, v directory.Value, exp time.Duration, member string, sets ...string) error {
+	if key == rwRecKey {
+		if err := s.hold(v.Seq); err != nil {
+			return err
+		}
+	}
+	return s.Cache.SetAdd(ctx, key, v, exp, member, sets...)
 }
 
 func (s *rwStore) Del(ctx context.Context, keys ...string) (int64, error) {
@@ -370,7 +381,9 @@ func (p *rwReplay) step(m rwState) error {
 func (p *rwReplay) deliver(k *rwSess, d *TCPDispatcher, as *tcpAgentStream) error {
 	s := newTCPSession()
 	s.abort = func() { k.cut = true }
-	k.id = strconv.Itoa(len(p.sess)) + "-" + k.at
+	// The session's own index: two sessions of a walk on one stream must
+	// not share an id (one would replace the other at attach).
+	k.id = strconv.Itoa(slices.Index(p.sess, k)) + "-" + k.at
 	got := d.attach(rwAgent, as, k.id, s)
 	if got == nil {
 		return fmt.Errorf("attach: no stream took the session")
@@ -523,7 +536,7 @@ func TestReplicasModelWalks(t *testing.T) {
 	// (not Finish: the client's end, rare in random walks since a Die
 	// disables it; removeSession is all it runs here).
 	for _, a := range []string{"Connect", "ClaimIncr", "ClaimSet", "Register", "RenewGet", "RenewSet", "Die", "End",
-		"DelGet", "DelDo", "Expire", "Crash", "Restart", "Arrive", "Route", "Accept",
+		"DelGet", "Expire", "Crash", "Restart", "Arrive", "Route", "Accept",
 		"ph:yielded", "st:fwd", "st:refused", "st:cut"} {
 		if seen[a] == 0 {
 			t.Errorf("no walk takes %s: regenerate spec/testdata/replicas-walks.ndjson (relay-server scripts/spec.sh walks)", a)

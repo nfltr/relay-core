@@ -13,6 +13,14 @@
 (* relay-server Replicas.tla's (its finding 1b). A record may lapse (its   *)
 (* TTL past a late renewal) and, with Loss, the store may restart empty    *)
 (* once, losing the counters too (relay-server finding R7).                *)
+(* The dispatcher's record ("d") declares a service under an nf1           *)
+(* rendezvous id, so its write also adds the agent to that id's index set  *)
+(* (idx) and its own delete removes it, in the same store step             *)
+(* (Cache.SetAdd, Cache.DelIf); a read prunes a member whose record is     *)
+(* gone, in one step too (Prune: DelIf on no record). Another agent's      *)
+(* membership is another member of the set, which no step of this agent   *)
+(* touches, so one agent is enough (nfltr docs/decisions/                  *)
+(* nf1-index-atomic-2026-11-14.md).                                        *)
 (*                                                                          *)
 (* The core/directory test TestDirectoryModelWalks replays walks of this   *)
 (* module (scripts/spec.sh walks, spec/testdata/directory-walks.ndjson)    *)
@@ -35,9 +43,10 @@ VARIABLES
     w,     \* key -> the session the record was last written for; 0 once it lapsed or was lost
     lost,  \* the store restarted empty
     act,   \* the last step, for the walks and the witnesses
-    pr     \* TwoStep: the GETs whose SET or DEL is still to come
+    pr,    \* TwoStep: the GETs whose SET or DEL is still to come
+    idx    \* the agent is in its nf1 rid's index set
 
-vars == <<rec, ctr, sess, w, lost, act, pr>>
+vars == <<rec, ctr, sess, w, lost, act, pr, idx>>
 
 \* A session's start time is its claim order (Since; distinct, monotonic).
 Since(i) == i
@@ -67,6 +76,7 @@ TypeOK ==
     /\ \A i \in Sess : sess[i].key \in Keys /\ sess[i].pod \in Pods /\ sess[i].st \in {"live", "sup", "end"}
     /\ w \in [Keys -> 0..MaxSess]
     /\ lost \in BOOLEAN
+    /\ idx \in BOOLEAN
 
 Init ==
     /\ rec = [k \in Keys |-> 0]
@@ -76,6 +86,7 @@ Init ==
     /\ lost = FALSE
     /\ act = [n |-> "Init", p |-> "", k |-> "", i |-> 0]
     /\ pr = {}
+    /\ idx = FALSE
 
 \* ClaimSession: nextSeq (the counter's next, above the record's), then
 \* the record written for the new session.
@@ -88,6 +99,7 @@ Claim(p, k) ==
           /\ ctr' = [ctr EXCEPT ![CK(k)] = s]
           /\ rec' = [rec EXCEPT ![k] = i]
           /\ w' = [w EXCEPT ![k] = i]
+          /\ idx' = (idx \/ k = "d")
           /\ act' = [n |-> "Claim", p |-> p, k |-> k, i |-> i]
     /\ UNCHANGED <<lost, pr>>
 
@@ -99,7 +111,7 @@ ClaimNoSeq(p, k) ==
     /\ NoSeq /\ k = "s" /\ Len(sess) < MaxSess
     /\ sess' = Append(sess, [key |-> k, pod |-> p, seq |-> 0, st |-> "live"])
     /\ act' = [n |-> "ClaimNoSeq", p |-> p, k |-> k, i |-> Len(sess) + 1]
-    /\ UNCHANGED <<rec, ctr, w, lost, pr>>
+    /\ UNCHANGED <<rec, ctr, w, lost, pr, idx>>
 
 \* PutSession with renew, by live session i. A record without a Seq (a
 \* session that got none) does not hide the counter: "seqless-masks-counter"
@@ -110,14 +122,15 @@ RenewWith(i, r) ==
        IN IF r # 0 /\ (Newer(r, i) \/ (Mutant = "renew-yields" /\ r # i))
           THEN IF sess[r].pod # sess[i].pod
                THEN /\ sess' = [sess EXCEPT ![i].st = "sup"]
-                    /\ UNCHANGED <<rec, w>>
-               ELSE UNCHANGED <<sess, rec, w>> \* a newer session here holds it
+                    /\ UNCHANGED <<rec, w, idx>>
+               ELSE UNCHANGED <<sess, rec, w, idx>> \* a newer session here holds it
           ELSE IF (r = 0 \/ (sess[r].seq = 0 /\ Mutant # "seqless-masks-counter"))
                   /\ sess[i].seq # 0 /\ ctr[CK(k)] > sess[i].seq /\ Mutant # "renew-resurrects"
           THEN /\ sess' = [sess EXCEPT ![i].st = "sup"]
-               /\ UNCHANGED <<rec, w>>
+               /\ UNCHANGED <<rec, w, idx>>
           ELSE /\ rec' = [rec EXCEPT ![k] = i]
                /\ w' = [w EXCEPT ![k] = i]
+               /\ idx' = (idx \/ k = "d")
                /\ UNCHANGED sess
     /\ act' = [n |-> "Renew", p |-> "", k |-> "", i |-> i]
     /\ UNCHANGED <<ctr, lost>>
@@ -141,29 +154,54 @@ EndWith(i, r) ==
     /\ LET k == sess[i].key
        IN IF r # 0 /\ (Mutant = "delete-any" \/ OwnRecord(r, i))
           THEN /\ rec' = [rec EXCEPT ![k] = 0]
-          ELSE UNCHANGED rec
+               /\ idx' = (idx /\ k # "d")
+          ELSE UNCHANGED <<rec, idx>>
     /\ sess' = [sess EXCEPT ![i].st = "end"]
     /\ act' = [n |-> "End", p |-> "", k |-> "", i |-> i]
     /\ UNCHANGED <<ctr, w, lost>>
 
-End(i) == ~TwoStep /\ EndWith(i, rec[sess[i].key]) /\ UNCHANGED pr
+End(i) == ~(TwoStep /\ Mutant = "delete-get-del") /\ EndWith(i, rec[sess[i].key]) /\ UNCHANGED pr
 
-\* TwoStep (race:renew-get-set, race:delete-get-del): PutSession's renew
-\* and DeleteSession as the code does them, a GET and later a SET or DEL
-\* (the ponytail comments): another pod's claim can land between the two.
-\* The design keeps them atomic until the store compares and sets in one
-\* step (relay-server Replicas.tla finding 1b); spec.sh checks that the
-\* race breaks the invariants, so it is a known, documented window.
+\* TwoStep (race:renew-get-set): PutSession's renew as the code does it, a
+\* GET and later a SET (its ponytail comment): another pod's claim can land
+\* between the two; spec.sh checks that the race breaks NoResurrect, so it
+\* is a known, documented window (finding 38). DeleteSession is one store
+\* step (Cache.DelIf, finding 47); "delete-get-del" puts back its GET then
+\* DEL (relay-server finding 1b).
 Read(i, op) ==
     /\ TwoStep /\ sess[i].st # "end" /\ (op = "renew" => sess[i].st = "live")
+    /\ (op = "end" => Mutant = "delete-get-del")
     /\ ~\E x \in pr : x.i = i
     /\ pr' = pr \cup {[i |-> i, op |-> op, r |-> rec[sess[i].key]]}
     /\ act' = [n |-> "Read", p |-> "", k |-> "", i |-> i]
-    /\ UNCHANGED <<rec, ctr, sess, w, lost>>
+    /\ UNCHANGED <<rec, ctr, sess, w, lost, idx>>
+
+\* A read of the nf1 index (NF1Agents; ServiceAgents and ListAgentRecords
+\* alike) finding the agent a member whose record is gone removes it, in
+\* one step and only while there is still no record (Cache.DelIf). Mutant
+\* "prune-get-srem" is the code before finding 47: the GET, then the SREM
+\* of what was read (PruneRead, then Done).
+Prune ==
+    /\ Mutant # "prune-get-srem"
+    /\ rec["d"] = 0 /\ idx
+    /\ idx' = FALSE
+    /\ act' = [n |-> "Prune", p |-> "", k |-> "", i |-> 0]
+    /\ UNCHANGED <<rec, ctr, sess, w, lost, pr>>
+
+PruneRead ==
+    /\ Mutant = "prune-get-srem"
+    /\ rec["d"] = 0 /\ idx /\ ~\E x \in pr : x.op = "prune"
+    /\ pr' = pr \cup {[i |-> 0, op |-> "prune", r |-> 0]}
+    /\ act' = [n |-> "PruneRead", p |-> "", k |-> "", i |-> 0]
+    /\ UNCHANGED <<rec, ctr, sess, w, lost, idx>>
 
 Done(x) ==
     /\ x \in pr /\ pr' = pr \ {x}
-    /\ IF x.op = "renew" THEN RenewWith(x.i, x.r) ELSE EndWith(x.i, x.r)
+    /\ CASE x.op = "renew" -> RenewWith(x.i, x.r)
+          [] x.op = "end" -> EndWith(x.i, x.r)
+          [] OTHER -> /\ idx' = FALSE
+                      /\ act' = [n |-> "Prune", p |-> "", k |-> "", i |-> 0]
+                      /\ UNCHANGED <<rec, ctr, sess, w, lost>>
 
 \* A record's TTL passed (its session's renewals were late).
 Expire(k) ==
@@ -171,7 +209,7 @@ Expire(k) ==
     /\ rec' = [rec EXCEPT ![k] = 0]
     /\ w' = [w EXCEPT ![k] = 0]
     /\ act' = [n |-> "Expire", p |-> "", k |-> k, i |-> 0]
-    /\ UNCHANGED <<ctr, sess, lost, pr>>
+    /\ UNCHANGED <<ctr, sess, lost, pr, idx>>
 
 \* The store restarted empty: records and counters gone (once).
 StoreLoss ==
@@ -180,12 +218,14 @@ StoreLoss ==
     /\ ctr' = [k \in Keys |-> 0]
     /\ w' = [k \in Keys |-> 0]
     /\ lost' = TRUE
+    /\ idx' = FALSE
     /\ act' = [n |-> "Loss", p |-> "", k |-> "", i |-> 0]
     /\ UNCHANGED <<sess, pr>>
 
 RenewSome == \E i \in Sess : Renew(i)
 EndSome == \E i \in Sess : End(i)
 TwoStepSome == \/ \E i \in Sess, op \in {"renew", "end"} : Read(i, op)
+               \/ PruneRead
                \/ \E x \in pr : Done(x)
 
 Next ==
@@ -195,6 +235,7 @@ Next ==
     \/ TwoStepSome
     \/ \E k \in Keys : Expire(k)
     \/ StoreLoss
+    \/ Prune
 
 Spec == Init /\ [][Next]_vars
 
@@ -226,6 +267,11 @@ NoPingPong ==
         (i # j /\ sess[i].key = sess[j].key /\ sess[i].st = "live" /\ sess[j].st = "live")
             => (Newer(i, j) \/ Newer(j, i))
 
+\* A live dispatcher record has its agent in the nf1 index (no lost entry:
+\* an open of the rid finds it). A member whose record is gone may stay
+\* until a read prunes it: reads re-check the record.
+IndexComplete == rec["d"] # 0 => idx
+
 \* Witnesses: each must be violated (the state its invariant guards is reached).
 \* Under TwoStep the race loses a record, or writes an older session's
 \* over a newer one's, only until the agent's latest session renews: that
@@ -238,6 +284,7 @@ WitnessResurrectSetup ==
     ~\E i, j \in Sess : sess[i].key = sess[j].key /\ sess[i].st = "live" /\ sess[j].st = "end"
         /\ sess[j].seq > sess[i].seq /\ rec[sess[i].key] = 0
 WitnessEndKeeps == ~(act.n = "End" /\ rec[sess[act.i].key] \notin {0, act.i})
+WitnessStaleMember == ~(rec["d"] = 0 /\ idx)
 WitnessTie ==
     ~\E i, j \in Sess : i # j /\ sess[i].key = sess[j].key /\ sess[i].st = "live" /\ sess[j].st = "live"
         /\ sess[i].seq = sess[j].seq

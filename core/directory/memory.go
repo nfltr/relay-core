@@ -114,10 +114,49 @@ func (m *MemoryCache) Incr(_ context.Context, key string, by int64, ttl time.Dur
 	return e.n, nil
 }
 
+// SetAdd implements Cache.SetAdd.
+func (m *MemoryCache) SetAdd(_ context.Context, key string, value Value, expiration time.Duration, member string, sets ...string) error {
+	v, err := toValue(value)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.writeLocked()
+	m.kv[key] = memoryEntry{v: v, exp: expiry(now, expiration)}
+	for _, set := range sets {
+		m.saddLocked(set, member)
+	}
+	return nil
+}
+
+// DelIf implements Cache.DelIf.
+func (m *MemoryCache) DelIf(_ context.Context, key string, match func(*Value) bool, member string, sets ...string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var cur *Value
+	if e, ok := m.liveLocked(key); ok && !e.counter {
+		v := e.v
+		cur = &v
+	}
+	if !match(cur) {
+		return false, nil
+	}
+	for _, set := range sets {
+		m.sremLocked(set, member)
+	}
+	delete(m.kv, key)
+	return true, nil
+}
+
 // SAdd adds members to the set at key and returns how many were new.
 func (m *MemoryCache) SAdd(_ context.Context, key string, members ...string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.saddLocked(key, members...), nil
+}
+
+func (m *MemoryCache) saddLocked(key string, members ...string) int64 {
 	s := m.sets[key]
 	if s == nil {
 		s = map[string]struct{}{}
@@ -130,13 +169,17 @@ func (m *MemoryCache) SAdd(_ context.Context, key string, members ...string) (in
 			n++
 		}
 	}
-	return n, nil
+	return n
 }
 
 // SRem removes members from the set at key and returns how many were in it.
 func (m *MemoryCache) SRem(_ context.Context, key string, members ...string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.sremLocked(key, members...), nil
+}
+
+func (m *MemoryCache) sremLocked(key string, members ...string) int64 {
 	s := m.sets[key]
 	var n int64
 	for _, x := range members {
@@ -148,7 +191,7 @@ func (m *MemoryCache) SRem(_ context.Context, key string, members ...string) (in
 	if len(s) == 0 {
 		delete(m.sets, key) // Redis drops an empty set
 	}
-	return n, nil
+	return n
 }
 
 // SInter returns the members every set at keys holds.

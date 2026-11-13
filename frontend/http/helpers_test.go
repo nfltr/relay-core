@@ -308,6 +308,24 @@ func (m *mockCache) Ping(_ context.Context) (string, error) {
 	return "PONG", m.err
 }
 
+func (m *mockCache) SetAdd(ctx context.Context, key string, value directory.Value, exp time.Duration, _ string, _ ...string) error {
+	_, err := m.Set(ctx, key, value, exp)
+	return err
+}
+
+func (m *mockCache) DelIf(_ context.Context, key string, match func(*directory.Value) bool, _ string, _ ...string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return false, m.err
+	}
+	if !match(m.data[key]) {
+		return false, nil
+	}
+	delete(m.data, key)
+	return true, nil
+}
+
 func (m *mockCache) SAdd(_ context.Context, _ string, _ ...string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
