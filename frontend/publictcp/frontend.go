@@ -30,7 +30,8 @@ type Leases interface {
 	OnLeaseEnd(cut func(shareID string))
 }
 
-// leaseHost is a host that leases public ports (the hosted relay).
+// leaseHost is a host that leases public ports (relay-server's relay;
+// nil Leases: it has no store to lease from).
 type leaseHost interface{ PublicPorts() Leases }
 
 // Frontend is public TCP ports as a binary links it.
@@ -60,8 +61,12 @@ func (Frontend) Attach(ctx context.Context, h frontend.Host) error {
 	}
 	core := h.Core()
 	lh, ok := h.(leaseHost)
-	if !ok || core.TCPDispatcher == nil || core.Dispatcher == nil {
-		return errors.New("public tcp: public_tcp.ports needs tcp sessions and a relay that leases ports")
+	var leases Leases
+	if ok {
+		leases = lh.PublicPorts()
+	}
+	if leases == nil || core.TCPDispatcher == nil || core.Dispatcher == nil {
+		return errors.New("public tcp: public_tcp.ports needs tcp sessions and a relay that leases ports (its SQL store)")
 	}
 	if viper.GetString("tcp.e2ee_policy") == config.E2EERequire {
 		return errors.New("public tcp: public ports carry plain TCP; tcp.e2ee_policy=require forbids them")
@@ -79,7 +84,6 @@ func (Frontend) Attach(ctx context.Context, h frontend.Host) error {
 	if err != nil {
 		return err
 	}
-	leases := lh.PublicPorts()
 	logger := h.Logger().With("subsystem", "public-tcp")
 	srv := New(Config{
 		Lookup: leases.PortGrant,
