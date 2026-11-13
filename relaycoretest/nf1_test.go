@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -92,14 +93,6 @@ func echoListener(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-// TestNF1EndToEnd (nfltr docs/decisions/nf1-rendezvous-2026-11-13.md): an
-// agent serves a service under a capability address; a client with no
-// credential dials the address and its bytes reach the service; another
-// server's pin, another address's secret and an unknown rid are refused
-// with their typed errors (exit 7, 10, 3), as is a relay that serves no
-// addresses (3); a connection with no credential opens nothing else; a
-// relay restart drops the registration and the agent's reconnect brings it
-// back.
 // nf1Agent is an agent serving "clip" (an echo) under a fresh capability
 // address at whatever relay grpc forwards to, its key read from keyFile.
 type nf1Agent struct {
@@ -164,10 +157,52 @@ func echoes(t *testing.T, c net.Conn) {
 	}
 }
 
-func TestNF1EndToEnd(t *testing.T) {
-	t.Cleanup(func() { viper.Set("nf1.enabled", false) })
-	r1 := relaycoretest.New(t)
+// enableNF1 turns nf1 on with addressMax open sessions per address for the
+// relays the test starts, and off again once they stopped. viper is not
+// safe to change under a running relay: call it before relaycoretest.New.
+func enableNF1(t *testing.T, addressMax int) {
 	viper.Set("nf1.enabled", true)
+	viper.Set("nf1.address_max", addressMax)
+	t.Cleanup(func() { viper.Set("nf1.enabled", false); viper.Set("nf1.address_max", 64) }) // runs after New's cleanups
+}
+
+// TestNF1Disabled: a relay that serves no addresses (nf1.enabled off, the
+// default) refuses an upgrade with no credential (401) and Dial answers
+// ErrNotServed (exit 3), as for an unknown address.
+func TestNF1Disabled(t *testing.T) {
+	r := relaycoretest.New(t)
+	nc, err := net.Dial("tcp", r.Proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close() //nolint:errcheck
+	var nu *dataplane.NoUpgradeError
+	if _, _, err := dataplane.Upgrade(t.Context(), nc, "relay.test", "", 1<<20); !errors.As(err, &nu) || nu.Status != http.StatusUnauthorized {
+		t.Fatalf("an anonymous upgrade: %v, want 401", err)
+	}
+	l, _, err := nf1.Mint("relay.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = nf1.Dial(t.Context(), l.Address(), nf1.Options{DialRelay: func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", r.Proxy)
+	}})
+	if !errors.Is(err, nf1.ErrNotServed) {
+		t.Fatalf("dial = %v, want ErrNotServed", err)
+	}
+}
+
+// TestNF1EndToEnd (nfltr docs/decisions/nf1-rendezvous-2026-11-13.md): an
+// agent serves a service under a capability address; a client with no
+// credential dials the address and its bytes reach the service; another
+// server's pin, another address's secret and an unknown rid are refused
+// with their typed errors (exit 7, 10, 3); a connection with no
+// credential opens nothing else; a
+// relay restart drops the registration and the agent's reconnect brings it
+// back.
+func TestNF1EndToEnd(t *testing.T) {
+	enableNF1(t, 64)
+	r1 := relaycoretest.New(t)
 	grpc := newSwitchProxy(t, r1.GRPC)
 	keyFile := filepath.Join(t.TempDir(), "key")
 	writeKey(t, keyFile, r1.Key)
@@ -237,12 +272,6 @@ func TestNF1EndToEnd(t *testing.T) {
 	}
 	_ = m.Close()
 
-	viper.Set("nf1.enabled", false)
-	if _, err := dial(l.Address()); !errors.Is(err, nf1.ErrNotServed) {
-		t.Errorf("nf1 disabled: dial = %v, want ErrNotServed", err)
-	}
-	viper.Set("nf1.enabled", true)
-
 	// The relay restarts (a new one, its store empty): the agent reconnects
 	// there and registers the address again.
 	r2 := relaycoretest.New(t)
@@ -256,10 +285,8 @@ func TestNF1EndToEnd(t *testing.T) {
 // and frees its count when a session ends; an offline agent's address
 // answers exactly as an unknown one (no enumeration, exit 3).
 func TestNF1CapsAndNotServed(t *testing.T) {
-	viper.Set("nf1.address_max", 1)
-	t.Cleanup(func() { viper.Set("nf1.enabled", false); viper.Set("nf1.address_max", 64) })
+	enableNF1(t, 1)
 	r := relaycoretest.New(t)
-	viper.Set("nf1.enabled", true)
 	keyFile := filepath.Join(t.TempDir(), "key")
 	writeKey(t, keyFile, r.Key)
 	ag := startNF1Agent(t, r.GRPC, keyFile)
