@@ -11,10 +11,12 @@ package directorytest
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -128,7 +130,10 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 }
 
 // RID is round r's rendezvous id.
-func RID(r int) [16]byte { return [16]byte{0xab, byte(r >> 8), byte(r), 1} }
+func RID(r int) [16]byte {
+	h := sha256.Sum256([]byte(strconv.Itoa(r)))
+	return [16]byte(h[:16])
+}
 
 // Decl is a service declaration under rid.
 func Decl(rid [16]byte) string { return fmt.Sprintf("clip=tcp+e2ee;nf1=%x", rid) }
