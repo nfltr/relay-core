@@ -18,7 +18,7 @@ import (
 // observability plan names (nfltr's data-path guard reads it too).
 func TestTransferPathsClosed(t *testing.T) {
 	want := []string{"http_link", "http_grpc", "sni", "connect", "ssh", "tcp_link", "tcp_quic", "tcp_dataconn",
-		"tcp_grpc", "a2a", "replica", "wg", "p2p_relay", "mailbox", "blob", "accounts"}
+		"tcp_grpc", "a2a", "replica", "wg", "p2p_relay", "mailbox", "blob", "accounts", "public_tcp"}
 	if got := PathNames(); !slices.Equal(got, want) {
 		t.Fatalf("PathNames() = %v, want %v", got, want)
 	}

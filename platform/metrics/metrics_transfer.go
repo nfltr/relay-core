@@ -43,12 +43,14 @@ const (
 	PathMailbox                 // the mailbox service
 	PathBlob                    // the blob service
 	PathAccounts                // the accounts service
+	PathPublicTCP               // a visitor on a public TCP port (frontend/publictcp)
 	numPaths
 )
 
 var pathNames = [numPaths]string{
 	"http_link", "http_grpc", "sni", "connect", "ssh", "tcp_link", "tcp_quic", "tcp_dataconn",
 	"tcp_grpc", "a2a", "replica", "wg", "p2p_relay", "mailbox", "blob", "accounts",
+	"public_tcp",
 }
 
 // String is the path's label value.
