@@ -87,6 +87,36 @@ func (m *mockCache) Incr(ctx context.Context, key string, by int64, ttl time.Dur
 	return m.counters[key], nil
 }
 
+func (m *mockCache) SetAdd(ctx context.Context, key string, value Value, exp time.Duration, member string, sets ...string) error {
+	if _, err := m.Set(ctx, key, value, exp); err != nil {
+		return err
+	}
+	for _, set := range sets {
+		_, _ = m.SAdd(ctx, set, member)
+	}
+	return nil
+}
+
+func (m *mockCache) DelIf(ctx context.Context, key string, match func(*Value) bool, member string, sets ...string) (bool, error) {
+	if m.getErr != nil {
+		return false, m.getErr
+	}
+	m.ops = append(m.ops, "delif")
+	if m.delErr != nil {
+		return false, m.delErr
+	}
+	if !match(m.store[key]) {
+		return false, nil
+	}
+	for _, set := range sets {
+		if m.sets[set] != nil {
+			delete(m.sets[set], member)
+		}
+	}
+	delete(m.store, key)
+	return true, nil
+}
+
 func (m *mockCache) SAdd(ctx context.Context, key string, members ...string) (int64, error) {
 	if m.sets[key] == nil {
 		m.sets[key] = make(map[string]bool)
@@ -463,7 +493,9 @@ func TestListAgentRecords_ReturnsLiveMetadataAndPrunesStaleSetMembers(t *testing
 	}
 }
 
-func TestDeleteIPs_RemovesActiveSetBeforeAddress(t *testing.T) {
+// The active-set entry and the record go in one store step (DelIf), so a
+// record another pod writes meanwhile is kept with its entry.
+func TestDeleteIPs_RemovesActiveSetAndAddressInOneStep(t *testing.T) {
 	mc := newMockCache()
 	inv, _ := NewIPInventory(testLogger(), mc, time.Second, "127.0.0.1", GetStreamerCacheKey)
 	if err := inv.SetIPWithAgentInfo(context.Background(), "agent-1", nil, []string{"worker"}, time.Minute); err != nil {
@@ -474,8 +506,8 @@ func TestDeleteIPs_RemovesActiveSetBeforeAddress(t *testing.T) {
 	if err := inv.DeleteIPs(context.Background(), "agent-1"); err != nil {
 		t.Fatalf("DeleteIPs: %v", err)
 	}
-	if len(mc.ops) < 2 || mc.ops[0] != "srem" || mc.ops[1] != "del" {
-		t.Fatalf("operation order = %v, want srem before del", mc.ops)
+	if len(mc.ops) != 1 || mc.ops[0] != "delif" {
+		t.Fatalf("operations = %v, want one delif", mc.ops)
 	}
 	if mc.sets["inventory:active:sipi:agentID:"]["agent-1"] {
 		t.Fatal("expected active set member removed")

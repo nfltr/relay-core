@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,19 +25,21 @@ import (
 // replayed against the real store, ClaimSession, PutSession with renew and
 // DeleteSession on a MemoryCache through two inventories (the dispatcher's
 // and the streamer's record), and after every step the records, the Seq
-// counters and each session's Seq and state (a renewal's ErrSuperseded)
-// must be the model's.
+// counters, each session's Seq and state (a renewal's ErrSuperseded) and
+// whether the agent is in the nf1 index of the rid its dispatcher record
+// declares must be the model's (Prune: a read of that index).
 
 const walkAgent = "agent-1"
 
 type walkState struct {
 	Act struct {
-		N string `json:"n"` // Init, Claim, ClaimNoSeq, Renew, End, Expire, Loss
+		N string `json:"n"` // Init, Claim, ClaimNoSeq, Renew, End, Expire, Loss, Prune
 		P string `json:"p"`
 		K string `json:"k"`
 		I int    `json:"i"` // 1-based session
 	} `json:"act"`
 	Rec  map[string]int   `json:"rec"`
+	Idx  bool             `json:"idx"`
 	Ctr  map[string]int64 `json:"ctr"`
 	Sess []struct {
 		Seq int64  `json:"seq"`
@@ -76,6 +79,17 @@ func readWalks(t *testing.T) [][]walkState {
 
 var walkKeys = map[string]func(string) string{"d": GetDispatcherCacheKey, "s": GetStreamerCacheKey}
 
+// walkRID is the nf1 rendezvous id the dispatcher's sessions declare.
+var walkRID = [16]byte{0xab, 1}
+
+// walkServices is what a session of record key k declares.
+func walkServices(k string) string {
+	if k == "d" {
+		return "clip=tcp+e2ee;nf1=ab010000000000000000000000000000"
+	}
+	return ""
+}
+
 func walkPod(p string) string { return "10.0.0." + strings.TrimPrefix(p, "p") }
 
 type walkSession struct {
@@ -104,7 +118,7 @@ func replayWalk(t *testing.T, cache Cache, reset func(), walk []walkState) error
 		case "Claim":
 			t.Setenv("POD_IP", walkPod(a.P))
 			var s Session
-			s, err = stores[a.K].ClaimSession(ctx, walkAgent, Session{Since: t0.Add(time.Duration(a.I) * time.Second)}, nil, nil, time.Minute)
+			s, err = stores[a.K].ClaimSession(ctx, walkAgent, Session{Since: t0.Add(time.Duration(a.I) * time.Second), Services: walkServices(a.K)}, nil, nil, time.Minute)
 			sess = append(sess, &walkSession{s: s, key: a.K, pod: a.P, st: "live"})
 		case "ClaimNoSeq":
 			// The counter step fails (the store unreachable): no Seq, no
@@ -131,20 +145,29 @@ func replayWalk(t *testing.T, cache Cache, reset func(), walk []walkState) error
 			_, err = cache.Del(ctx, walkKeys[a.K](walkAgent))
 		case "Loss":
 			reset()
+		case "Prune":
+			_, err = stores["d"].NF1Agents(ctx, walkRID)
 		default:
 			return fmt.Errorf("step %d: unknown action %q", n, a.N)
 		}
 		if err != nil {
 			return fmt.Errorf("step %d %+v: %w", n, a, err)
 		}
-		if err := compareWalkState(ctx, cache, m, sess, t0); err != nil {
+		if err := compareWalkState(ctx, cache, stores["d"], m, sess, t0); err != nil {
 			return fmt.Errorf("step %d %+v: %w", n, a, err)
 		}
 	}
 	return nil
 }
 
-func compareWalkState(ctx context.Context, cache Cache, m walkState, sess []*walkSession, t0 time.Time) error {
+func compareWalkState(ctx context.Context, cache Cache, d *ipInventory, m walkState, sess []*walkSession, t0 time.Time) error {
+	members, err := cache.SInter(ctx, d.nf1Key(walkRID))
+	if err != nil {
+		return err
+	}
+	if in := slices.Contains(members, walkAgent); in != m.Idx {
+		return fmt.Errorf("nf1 index membership %v, model %v", in, m.Idx)
+	}
 	if len(sess) != len(m.Sess) {
 		return fmt.Errorf("%d sessions, model %d", len(sess), len(m.Sess))
 	}
@@ -213,7 +236,7 @@ func TestDirectoryModelWalks(t *testing.T) {
 		}
 	}
 	// The walks must take every step and reach a superseded session.
-	for _, a := range []string{"Claim", "ClaimNoSeq", "Renew", "End", "Expire", "Loss", "sup"} {
+	for _, a := range []string{"Claim", "ClaimNoSeq", "Renew", "End", "Expire", "Loss", "Prune", "sup"} {
 		if seen[a] == 0 {
 			t.Errorf("no walk takes %s: regenerate spec/testdata/directory-walks.ndjson (scripts/spec.sh walks)", a)
 		}

@@ -530,16 +530,18 @@ mutants)
 		expect PresenceLive.cfg Presence.tla "live:$b" -e "$m$b\"/" -e 's/MaxFail = 1/MaxFail = 0/' -e 's/Crash = TRUE/Crash = FALSE/'
 	done
 	# Directory.tla: the session records' bugs (findings 13, 34, 35, 37, R7); witnesses.
-	for b in renew-resurrects shared-counter seq-only seq-tie delete-any seqless-by-pod seqless-masks-counter; do
+	for b in renew-resurrects shared-counter seq-only seq-tie delete-any seqless-by-pod seqless-masks-counter prune-get-srem; do
 		expect Directory.cfg Directory.tla "dir:$b" -e "$m$b\"/"
 	done
 	expect Directory.cfg Directory.tla witness:dir-superseded -e 's/^    SupersededByNewer$/    WitnessSuperseded/'
 	expect Directory.cfg Directory.tla witness:dir-resurrect -e 's/^    NoResurrect$/    WitnessResurrectSetup/'
 	expect Directory.cfg Directory.tla witness:dir-end-keeps -e 's/^    DeleteOwn$/    WitnessEndKeeps/'
 	expect Directory.cfg Directory.tla witness:dir-tie -e 's/^    NoPingPong$/    WitnessTie/'
-	# PutSession's renew and DeleteSession as a GET, then a SET or DEL: the
-	# race the design closes with an atomic step (finding 38).
-	expect DirectoryHeal.cfg Directory.tla race:renew-get-set -e 's/^PROPERTY Heals$/INVARIANT DeleteOwn NoResurrect/'
+	expect Directory.cfg Directory.tla witness:dir-stale-member -e 's/^    IndexComplete$/    WitnessStaleMember/'
+	# PutSession's renew as a GET, then a SET: the documented race (finding
+	# 38); DeleteSession as a GET, then a DEL: the code before finding 47.
+	expect DirectoryHeal.cfg Directory.tla race:renew-get-set -e 's/^PROPERTY Heals$/INVARIANT NoResurrect/'
+	expect DirectoryHeal.cfg Directory.tla dir:delete-get-del -e 's/^PROPERTY Heals$//' -e "$m"'delete-get-del"/'
 	expect DirectoryHeal.cfg Directory.tla heal:renew-yields -e "$m"'renew-yields"/'
 	expect Presence.cfg Presence.tla no-crash-resync -e "$m"'no-crash-resync"/' -e 's/Crash = FALSE/Crash = TRUE/'
 	exit $fail
@@ -652,7 +654,7 @@ walks)
 		exit 1
 	}
 	# Drop TLC's _action and the model's w, lost and pr (empty: TwoStep is
-	# off): the replay reads act, rec, ctr and sess.
+	# off): the replay reads act, rec, idx, ctr and sess.
 	for n in $(ls "$work/walks" | sort -n); do cat "$work/walks/$n"; done |
 		sed -E -e 's/^\{"_action":\{"name":"[A-Za-z]+","location":\{[^}]*\}(,"context":\{[^}]*\},"parameters":\[[^]]*\])?\},/{/' \
 			-e 's/,"w":\{[^}]*\}//' -e 's/,"lost":(true|false)//' -e 's/,"pr":\[\]//' -e 's/"pr":\[\],//' >spec/testdata/directory-walks.ndjson

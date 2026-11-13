@@ -627,42 +627,57 @@ names this pod and this session), a record's TTL passing (`Expire`) and,
 once, the store restarting empty (`StoreLoss`: records and counters gone);
 and a claim whose counter step fails (`ClaimNoSeq`: the store unreachable;
 ConnectTCP goes on with a session without a Seq, which renews and ends by
-its start time alone, finding 37).
+its start time alone, finding 37). The dispatcher's record declares a
+service under an nf1 rendezvous id, so the model also keeps `idx`, the
+agent in that id's index set (`inventory:nf1:<rid>`, nfltr
+`docs/decisions/nf1-index-atomic-2026-11-14.md`): a record's write adds
+it in the same store step (`Cache.SetAdd`), its own delete removes it in
+the delete's step (`Cache.DelIf`), and a read prunes it, in one step,
+only while there is no record (`Prune`). Another agent declaring the same
+rid is another member of the set, which no step of this agent touches.
 | action | Go |
 |---|---|
 | `Claim(p, k)`, `ClaimNoSeq(p, k)` | `ClaimSession` (`nextSeq`: `Incr` on `seqKey`, above the record's Seq; then `PutSession` without renew); its `Incr` failing |
 | `Renew(i)`, `RenewWith` | `PutSession` with renew (`renewAgentRecord`), as one step |
 | `End(i)`, `EndWith` | `DeleteSession` (`releaseAgentRecord`), as one step |
-| `Read(i, op)`, `Done(x)` | `TwoStep` only: the GET of `PutSession`'s renew or `DeleteSession`, then its SET or DEL |
+| `Read(i, op)`, `Done(x)` | `TwoStep` only: the GET of `PutSession`'s renew, then its SET (`DeleteSession`'s GET then DEL only under mutant `delete-get-del`, the code before finding 47) |
+| `Prune` | a read of the index (`NF1Agents`; `ServiceAgents`, `ListAgentRecords` alike) removing a member whose record is gone: `ipInventory.prune`, `Cache.DelIf` on no record |
+| `PruneRead` | mutant `prune-get-srem` only: the prune's GET, then its SREM (`Done`), the code before finding 47 |
 | `Expire(k)` | the record's TTL (`MemoryCache.liveLocked`, Redis `EXPIRE`) |
 | `StoreLoss` | the store restarting empty |
 
 Both record keys (the dispatcher's, the streamer's) are in it, so finding
-34 is. Each store call is atomic. `PutSession`'s renew and
-`DeleteSession` are two calls (a GET, then a SET or DEL); `Directory.cfg`
-takes each as one step, and `DirectoryHeal.cfg` (`TwoStep`) splits them
-(`Read`, then `Done` deciding on what was read, finding 38). The
-replicas, the epoch and the re-announce are relay-server `Replicas.tla`'s.
+34 is. Each store call is atomic. `PutSession`'s renew is two calls (a
+GET, then a SET); `Directory.cfg` takes it as one step, and
+`DirectoryHeal.cfg` (`TwoStep`) splits it (`Read`, then `Done` deciding
+on what was read, finding 38). `DeleteSession` and the prune are one call
+each (`Cache.DelIf`, finding 47). The replicas, the epoch and the
+re-announce are relay-server `Replicas.tla`'s.
 
-Invariants (`Directory.cfg`, `make spec`, 492,852 states (129,090
-distinct), 4 s): `SupersededByNewer` (a session yields only to
+Invariants (`Directory.cfg`, `make spec`, 724,236 states (183,262
+distinct), 11 s): `SupersededByNewer` (a session yields only to
 a newer session of its own record), `NoResurrect` (until the store loses
 its counters, a record never names a session older than another claimed
 one of its key), `DeleteOwn` (a record goes only with its own session's
 end, its TTL or the store), `NoPingPong` (of two live sessions of a key,
-one yields to the other: no two renewals overwriting each other). Each
-has a witness TLC must violate (`WitnessSuperseded`,
-`WitnessResurrectSetup`, `WitnessEndKeeps`, `WitnessTie`). Mutants
+one yields to the other: no two renewals overwriting each other),
+`IndexComplete` (a live dispatcher record has its agent in the nf1
+index: no lost entry). Each has a witness TLC must violate
+(`WitnessSuperseded`, `WitnessResurrectSetup`, `WitnessEndKeeps`,
+`WitnessTie`, `WitnessStaleMember`: a member whose record lapsed). Mutants
 (`make spec-mutants`), each caught: `renew-resurrects` (finding 13),
 `shared-counter` (34), `seq-only` (36: the code before its fix),
 `seq-tie` (relay-server finding R7, the Seq compared alone),
 `delete-any`, `seqless-by-pod` and `seqless-masks-counter` (37: the code
-before its fix). `NoResurrect` judges records of sessions with a Seq: a
-session without one cannot know a newer one ended. With the two calls
-apart (`DirectoryHeal.cfg`, 1,126,085 states (320,277 distinct), 7 s) the
-race does break `DeleteOwn` (`race:renew-get-set`: a claim between an
-end's GET and its DEL is deleted) and `NoResurrect` (an older session's
-SET over a newer one's record), and `Heals` holds: the agent's latest
+before its fix), `prune-get-srem` (47: the prune's GET then SREM breaks
+`IndexComplete`). `NoResurrect` judges records of sessions with a Seq: a
+session without one cannot know a newer one ended. With the renew's two
+calls apart (`DirectoryHeal.cfg`, 1,499,229 states (429,385 distinct),
+22 s) `DeleteOwn` and `IndexComplete` hold, the race does break
+`NoResurrect` (`race:renew-get-set`: an older session's SET over a newer
+one's record), `delete-get-del` (relay-server finding 1b, the code before
+finding 47: a claim between an end's GET and its DEL is deleted) breaks
+`DeleteOwn`, and `Heals` holds: the agent's latest
 session's next renewal writes its own record, whatever was read or
 written meanwhile (mutant `heal:renew-yields`: a renewal that yields to
 any other record never heals). `COVERAGE=1` takes every action and every branch of
@@ -677,7 +692,8 @@ real store (`MemoryCache` behind the dispatcher's and the streamer's
 inventories, each step on the pod the walk names) and compares the
 records (pod, Seq, start time), the Seq counters and every session's Seq
 and state after every step. It fails unless the walks take every action
-and supersede a session; `TestDirectoryModelWalksCatchPlantedBugs`
+and supersede a session, and compares the agent's membership of the nf1
+index (`idx`; `Prune` replayed as `NF1Agents`) too; `TestDirectoryModelWalksCatchPlantedBugs`
 replays them against a store with finding 34's bug (one counter) and
 finding 13's (a renewal blind to the counter) and must diverge. The
 replay found finding 36. Regenerate the walks when the spec changes.
@@ -686,7 +702,7 @@ replay found finding 36. Regenerate the walks when the spec changes.
 
 | assumption | source |
 |---|---|
-| Each store call (GET, SET, DEL, INCRBY) is atomic and linearizable; `PutSession`'s renew and `DeleteSession` are two calls each, modelled apart in `DirectoryHeal.cfg` (finding 38) | Redis docs, "Transactions" (single commands are atomic); `MemoryCache` (one mutex) |
+| Each store call (GET, SET, DEL, INCRBY, and the compound `SetAdd`, `DelIf`) is atomic and linearizable; `PutSession`'s renew is two calls, modelled apart in `DirectoryHeal.cfg` (finding 38) | Redis docs, "Transactions" (single commands, MULTI/EXEC, WATCH aborting EXEC when the key changed; relay-server `RedisCache`); `MemoryCache` (one mutex) |
 | A key expires at its TTL after its last write; a counter (`seqTTL`, 30 days) outlives every record | Redis `EXPIRE`; `MemoryCache.liveLocked` |
 | A store that restarts empty loses records and counters together (`StoreLoss`, once) | Redis without persistence; relay-server finding R7 |
 | Start times (`Since`) of an agent's sessions are distinct; their order only breaks a Seq tie, so a skewed clock picks which of two tied sessions yields, never whether one does | `Session.Newer` |
@@ -697,7 +713,10 @@ replay found finding 36. Regenerate the walks when the spec changes.
 | what the spec models | file |
 |---|---|
 | `ClaimSession`, `nextSeq`, `PutSession` (renew), `DeleteSession`, `Session.Newer`, `seqKey` | `core/directory/session.go` |
-| `MemoryCache` (`Get`, `Set`, `Del`, `Incr`, expiry): the store the walks run on | `core/directory/memory.go` |
+| `MemoryCache` (`Get`, `Set`, `Del`, `Incr`, `SetAdd`, `DelIf`, expiry): the store the walks run on | `core/directory/memory.go` |
+| `Cache.SetAdd`, `Cache.DelIf` (the one-step contract) | `core/directory/directory.go` |
+| `Prune` (`ipInventory.prune`, `sessionSets`), the nf1 index read | `core/directory/service_index.go`, `core/directory/nf1_index.go` |
+| `IndexComplete`, `DeleteOwn` under concurrency, on every store | `core/directory/directorytest/races.go` |
 
 ## KeyAccount.tla: accounts of a key-file relay
 
@@ -954,7 +973,8 @@ GOAWAY drain), not its internals.
 | A presence watcher whose snapshot is stale is owed a wake, and is woken (or the listing returns to its snapshot) | `Presence` `NoSilentStale`; `Woken` (live) | yes (`TracePresence.tla`) |
 | A label update lands only on the session it came on | `OwnUpdate` | yes (the update; the fence by `TestUpdateAgentLabelsFromAReplacedConnection`) |
 | A session yields only to a newer session of its own record; a record never names a session older than a claimed one (until the store loses its counters); a record goes only with its own session, its TTL or the store | `Directory` `SupersededByNewer`, `NoResurrect`, `DeleteOwn`, `NoPingPong` | by model-based test (`TestDirectoryModelWalks`) |
-| With `PutSession`'s renew and `DeleteSession` as two store calls (as today), a lost or stale record is rewritten by the agent's latest session at its next renewal | `DirectoryHeal.cfg` `Heals` | no (finding 38) |
+| With `PutSession`'s renew as two store calls (as today), a lost or stale record is rewritten by the agent's latest session at its next renewal | `DirectoryHeal.cfg` `Heals` | no (finding 38) |
+| A live dispatcher record has its agent in the nf1 index; a session's end and a read's prune never remove another session's record or entry | `Directory` `IndexComplete`, `DeleteOwn` (also under `TwoStep`) | by model-based test (`TestDirectoryModelWalks`) and the concurrent suite (`directorytest.RunIndexRaces`: `MemoryCache` here, Redis in relay-server) |
 
 Code against model, both ways: `Directory` by replaying TLC's walks on
 the store (`TestDirectoryModelWalks`); `AgentLink`, `Handoff`, `Move` and
@@ -1866,7 +1886,9 @@ relay link connection never outlives every primary holding its token.
     refused, no data lost, no session left open). Closing it needs a
     compare-and-set or compare-and-delete step in `directory.Cache` (a
     Redis script in relay-server's store), a contract change for the
-    relay-server lane; `DirectoryHeal.cfg` then drops `TwoStep`.
+    relay-server lane; `DirectoryHeal.cfg` then drops `TwoStep`. The
+    delete half is closed by finding 47 (`Cache.DelIf`; mutant
+    `delete-get-del`); the renew half stays open as above.
 39. **An older session's primary that registered last took the agent's
     new sessions on its replica** (code, low; relay-server
     `spec/README.md` finding R9, lane XREPO3). Found by
@@ -2013,6 +2035,25 @@ relay link connection never outlives every primary holding its token.
     A, then B before B's session registered) and answered offline
     (`TestSiteHostReadsTheRecordOnce`,
     `TestSiteRecheckPassesAMovedAgentsVisitOn` there).
+47. **A read's prune and a session's end removed a live record's index
+    entry** (code, fixed; low; lane NF1INDEX, 2026-11-14, nfltr
+    `docs/decisions/nf1-index-atomic-2026-11-14.md`). The index sets
+    beside the records (`inventory:nf1:<rid>`, the `<svc>@<group>` set,
+    the active set) were pruned at read by a GET of the member's record
+    and a later SREM: a claim landing between them left a live record
+    whose agent no index named (its nf1 address answered "not served"
+    until its next renewal). `DeleteSession` was a GET and later SREMs and
+    a DEL (finding 38's delete half, relay-server finding 1b), and
+    `PutSession` a SET and later SADDs. Model: `Directory.tla` `idx`,
+    `Prune`, `IndexComplete` (mutant `prune-get-srem`, 6 states deep;
+    `delete-get-del` breaks `DeleteOwn`, 5 states). Fixed: `directory.Cache`
+    has `SetAdd` (the record and its set entries in one step) and `DelIf`
+    (check and delete in one step; relay-server's Redis: WATCH, then
+    MULTI/EXEC); `PutSession`, `DeleteSession`, `DeleteIPs` and every
+    prune use them. Guards `TestIndexStepsAreAtomic` (deterministic
+    interleavings), `directorytest.RunIndexRaces` (`TestIndexRacesMemory`;
+    relay-server runs it on Redis), `TestDirectoryModelWalks` (`idx`).
+    Finding 38's renew half stays (documented, heals).
 
 ## Agent-to-agent calls (relay spec/CallCredit.tla)
 

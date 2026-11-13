@@ -130,13 +130,10 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 		Account:      s.Account,
 		Services:     s.Services,
 	}
-	if _, err := d.inventory.Set(ctx, key, value, expiration); err != nil {
-		return err
-	}
-	if _, err := d.inventory.SAdd(ctx, d.activeAgentSetKey(), agentID); err != nil {
-		return err
-	}
-	return d.indexSession(ctx, agentID, s, true) // a renewal restores what a restarted store lost
+	// The record and its set entries in one step, so no reader finds the
+	// record without them (spec/README.md finding 47); a renewal restores
+	// what a restarted store lost.
+	return d.inventory.SetAdd(ctx, key, value, expiration, agentID, d.sessionSets(s)...)
 }
 
 // DeleteSession removes the agent's record when it names this pod's
@@ -148,26 +145,17 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 func (d *ipInventory) DeleteSession(ctx context.Context, agentID string, s Session) error {
 	ctx, cancel := context.WithTimeout(ctx, d.opTimeout)
 	defer cancel()
-	// ponytail: get-then-delete, not atomic; a claim landing between the
-	// two is deleted (relay-server spec/README.md finding 1b), until the
-	// store compares and deletes in one step.
-	key := d.getCacheKey(agentID)
-	v, err := d.inventory.Get(ctx, key)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return err // the record may stay: the caller's release failed (relay-core spec/README.md finding 27)
-	}
-	// A record without a session here (a renewal by SetIP: the relay's own
-	// agent) is deleted by its pod, as DeleteIPs does.
-	if v == nil || v.PodIP != GetPodIP() || ((v.Seq != 0 || v.Since != 0) && (v.Seq != s.Seq || !recordSession(v).Since.Equal(s.Since))) {
-		return nil // gone, or another session's
-	}
-	if _, err := d.inventory.SRem(ctx, d.activeAgentSetKey(), agentID); err != nil {
-		return err
-	}
-	if err := d.indexSession(ctx, agentID, s, false); err != nil {
-		return err
-	}
-	_, err = d.inventory.Del(ctx, key)
+	// The check and the delete are one store step (Cache.DelIf): a claim
+	// landing meanwhile is kept, with its set entries (relay-server
+	// spec/README.md finding 1b; spec/README.md findings 38, 47). An error
+	// leaves the record: the caller's release failed (finding 27).
+	self := GetPodIP()
+	_, err := d.inventory.DelIf(ctx, d.getCacheKey(agentID), func(v *Value) bool {
+		// A record without a session here (a renewal by SetIP: the relay's
+		// own agent) is deleted by its pod, as DeleteIPs does; another
+		// session's, here or on another pod, is kept.
+		return v != nil && v.PodIP == self && (v.Seq == 0 && v.Since == 0 || v.Seq == s.Seq && recordSession(v).Since.Equal(s.Since))
+	}, agentID, d.sessionSets(s)...)
 	return err
 }
 

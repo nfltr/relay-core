@@ -228,6 +228,26 @@ func (m *MockCache) Ping(_ context.Context) (string, error) {
 	return "PONG", m.Err
 }
 
+// SetAdd is Set (counted); its set operations do nothing.
+func (m *MockCache) SetAdd(ctx context.Context, key string, value directory.Value, exp time.Duration, _ string, _ ...string) error {
+	_, err := m.Set(ctx, key, value, exp)
+	return err
+}
+
+// DelIf deletes key when match holds for its record.
+func (m *MockCache) DelIf(_ context.Context, key string, match func(*directory.Value) bool, _ string, _ ...string) (bool, error) {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+	if m.Err != nil {
+		return false, m.Err
+	}
+	if !match(m.Data[key]) {
+		return false, nil
+	}
+	delete(m.Data, key)
+	return true, nil
+}
+
 // SAdd does nothing.
 func (m *MockCache) SAdd(_ context.Context, _ string, _ ...string) (int64, error) {
 	m.Mu.Lock()
