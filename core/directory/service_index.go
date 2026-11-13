@@ -54,7 +54,7 @@ func (d *ipInventory) serviceKeys(s Session) []string {
 
 // indexSession adds (add) or removes agentID in the index sets of s.
 func (d *ipInventory) indexSession(ctx context.Context, agentID string, s Session, add bool) error {
-	for _, key := range d.serviceKeys(s) {
+	for _, key := range append(d.serviceKeys(s), d.nf1Keys(s)...) {
 		op := d.inventory.SRem
 		if add {
 			op = d.inventory.SAdd

@@ -14,6 +14,7 @@ import (
 	"github.com/nfltr/relay-core/core/directory"
 	"github.com/nfltr/relay-core/core/identity"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
+	"github.com/nfltr/relay/proto/wire/agentservices"
 )
 
 // Open's answers, typed: a frontend tells them apart with errors.Is and
@@ -50,6 +51,14 @@ type Target struct {
 	// the instances not to pick (pb.TCPData.exclude): agent refs or
 	// machine names.
 	Exclude []string
+	// NF1, non-zero, is a capability address's rendezvous id
+	// (pb.TCPData.nf1_rid): the open names no Agent or Service and is
+	// routed to the one live agent whose declaration carries it (nf1.go).
+	NF1 [agentservices.RIDSize]byte
+	// Admit, on an NF1 open, admits it once its agent is known, before the
+	// agent is dialled (the caps of the decision's section 4): release
+	// frees what it counted, or err refuses the open.
+	Admit func(agentID string) (release func(), err error)
 }
 
 // Reach is the access rule and target resolution the composition sets
@@ -139,6 +148,9 @@ type Opened struct {
 func (c *Core) Open(ctx context.Context, caller identity.Principal, t Target) (Opened, error) {
 	if c.TCPDispatcher == nil || c.Reach == nil {
 		return Opened{}, &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_FEATURE_UNSUPPORTED, Msg: "TCP tunneling is not enabled (set tcp.enabled=true)", AgentID: t.Agent}
+	}
+	if t.NF1 != ([agentservices.RIDSize]byte{}) {
+		return c.openNF1(ctx, t)
 	}
 	if a, _ := ParseAgentAddress(t.Agent); a.Group != "" {
 		return c.openService(ctx, caller, t)

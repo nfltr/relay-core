@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/identity"
@@ -45,6 +46,9 @@ type Config struct {
 	Enabled             bool // ssh.proxy.enabled or tcp.enabled
 	MinClientGeneration int  // clientgen.Min
 	E2EEPolicy          string
+	// NF1 serves capability addresses (nf1.enabled): an upgrade with no
+	// credential is a data connection that opens nf1 sessions only (nf1.go).
+	NF1 bool
 }
 
 // Frontend serves /connect/ (ServeHTTP) on the composition's HTTP server.
@@ -67,6 +71,9 @@ type Frontend struct {
 	// Clients are the data connections served here, drained when the relay
 	// leaves (drain.go).
 	Clients Clients
+
+	nf1Once sync.Once
+	nf1     nf1Limits // nf1.go
 }
 
 // ServeHTTP serves a /connect/ request: a data connection, or one
@@ -110,6 +117,16 @@ func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, identity.ErrMachineNotEnrolled) {
 		relaystatus.WriteHTTP(w, http.StatusUnauthorized, codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED, err.Error()) // says how to enrol
+		return
+	}
+	if caller.Provider == "" && cfg.NF1 && dataplane.IsUpgrade(r) && r.URL.Path == dataplane.UpgradePath {
+		release, ok := f.admitAnonymous(r)
+		if !ok {
+			relaystatus.WriteHTTP(w, http.StatusTooManyRequests, codes.ResourceExhausted, relayv1.ErrorReason_ERROR_REASON_LIMIT_EXCEEDED, "nf1: too many connections from this address")
+			return
+		}
+		defer release()
+		f.serveData(w, r, caller, cfg)
 		return
 	}
 	if caller.Provider == "" {

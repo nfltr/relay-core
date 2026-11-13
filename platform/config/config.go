@@ -375,6 +375,20 @@ func SetDefaultFlags() {
 	_ = flag.Float64("security.conn_limit.per_ip_handshake_packet_rate", 50, "of those, QUIC long-header datagrams (handshakes, 3 to 8 per connection, more when a slow or lossy path retransmits; version negotiation) a second one source may send: each Initial with a new connection ID makes the relay hold a half-open handshake (~70 KB) until its timeout (15 s), so this bounds a source's (0 = no limit)")
 	_ = flag.Int("security.conn_limit.per_ip_handshake_packet_burst", 1000, "burst of security.conn_limit.per_ip_handshake_packet_rate (125 to 330 handshakes at once: agents behind one NAT reconnecting; retransmissions spend tokens the rate refills)")
 
+	// ── Capability addresses (nf1...) ───────────────────────────────────
+	// Clients with no credential open the one service an address names
+	// (nfltr docs/decisions/nf1-rendezvous-2026-11-13.md); the serving
+	// agent's owner pays. Limits per replica; 0 turns a limit off.
+	_ = flag.Bool("nf1.enabled", false, "serve capability addresses (nf1...): data connections with no credential, which open nf1 sessions only")
+	_ = flag.Int("nf1.source_max", 16, "open data connections with no credential from one source address")
+	_ = flag.Float64("nf1.source_rate", 2, "new data connections with no credential a second from one source address")
+	_ = flag.Int("nf1.source_burst", 10, "burst of nf1.source_rate")
+	_ = flag.Float64("nf1.open_rate", 5, "nf1 opens a second from one source address, before the address is looked up")
+	_ = flag.Int("nf1.open_burst", 20, "burst of nf1.open_rate")
+	_ = flag.Int("nf1.address_max", 64, "open sessions of one capability address")
+	_ = flag.Float64("nf1.address_rate", 10, "new sessions a second of one capability address")
+	_ = flag.Int("nf1.address_burst", 20, "burst of nf1.address_rate")
+
 	// ── Admin API ───────────────────────────────────────────────────────
 	_ = flag.String("admin.message", "", "admin message displayed to agents on connect and on the landing page (empty = no message)")
 

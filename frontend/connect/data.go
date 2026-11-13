@@ -50,7 +50,7 @@ func (f *Frontend) serveData(w http.ResponseWriter, r *http.Request, caller iden
 	// session typed (ERROR_REASON_UNAUTHENTICATED), then the data
 	// connection (revocation.go).
 	var open sessionSet
-	if f.Hold != nil {
+	if f.Hold != nil && caller.Provider != "" { // a connection with no credential holds none
 		if held, release, ok := f.Hold(r.Context(), caller); ok {
 			defer release()
 			stop := context.AfterFunc(held, func() {
@@ -65,7 +65,14 @@ func (f *Frontend) serveData(w http.ResponseWriter, r *http.Request, caller iden
 	}
 	_ = m.Serve(func(req *pb.TCPData, s *dataplane.Session) {
 		open.add(s) // the session outlives this call: its join runs on
-		f.serveSession(r, caller, req, s)
+		switch {
+		case len(req.GetNf1Rid()) > 0:
+			f.serveNF1Session(r, req, s, cfg.NF1)
+		case caller.Provider == "": // a data connection with no credential opens nf1 sessions only
+			_ = s.AbortWith(dataplane.Refusal(relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED, "authentication required"))
+		default:
+			f.serveSession(r, caller, req, s)
+		}
 	})
 }
 

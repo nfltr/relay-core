@@ -12,6 +12,15 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Capability addresses (`nf1...`, nfltr
+  `docs/decisions/nf1-rendezvous-2026-11-13.md`): `session.Target.NF1`
+  (and `Target.Admit`) opens the one live agent whose service declaration
+  carries the rendezvous id (`directory.NF1Index`, kept beside the records
+  like the service index); `connect.Config.NF1` makes an upgrade with no
+  credential a data connection that opens `nf1` sessions only, under the
+  `nf1.*` caps (per source, per address, then the serving account's
+  visitor limits); `session.NF1NotServed` is the one answer for an unknown,
+  offline or doubly declared address. Off by default (`nf1.enabled`).
 - `platform/filewatch` (was internal): `Watch` calls back when a file
   changes (its directory watched, event-driven, `Settle`), and `Add`
   watches a directory with an fsnotify watcher without failing when an

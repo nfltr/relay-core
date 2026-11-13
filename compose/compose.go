@@ -123,7 +123,7 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 	}
 	auth := identity.NewAuthenticator(providers[0].Name(), providers...)
 	front := &connect.Frontend{Core: c, Logger: logger, Config: func() connect.Config {
-		return connect.Config{Enabled: viper.GetBool("tcp.enabled"), MinClientGeneration: clientgen.Min(), E2EEPolicy: rules.E2EEPolicy}
+		return connect.Config{Enabled: viper.GetBool("tcp.enabled"), MinClientGeneration: clientgen.Min(), E2EEPolicy: rules.E2EEPolicy, NF1: viper.GetBool("nf1.enabled")}
 	}}
 	front.Caller = func(r *http.Request) (identity.Principal, error) {
 		p, _, err := connect.RequestPrincipal(auth, r, identity.Credential{})
