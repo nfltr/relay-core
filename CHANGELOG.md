@@ -22,7 +22,7 @@ changes listed (from the first tag on).
 - An agent's declaration of a capability address (`nf1=` in
   `agentservices.Header`) is taken only with its server key's
   registration proof (`agentservices.RegHeader`, relay
-  `capaddr.CheckRegistration`) for one of `nf1.hosts`; otherwise the
+  `agentservices.CheckRegistration`) for one of `nf1.hosts`; otherwise the
   agent's ConnectHTTP is refused InvalidArgument (a hard cut: addresses
   minted before relay client v0.21.36, whose rid is not bound to the key,
   are refused; nfltr docs/decisions/nf1-risks-2026-11-14.md, spec

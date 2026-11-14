@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	"github.com/nfltr/relay-core/core/directory"
-	"github.com/nfltr/relay/client/capaddr"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -65,7 +64,7 @@ func checkRegistrations(ctx context.Context, decls []agentservices.Decl, hosts [
 		if !ok {
 			return status.Errorf(codes.InvalidArgument, "service %s: its capability address comes with no registration proof (%s): update nfltr, and mint the address again (--new-address)", d.Name, agentservices.RegHeader)
 		}
-		if !slices.ContainsFunc(hosts, func(h string) bool { return capaddr.CheckRegistration(h, d.NF1, proof) == nil }) {
+		if !slices.ContainsFunc(hosts, func(h string) bool { return agentservices.CheckRegistration(h, d.NF1, proof) == nil }) {
 			return status.Errorf(codes.InvalidArgument, "service %s: its capability address's registration proof does not hold at this relay (%s): an address minted before this relay's release, or for another relay, needs --new-address", d.Name, agentservices.RegHeader)
 		}
 	}

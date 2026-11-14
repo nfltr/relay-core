@@ -738,7 +738,7 @@ claim first and falls back to the next when a dial finds the agent gone.
 
 | action | Go |
 |---|---|
-| `Claim(a)`, `Accepts(a)` | `ClaimSession`/`PutSession` of an agent whose declaration carries `nf1=`: the relay's registration proof check (`checkRegistrations`: `agentservices.ParseReg`, `capaddr.CheckRegistration` for one of `nf1.hosts`), then `Cache.SetAdd` (record and index member, one step) |
+| `Claim(a)`, `Accepts(a)` | `ClaimSession`/`PutSession` of an agent whose declaration carries `nf1=`: the relay's registration proof check (`checkRegistrations`: `agentservices.ParseReg`, `agentservices.CheckRegistration` for one of `nf1.hosts`), then `Cache.SetAdd` (record and index member, one step) |
 | `End(a)`, `Gone(a)` | `DeleteSession` (`Cache.DelIf` on its own session) |
 | `Expire(a)` | the record's TTL |
 | `Prune(a)` | `NF1Agents`'s prune (`ipInventory.prune`, `Cache.DelIf` on no record) |
