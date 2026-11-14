@@ -1,3 +1,11 @@
+Incompatible changes:
+- ./core/directory.Cache.DelIf: added
+- ./core/directory.Cache.SetAdd: added
 Compatible changes:
+- ./core/directory.(*MemoryCache).DelIf: added
+- ./core/directory.(*MemoryCache).SetAdd: added
+- ./core/session/sessiontest/fake.(*MockCache).DelIf: added
+- ./core/session/sessiontest/fake.(*MockCache).SetAdd: added
 - ./platform/metrics.PathPublicTCP: added
+- package github.com/nfltr/relay-core/core/directory/directorytest: added
 - package github.com/nfltr/relay-core/frontend/publictcp: added

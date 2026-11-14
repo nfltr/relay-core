@@ -162,6 +162,16 @@ changes listed (from the first tag on).
 
 ### Changed (breaking)
 
+- `directory.Cache` has two compound steps (nfltr
+  `docs/decisions/nf1-index-atomic-2026-11-14.md`; spec/README.md finding
+  47): `SetAdd` (write a record and add a member to sets, in one step) and
+  `DelIf` (when a predicate holds for the record, remove a member from
+  sets and delete the record, in one step). `PutSession`, `DeleteSession`,
+  `DeleteIPs` and the index reads' prunes use them, so a claim landing
+  between a read and its write is no longer lost (relay-server finding 1b).
+  Migration: a `Cache` implementation adds both (Redis: MULTI/EXEC for
+  `SetAdd`; WATCH, GET, then MULTI/EXEC for `DelIf`); run
+  `directorytest.RunIndexRaces` (new) against it.
 - Names resolve once at the edge (TENANTS3; relay-server spec/Reach.tla
   `Dial`, `DialOwn`, `BareNameIsOwnMachine`): `session.ParseAgentAddress`
   is the one parser of an agent address (a ref; a bare service, the
