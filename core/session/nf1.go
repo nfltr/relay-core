@@ -64,11 +64,11 @@ func (c *Core) openNF1(ctx context.Context, t Target) (Opened, error) {
 		}
 	}
 	retries, interval := c.DialPolicy()
-	ep := TCPEndpoint{AgentID: agentID, TargetAddr: decl.Name, E2EE: true, Answer: t.Answer}
+	ep := TCPEndpoint{AgentID: agentID, TargetAddr: decl.Target(), E2EE: true, Answer: t.Answer}
 	s, done, err := c.TCPDispatcher.OnwardWithRetry(route, ep, retries, interval)
 	if err != nil {
 		release()
-		return Opened{}, &DialError{AgentID: agentID, TargetAddr: decl.Name, Err: fmt.Errorf("nf1: %w", err)}
+		return Opened{}, &DialError{AgentID: agentID, TargetAddr: decl.Target(), Err: fmt.Errorf("nf1: %w", err)}
 	}
 	return Opened{Session: s, AgentID: agentID, Release: func() {
 		if done != nil {

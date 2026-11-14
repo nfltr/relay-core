@@ -352,3 +352,44 @@ func TestPresenceUpReadsCurrentHealth(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveDatagramTarget (nfltr docs/decisions/nf1-udp-2026-11-14.md
+// section 2): a udp service's session target (dns+udp) routes to the
+// instances publishing that name as udp, by name or by the agent's ref; a
+// name alone is its stream service; an agent without the udp service
+// answers UNKNOWN_SERVICE.
+func TestResolveDatagramTarget(t *testing.T) {
+	d := newServiceDispatcher(t, AccountIsOneGroup{})
+	d.TCPDispatcher = NewTCPDispatcher(slog.New(slog.DiscardHandler), nil, nil)
+	both := publish(t, d, "a", serviceOwner, "dns=tcp+e2ee;group=g,dns=udp+e2ee;group=g", nil)
+	tcpOnly := publish(t, d, "b", serviceOwner, "dns=tcp+e2ee;group=g", nil)
+	caller := machinePrincipal("caller", serviceOwner)
+	resolve := func(agent, service string) (string, string, error) {
+		return d.ResolveTarget(t.Context(), caller, d.DialReaches(caller), Target{Agent: agent, Service: service, E2EE: true}, TargetRules{})
+	}
+	seen := map[string]bool{}
+	for range 40 {
+		got, addr, err := resolve("dns@g", "dns+udp")
+		if err != nil || got != both || addr != "dns+udp" {
+			t.Fatalf("dns@g udp: %q %q %v; want %s's dns+udp", got, addr, err, both)
+		}
+		got, addr, err = resolve("dns@g", "")
+		if err != nil || addr != "dns" {
+			t.Fatalf("dns@g: %q %q %v; want dns", got, addr, err)
+		}
+		seen[got] = true
+	}
+	if !seen[both] || !seen[tcpOnly] {
+		t.Fatalf("dns@g stream picked %v; want both instances", seen)
+	}
+	if got, addr, err := resolve(both, "dns+udp"); err != nil || got != both || addr != "dns+udp" {
+		t.Fatalf("by ref: %q %q %v", got, addr, err)
+	}
+	var r *Refusal
+	if _, _, err := resolve(tcpOnly, "dns+udp"); !errors.As(err, &r) || r.Reason != relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE {
+		t.Fatalf("tcp-only agent's dns+udp: %v, want UNKNOWN_SERVICE", err)
+	}
+	if _, _, err := resolve("dns@g", "web+udp"); !errors.As(err, &r) || r.Reason != relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT {
+		t.Fatalf("another udp service in the target: %v, want INVALID_ARGUMENT", err)
+	}
+}

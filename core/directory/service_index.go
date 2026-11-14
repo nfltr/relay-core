@@ -30,7 +30,8 @@ var _ ServiceIndex = (*ipInventory)(nil)
 // service are DNS labels, so the account (which may hold any byte) comes
 // last.
 func (d *ipInventory) serviceKey(account, group, service string) string {
-	return "inventory:svc:" + d.getCacheKey("") + group + "/" + service + "/" + account
+	name, _ := agentservices.SplitTarget(service) // one set per name: publishes checks the kind
+	return "inventory:svc:" + d.getCacheKey("") + group + "/" + name + "/" + account
 }
 
 // serviceKeys are the index sets session s's declaration belongs to (none

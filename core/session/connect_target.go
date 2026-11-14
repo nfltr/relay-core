@@ -36,6 +36,9 @@ func (d *Dispatcher) ResolveTarget(ctx context.Context, caller identity.Principa
 	agent, refusal := d.ResolveAgent(caller, t.Agent)
 	if a, _ := ParseAgentAddress(t.Agent); a.Group != "" {
 		if refusal = checkServiceTarget(a, t.Service); refusal == nil {
+			if t.Service == agentservices.DatagramTarget(a.Service) {
+				a.Service = t.Service // its udp service: instances publishing that kind
+			}
 			agent, refusal = d.ResolveService(ctx, caller, reaches, a, t.Exclude)
 		}
 		t.Service = a.Service
@@ -88,9 +91,10 @@ func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bo
 		return refuse(relayv1.ErrorReason_ERROR_REASON_AGENT_NOT_FOUND, "agent not found")
 	}
 	noTCP := d == nil || d.TCPDispatcher == nil
-	// A service name in place of the port: the owner's session to that
-	// service of the agent.
-	if agentservices.ValidName(port) {
+	// A service name in place of the port (agentservices.ValidTarget: a
+	// stream service's name, or a udp service's DatagramTarget): the
+	// owner's session to that service of the agent.
+	if agentservices.ValidTarget(port) {
 		if noTCP {
 			return refuse(relayv1.ErrorReason_ERROR_REASON_FEATURE_UNSUPPORTED, "TCP tunneling is not enabled (set tcp.enabled=true)")
 		}
@@ -125,15 +129,16 @@ func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bo
 
 // connectService resolves the owner's session to agentID's service: the
 // agent must be connected (on any replica: a session entering another
-// replica goes over the replica link) and declare a tcp service of that
-// name.
+// replica goes over the replica link) and declare the tcp or udp service
+// the target names (a name: its tcp service; a DatagramTarget: its udp
+// one), so one name declared as both routes by kind.
 func (d *Dispatcher) connectService(agentID, service string) *Refusal {
 	services, connected := d.AgentServices(agentID)
 	switch {
 	case !connected:
 		return &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE, Msg: fmt.Sprintf("agent %s is not connected", agentID), AgentID: agentID}
-	case agentservices.Lookup(services, service) != agentservices.TCP:
-		return &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE, Msg: fmt.Sprintf("agent %s has no tcp service %q", agentID, service), AgentID: agentID}
+	case !agentservices.Lookup(services, service).Sessions():
+		return &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE, Msg: fmt.Sprintf("agent %s has no tcp or udp service %q", agentID, service), AgentID: agentID}
 	}
 	return nil
 }
@@ -142,7 +147,7 @@ func (d *Dispatcher) connectService(agentID, service string) *Refusal {
 // port, or a service of agentID's declaration).
 func (d *Dispatcher) e2eeAnswer(agentID, target string, e2ee bool, rules TargetRules) (relayv1.ErrorReason, string) {
 	var svc *agentservices.Decl
-	if agentservices.ValidName(target) {
+	if agentservices.ValidTarget(target) {
 		services, _ := d.AgentServices(agentID)
 		if decl, ok := agentservices.Find(services, target); ok {
 			svc = &decl

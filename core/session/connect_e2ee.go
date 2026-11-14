@@ -18,7 +18,7 @@ import (
 // at startup.
 func CheckServicesE2EE(decls []agentservices.Decl, policy string) error {
 	for _, d := range decls {
-		if d.Kind != agentservices.TCP {
+		if !d.Kind.Sessions() {
 			continue
 		}
 		switch {
@@ -40,7 +40,7 @@ func CheckServicesE2EE(decls []agentservices.Decl, policy string) error {
 func plainServices(decls []agentservices.Decl, policy string) ([]agentservices.Decl, error) {
 	out := slices.Clone(decls)
 	for i, d := range out {
-		if d.Kind != agentservices.TCP || d.E2EE != agentservices.E2EEDefault {
+		if !d.Kind.Sessions() || d.E2EE != agentservices.E2EEDefault {
 			continue
 		}
 		if policy == config.E2EERequire {
@@ -77,7 +77,7 @@ func ResolveServicesE2EE(decls []agentservices.Decl, policy string, def bool) []
 	}
 	out := make([]agentservices.Decl, len(decls))
 	for i, d := range decls {
-		if d.Kind == agentservices.TCP {
+		if d.Kind.Sessions() {
 			on := ServiceE2EE(d, policy, def)
 			d.E2EE = agentservices.E2EEOff
 			if on {
