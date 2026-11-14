@@ -229,18 +229,14 @@ func (d *ipInventory) ListAgentRecords(ctx context.Context) ([]AgentRecord, erro
 		return nil, err
 	}
 	records := make([]AgentRecord, 0, len(agentIDs))
-	var stale, podless []string
+	var stale []string
 	for _, agentID := range agentIDs {
 		value, err := d.inventory.Get(ctx, d.getCacheKey(agentID))
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
-		if value == nil {
+		if value == nil || value.PodIP == "" {
 			stale = append(stale, agentID)
-			continue
-		}
-		if value.PodIP == "" {
-			podless = append(podless, agentID)
 			continue
 		}
 		podIP := value.PodIP
@@ -254,12 +250,10 @@ func (d *ipInventory) ListAgentRecords(ctx context.Context) ([]AgentRecord, erro
 			Capabilities: cloneStringSlice(value.Capabilities),
 		})
 	}
-	err = d.prune(ctx, d.activeAgentSetKey(), stale)
-	if err == nil && len(podless) > 0 {
-		_, err = d.inventory.SRem(ctx, d.activeAgentSetKey(), podless...)
-	}
-	if err != nil {
-		d.logger.Warn("failed to prune stale active inventory members", "count", len(stale)+len(podless), "error", err)
+	// A member with no record or a podless one: the check and the removal
+	// in one store step, so a claim landing meanwhile keeps its entry.
+	if err := d.prune(ctx, d.activeAgentSetKey(), stale, func(v *Value) bool { return v == nil || v.PodIP == "" }); err != nil {
+		d.logger.Warn("failed to prune stale active inventory members", "count", len(stale), "error", err)
 	}
 	return records, nil
 }

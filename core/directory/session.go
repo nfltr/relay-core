@@ -61,11 +61,14 @@ type SessionStore interface {
 	// address for this pod) and its session; a record an older relay wrote
 	// has a zero Session.
 	GetSession(ctx context.Context, agentID string) (podIP string, s Session, err error)
-	// PutSession writes the agent's record for this pod's session s. With
-	// renew it first reads the record and writes nothing, returning
-	// ErrSuperseded, when the record names another pod's session that is
-	// newer than s (Session.Newer), or there is none and the agent's Seq
-	// counter is past s's.
+	// PutSession writes the agent's record for this pod's session s.
+	// Without renew (a claim) it writes nothing over a later claim's
+	// record (a larger Seq). With renew it writes nothing over a newer
+	// session's record (Session.Newer), returning ErrSuperseded when that
+	// record names another pod, and writes nothing, returning
+	// ErrSuperseded, when there is no record and the agent's Seq counter is
+	// past s's. The check and the write are one store step
+	// (Cache.SetAddIf).
 	PutSession(ctx context.Context, agentID string, s Session, renew bool, labels map[string]string, capabilities []string, expiration time.Duration) error
 	// ClaimSession starts this pod's session s of the agent: it takes the
 	// agent's next Seq and writes the record (PutSession without renew).
@@ -96,30 +99,6 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 	ctx, cancel := context.WithTimeout(ctx, d.opTimeout)
 	defer cancel()
 	key := d.getCacheKey(agentID)
-	if renew {
-		// ponytail: get-then-set, not atomic; a session that loses the
-		// microsecond race is corrected by the newer one's next renewal.
-		v, err := d.inventory.Get(ctx, key)
-		if err == nil && v != nil && recordSession(v).Newer(s) {
-			if v.PodIP != GetPodIP() {
-				return ErrSuperseded
-			}
-			// A newer session of the agent here holds it: write nothing
-			// (lowering the Seq would let this one's DeleteSession take it).
-			return nil
-		}
-		// No record, but the agent's counter went past this session's
-		// Seq: a newer session claimed it and has ended. Writing it back
-		// would list the agent again with nothing announcing it
-		// (relay-core spec/README.md finding 13); this session ends and
-		// the agent's reconnect claims anew. A record without a Seq (a
-		// session whose claim got none) does not hide the counter (finding 37).
-		if (errors.Is(err, ErrNotFound) || err == nil && (v == nil || v.Seq == 0)) && s.Seq != 0 {
-			if n, err := d.inventory.Incr(ctx, seqKey(key), 0, seqTTL); err == nil && n > s.Seq {
-				return ErrSuperseded
-			}
-		}
-	}
 	value := Value{
 		PodIP:        GetPodIP(),
 		Labels:       cloneStringMap(labels),
@@ -130,10 +109,42 @@ func (d *ipInventory) PutSession(ctx context.Context, agentID string, s Session,
 		Account:      s.Account,
 		Services:     s.Services,
 	}
-	// The record and its set entries in one step, so no reader finds the
-	// record without them (spec/README.md finding 47); a renewal restores
-	// what a restarted store lost.
-	return d.inventory.SetAdd(ctx, key, value, expiration, agentID, d.sessionSets(s)...)
+	// The checks, the record and its set entries in one store step: no
+	// claim lands between the checks and the write (relay-server
+	// spec/README.md findings 2 and 3, spec/README.md finding 38), and no
+	// reader finds the record without its set entries (finding 47). A
+	// renewal restores what a restarted store lost.
+	superseded := false
+	match := func(v *Value, n int64) bool {
+		superseded = false
+		if !renew {
+			// A claim writes over any record but a later claim's (two
+			// claims racing: relay-server finding 2).
+			return v == nil || s.Seq == 0 || v.Seq <= s.Seq
+		}
+		if v != nil && recordSession(v).Newer(s) {
+			// A newer session's record: another pod's supersedes this one;
+			// on this pod, write nothing (lowering the Seq would let this
+			// one's DeleteSession take it).
+			superseded = v.PodIP != GetPodIP()
+			return false
+		}
+		// No record, but the agent's counter went past this session's
+		// Seq: a newer session claimed it and has ended. Writing it back
+		// would list the agent again with nothing announcing it (finding
+		// 13); this session ends and the agent's reconnect claims anew. A
+		// record without a Seq (a session whose claim got none) does not
+		// hide the counter (finding 37).
+		superseded = (v == nil || v.Seq == 0) && s.Seq != 0 && n > s.Seq
+		return !superseded
+	}
+	if _, err := d.inventory.SetAddIf(ctx, key, seqKey(key), match, value, expiration, agentID, d.sessionSets(s)...); err != nil {
+		return err
+	}
+	if superseded {
+		return ErrSuperseded
+	}
+	return nil
 }
 
 // DeleteSession removes the agent's record when it names this pod's

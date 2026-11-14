@@ -253,7 +253,7 @@ func (failIncr) Incr(context.Context, string, int64, time.Duration) (int64, erro
 // The replay is not vacuous: a store with the bugs the model's mutants put
 // back diverges from some walk. sharedCounter is finding 34 (one Seq
 // counter for both records); blindCounter finding 13 (a renewal that
-// finds no record cannot see the counter).
+// finds no record does not read the counter).
 type bugCache struct {
 	Cache
 	sharedCounter, blindCounter bool
@@ -271,10 +271,14 @@ func (b bugCache) Get(ctx context.Context, k string) (*Value, error) {
 }
 
 func (b bugCache) Incr(ctx context.Context, k string, by int64, ttl time.Duration) (int64, error) {
-	if b.blindCounter && by == 0 {
-		return 0, nil
-	}
 	return b.Cache.Incr(ctx, b.mapKey(k), by, ttl)
+}
+
+func (b bugCache) SetAddIf(ctx context.Context, key, ctr string, match func(*Value, int64) bool, v Value, exp time.Duration, member string, sets ...string) (bool, error) {
+	if b.blindCounter {
+		ctr = ""
+	}
+	return b.Cache.SetAddIf(ctx, key, b.mapKey(ctr), match, v, exp, member, sets...)
 }
 
 func TestDirectoryModelWalksCatchPlantedBugs(t *testing.T) {

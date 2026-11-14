@@ -8,9 +8,13 @@
 (* newer session's record on another pod, writes nothing under a newer    *)
 (* one on its own pod, and yields when there is no record but the counter  *)
 (* is past its Seq (finding 13); a session's end deletes the record only   *)
-(* while it names that session. Every store call is atomic; the            *)
-(* get-then-set and get-then-delete windows (ponytail comments) are        *)
-(* relay-server Replicas.tla's (its finding 1b). A record may lapse (its   *)
+(* while it names that session. Every store call is atomic; a renewal's   *)
+(* reads (the record, the Seq counter) and its write are one store step    *)
+(* (Cache.SetAddIf: relay-server findings 2 and 3, relay-core finding 38), *)
+(* as is a session's end (Cache.DelIf, finding 47). A claim's write is     *)
+(* conditional too (never over a newer session's record); here a claim's  *)
+(* Seq and write are one step, so it always writes: relay-server           *)
+(* Replicas.tla splits them (ClaimIncr, ClaimSet). A record may lapse (its *)
 (* TTL past a late renewal) and, with Loss, the store may restart empty    *)
 (* once, losing the counters too (relay-server finding R7).                *)
 (* The dispatcher's record ("d") declares a service under an nf1           *)
@@ -33,7 +37,6 @@ CONSTANTS Pods,    \* replicas, as strings ("p1")
           MaxSess, \* claims in a behaviour
           Loss,    \* the store may restart empty once
           NoSeq,   \* a claim may get no Seq (ClaimNoSeq)
-          TwoStep, \* renew and delete as a GET, then a SET or DEL (a race)
           Mutant   \* "none", or a bug put back (spec/README.md)
 
 VARIABLES
@@ -43,7 +46,7 @@ VARIABLES
     w,     \* key -> the session the record was last written for; 0 once it lapsed or was lost
     lost,  \* the store restarted empty
     act,   \* the last step, for the walks and the witnesses
-    pr,    \* TwoStep: the GETs whose SET or DEL is still to come
+    pr,    \* mutants renew-get-set, delete-get-del, prune-get-srem: GETs whose write is to come
     idx    \* the agent is in its nf1 rid's index set
 
 vars == <<rec, ctr, sess, w, lost, act, pr, idx>>
@@ -135,7 +138,7 @@ RenewWith(i, r) ==
     /\ act' = [n |-> "Renew", p |-> "", k |-> "", i |-> i]
     /\ UNCHANGED <<ctr, lost>>
 
-Renew(i) == ~TwoStep /\ RenewWith(i, rec[sess[i].key]) /\ UNCHANGED pr
+Renew(i) == Mutant # "renew-get-set" /\ RenewWith(i, rec[sess[i].key]) /\ UNCHANGED pr
 
 \* The record r names session i as DeleteSession checks it: its pod and
 \* its session (Seq and start time; "seq-only" compares the Seq alone).
@@ -160,17 +163,16 @@ EndWith(i, r) ==
     /\ act' = [n |-> "End", p |-> "", k |-> "", i |-> i]
     /\ UNCHANGED <<ctr, w, lost>>
 
-End(i) == ~(TwoStep /\ Mutant = "delete-get-del") /\ EndWith(i, rec[sess[i].key]) /\ UNCHANGED pr
+End(i) == Mutant # "delete-get-del" /\ EndWith(i, rec[sess[i].key]) /\ UNCHANGED pr
 
-\* TwoStep (race:renew-get-set): PutSession's renew as the code does it, a
-\* GET and later a SET (its ponytail comment): another pod's claim can land
-\* between the two; spec.sh checks that the race breaks NoResurrect, so it
-\* is a known, documented window (finding 38). DeleteSession is one store
-\* step (Cache.DelIf, finding 47); "delete-get-del" puts back its GET then
-\* DEL (relay-server finding 1b).
+\* The code before its fixes, each a store step split in two: mutant
+\* "renew-get-set" is PutSession's renew as a GET and later a SET (finding
+\* 38, relay-server finding 3): another pod's claim lands between the two;
+\* "delete-get-del" is DeleteSession's GET then DEL (relay-server finding
+\* 1b, finding 47).
 Read(i, op) ==
-    /\ TwoStep /\ sess[i].st # "end" /\ (op = "renew" => sess[i].st = "live")
-    /\ (op = "end" => Mutant = "delete-get-del")
+    /\ sess[i].st # "end" /\ (op = "renew" => sess[i].st = "live")
+    /\ Mutant = IF op = "renew" THEN "renew-get-set" ELSE "delete-get-del"
     /\ ~\E x \in pr : x.i = i
     /\ pr' = pr \cup {[i |-> i, op |-> op, r |-> rec[sess[i].key]]}
     /\ act' = [n |-> "Read", p |-> "", k |-> "", i |-> i]
@@ -272,17 +274,19 @@ NoPingPong ==
 \* until a read prunes it: reads re-check the record.
 IndexComplete == rec["d"] # 0 => idx
 
-\* Witnesses: each must be violated (the state its invariant guards is reached).
-\* Under TwoStep the race loses a record, or writes an older session's
-\* over a newer one's, only until the agent's latest session renews: that
-\* renewal writes its own record (no store loss: TwoStep runs without one).
+\* The agent's latest session's renewal writes its own record
+\* (DirectoryHeal.cfg: no store loss, every session with a Seq).
 Latest(i) == sess[i].seq # 0 /\ \A j \in Sess : sess[j].key = sess[i].key => sess[j].seq <= sess[i].seq
 Heals == [][(act'.n = "Renew" /\ Latest(act'.i)) => rec'[sess[act'.i].key] = act'.i]_vars
 
+\* Witnesses: each must be violated (the state its invariant guards is reached).
 WitnessSuperseded == \A i \in Sess : sess[i].st # "sup"
 WitnessResurrectSetup ==
     ~\E i, j \in Sess : sess[i].key = sess[j].key /\ sess[i].st = "live" /\ sess[j].st = "end"
         /\ sess[j].seq > sess[i].seq /\ rec[sess[i].key] = 0
+\* A renewal finding a newer session's record keeps it (the state the
+\* renew-get-set race wrote over).
+WitnessRenewKeeps == ~(act.n = "Renew" /\ rec[sess[act.i].key] \notin {0, act.i})
 WitnessEndKeeps == ~(act.n = "End" /\ rec[sess[act.i].key] \notin {0, act.i})
 WitnessStaleMember == ~(rec["d"] = 0 /\ idx)
 WitnessTie ==

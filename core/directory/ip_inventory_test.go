@@ -87,14 +87,17 @@ func (m *mockCache) Incr(ctx context.Context, key string, by int64, ttl time.Dur
 	return m.counters[key], nil
 }
 
-func (m *mockCache) SetAdd(ctx context.Context, key string, value Value, exp time.Duration, member string, sets ...string) error {
+func (m *mockCache) SetAddIf(ctx context.Context, key, ctr string, match func(*Value, int64) bool, value Value, exp time.Duration, member string, sets ...string) (bool, error) {
+	if match != nil && !match(m.store[key], m.counters[ctr]) {
+		return false, nil
+	}
 	if _, err := m.Set(ctx, key, value, exp); err != nil {
-		return err
+		return false, err
 	}
 	for _, set := range sets {
 		_, _ = m.SAdd(ctx, set, member)
 	}
-	return nil
+	return true, nil
 }
 
 func (m *mockCache) DelIf(ctx context.Context, key string, match func(*Value) bool, member string, sets ...string) (bool, error) {

@@ -4,7 +4,8 @@
 // Package directorytest is a conformance suite for directory.Cache
 // implementations: the index sets beside the records (the nf1 rendezvous
 // index, the service and active sets) stay consistent with the records
-// under concurrent claims, deletes and read-side prunes (nfltr
+// under concurrent claims, deletes and read-side prunes, and the record
+// names the newest session under concurrent claims and renewals (nfltr
 // docs/decisions/nf1-index-atomic-2026-11-14.md; relay-core
 // spec/Directory.tla IndexComplete, DeleteOwn). Run it with -race.
 package directorytest
@@ -111,6 +112,58 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 		}
 	})
 
+	// The active set on a list's prune of a podless record: a claim
+	// landing between the list's read and its removal keeps its entry
+	// (ListAgentRecords; Directory.tla IndexComplete).
+	t.Run("podless prune races a claim", func(t *testing.T) {
+		c, inv := open(t)
+		for r := range Rounds {
+			rid, agent := RID(r), fmt.Sprintf("v%d", r)
+			claim(t, inv, agent, rid, t0)
+			podless(t, c, agent)
+			race(func() { listedAgent(t, inv, agent) }, func() { claim(t, inv, agent, rid, t0.Add(time.Second)) })
+			if !listedAgent(t, inv, agent) {
+				t.Fatalf("round %d: %s not listed with its record live", r, agent)
+			}
+		}
+	})
+
+	// The record names the newest session after its renewal and its next
+	// claim race (relay-server spec/README.md finding 3; spec/Directory.tla
+	// NoResurrect, mutant renew-get-set): the renewal's check and write are
+	// one store step.
+	t.Run("renewal races the next claim", func(t *testing.T) {
+		_, inv := open(t)
+		for r := range Rounds {
+			rid, agent := RID(r), fmt.Sprintf("z%d", r)
+			old := claim(t, inv, agent, rid, t0)
+			var next directory.Session
+			race(func() {
+				if err := inv.(directory.SessionStore).PutSession(ctx, agent, old, true, nil, nil, time.Minute); err != nil {
+					t.Error(err)
+				}
+			}, func() { next = claim(t, inv, agent, rid, t0.Add(time.Second)) })
+			named(t, r, inv, agent, next)
+		}
+	})
+
+	// Two claims of one agent racing leave the newer one's record
+	// (relay-server spec/README.md finding 2): a claim never writes over a
+	// newer session's record.
+	t.Run("two claims race", func(t *testing.T) {
+		_, inv := open(t)
+		for r := range Rounds {
+			rid, agent := RID(r), fmt.Sprintf("w%d", r)
+			var a, b directory.Session
+			race(func() { a = claim(t, inv, agent, rid, t0) }, func() { b = claim(t, inv, agent, rid, t0.Add(time.Second)) })
+			want := a
+			if b.Newer(a) {
+				want = b
+			}
+			named(t, r, inv, agent, want)
+		}
+	})
+
 	// I2 on a prune: a read pruning a member whose record lapsed, racing
 	// that agent's new claim, never removes the live record's entry.
 	t.Run("prune races a claim", func(t *testing.T) {
@@ -127,6 +180,36 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 			}
 		}
 	})
+}
+
+// podless writes a record without a pod for agent (as no relay of this
+// version writes one), its agent still in the active set.
+func podless(t *testing.T, c directory.Cache, agent string) {
+	t.Helper()
+	if _, err := c.Set(context.Background(), directory.GetDispatcherCacheKey(agent), directory.Value{}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// named fails unless the agent's record names session want.
+func named(t *testing.T, round int, inv directory.IPInventory, agent string, want directory.Session) {
+	t.Helper()
+	_, s, err := inv.(directory.SessionStore).GetSession(context.Background(), agent)
+	if err != nil || s.Seq != want.Seq || !s.Since.Equal(want.Since) {
+		t.Fatalf("round %d: the record names %+v (%v); want the newer session (Seq %d)", round, s, err, want.Seq)
+	}
+}
+
+// listedAgent reports whether ListAgentRecords lists agent.
+func listedAgent(t *testing.T, inv directory.IPInventory, agent string) bool {
+	t.Helper()
+	recs, err := inv.(interface {
+		ListAgentRecords(context.Context) ([]directory.AgentRecord, error)
+	}).ListAgentRecords(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.ContainsFunc(recs, func(r directory.AgentRecord) bool { return r.AgentID == agent })
 }
 
 // RID is round r's rendezvous id.

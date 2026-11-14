@@ -10,6 +10,16 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Changed (incompatible)
+
+- `core/directory.Cache.SetAdd` is replaced by `SetAddIf` (and on
+  `MemoryCache` and `sessiontest/fake.MockCache`): a session's claim and
+  renewal check the holder and write in one store step (spec
+  `Directory.tla`, mutants renew-get-set, delete-get-del, renew-yields).
+  Migration: a `Cache` implementation adds `SetAddIf`, which applies the
+  add only while the stated condition holds; callers of `SetAdd` call
+  `SetAddIf` with that condition.
+
 ### Added
 
 - `frontend/publictcp` (lane PUBTCP, nfltr
