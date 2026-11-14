@@ -38,7 +38,7 @@ type Frontend interface {
 // environment variable and config key, as every relay setting).
 type Setting struct {
 	Name, Usage string
-	// Default is the setting's type and default: bool, int, string or
+	// Default is the setting's type and default: bool, string or
 	// time.Duration.
 	Default any
 }

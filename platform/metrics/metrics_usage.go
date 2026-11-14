@@ -51,7 +51,7 @@ type Meter struct {
 // frontendPaths are the paths with usage.
 var frontendPaths = [numPaths]bool{
 	PathHTTPLink: true, PathHTTPGRPC: true, PathSNI: true, PathConnect: true, PathSSH: true,
-	PathA2A: true, PathWG: true, PathP2PRelay: true, PathMailbox: true, PathBlob: true, PathAccounts: true, PathPublicTCP: true,
+	PathA2A: true, PathWG: true, PathP2PRelay: true, PathMailbox: true, PathBlob: true, PathAccounts: true,
 }
 
 var usage = &usageMeters{live: map[*Meter]struct{}{}, rows: map[usageRow][2]uint64{},

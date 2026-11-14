@@ -20,20 +20,17 @@ changes listed (from the first tag on).
   add only while the stated condition holds; callers of `SetAdd` call
   `SetAddIf` with that condition.
 
+### Removed
+
+- `frontend/publictcp` and `metrics.PathPublicTCP` (label `public_tcp`):
+  public TCP endpoints are deleted (lane PUBDEL, nfltr
+  docs/decisions/nf1-udp-2026-11-14.md section 5; they were never offered
+  to users and production ran them off). Migration: drop the
+  `public_tcp.*` settings and any `publictcp.Frontend` from the
+  composition; the zero-account path is `nf1`.
+
 ### Added
 
-- `frontend/publictcp` (lane PUBTCP, nfltr
-  docs/decisions/public-tcp-endpoints-2026-11-13.md; spec relay-server
-  `spec/PortLease.tla`): public TCP ports leased to an agent's plain tcp
-  service declared `;public` (`agentservices.Decl.Public`), reached at
-  host:port with no client. `Frontend` (settings `public_tcp.ports`,
-  `listen`, `idle_timeout`, `source_max`, `source_rate`, `source_burst`;
-  refused with `tcp.e2ee_policy=require`), `Server` (`Cut`, `Forget`,
-  `Visits`), `Grant`, `Leases` (a host offering `PublicPorts() Leases`),
-  `ParseRange`, `CheckEphemeral`, `EphemeralRange`, `Bind` (the range whole
-  or nothing). One audit line per visit, never the payload.
-  `metrics.PathPublicTCP` (label `public_tcp`, appended). `frontend.Setting`
-  defaults may be `int`. Migration: none.
 - Capability addresses (`nf1...`, nfltr
   `docs/decisions/nf1-rendezvous-2026-11-13.md`): `session.Target.NF1`
   (and `Target.Admit`) opens the one live agent whose service declaration
