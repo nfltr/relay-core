@@ -9,7 +9,7 @@
 #   check     actions, then TLC on spec/AgentLink.cfg (Refines left out),
 #             AgentLinkIface.cfg (Refines on fewer bytes), spec/Handoff.cfg,
 #             spec/Move.cfg, spec/Presence.cfg, spec/Directory.cfg and
-#             DirectoryHeal.cfg, spec/Failover.cfg and FailoverShare.cfg: invariants; spec/AgentLinkWrite.cfg:
+#             DirectoryHeal.cfg, spec/NF1Claim.cfg, spec/Failover.cfg and FailoverShare.cfg: invariants; spec/AgentLinkWrite.cfg:
 #             WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
@@ -331,7 +331,7 @@ checktraces() {
 # ways) and each trace module's event names against the recorder's Go.
 actions_check() {
 	ok=0
-	for m in AgentLink Handoff Move Presence Directory KeyAccount AccountLimit Failover; do
+	for m in AgentLink Handoff Move Presence Directory NF1Claim KeyAccount AccountLimit Failover; do
 		# A step: a definition whose body primes or keeps a variable (not a temporal formula).
 		acts=$(awk '
 			function flush() { if (name != "" && act && !tmp) print name; name = "" }
@@ -390,6 +390,7 @@ check)
 	run Failover.cfg Failover.tla
 	run FailoverShare.cfg Failover.tla
 	run DirectoryHeal.cfg Directory.tla
+	run NF1Claim.cfg NF1Claim.tla
 	;;
 nightly)
 	run AgentLink.cfg MCAgentLink.tla
@@ -544,6 +545,17 @@ mutants)
 	for b in renew-get-set delete-get-del; do
 		expect Directory.cfg Directory.tla "dir:$b" -e "$m$b\"/" -e 's/Loss = TRUE/Loss = FALSE/' -e 's/^PROPERTY Heals$//'
 	done
+	# NF1Claim.tla: which agent an nf1 address reaches (NF1RISKS, design):
+	# the code before it (no-proof, exactly-one), the dial without a
+	# fallback, the rejected rule (refuse-second); witnesses.
+	for b in no-proof exactly-one no-fallback refuse-second; do
+		expect NF1Claim.cfg NF1Claim.tla "nf1:$b" -e "$m$b\"/"
+	done
+	expect NF1Claim.cfg NF1Claim.tla witness:nf1-two-serving -e 's/^    RouteSound$/    WitnessTwoServing/'
+	expect NF1Claim.cfg NF1Claim.tla witness:nf1-routed-among-two -e 's/^    RouteSound$/    WitnessRoutedAmongTwo/'
+	expect NF1Claim.cfg NF1Claim.tla witness:nf1-fallback -e 's/^    NoFalseNotServed$/    WitnessFallback/'
+	expect NF1Claim.cfg NF1Claim.tla witness:nf1-refused -e 's/^    NoHolderRefused$/    WitnessRefused/'
+	expect NF1Claim.cfg NF1Claim.tla witness:nf1-not-served -e 's/^    NoFalseNotServed$/    WitnessNotServed/'
 	expect Presence.cfg Presence.tla no-crash-resync -e "$m"'no-crash-resync"/' -e 's/Crash = FALSE/Crash = TRUE/'
 	exit $fail
 	;;

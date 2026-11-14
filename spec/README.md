@@ -721,6 +721,59 @@ replay found finding 36. Regenerate the walks when the spec changes.
 | `Prune` (`ipInventory.prune`, `sessionSets`), the nf1 index read, `ListAgentRecords`' prune | `core/directory/service_index.go`, `core/directory/nf1_index.go`, `core/directory/ip_inventory.go` |
 | `IndexComplete`, `DeleteOwn`, `NoResurrect` under concurrency, on every store | `core/directory/directorytest/races.go` |
 
+## NF1Claim.tla: which agent an nf1 address reaches
+
+`NF1Claim.tla` models the agents whose records declare one capability
+address's rendezvous id and an open of that address (nfltr
+`docs/decisions/nf1-risks-2026-11-14.md`, lane NF1RISKS; a design: the
+code follows). Agents are agent ids: a reconnect or a replica takeover of
+one agent replaces its own record (`Claim` again; `Directory.tla` checks
+that record), so a second record of a rid is always a second agent.
+`Holders` hold the address's server key (the owner's servers: a copy of
+the key file, the same key under another agent name), `Others` at most the
+address (its clients). A declaration of the rid is accepted only with a
+registration proof, which only a key holder can make (relay
+`spec/proverif/cap_address.pv` queries 25 and 26); the open reads the
+index set, each member's record in its own step, then dials the newest
+claim first and falls back to the next when a dial finds the agent gone.
+
+| action | Go |
+|---|---|
+| `Claim(a)` | `ClaimSession`/`PutSession` of an agent whose declaration carries `nf1=`: the relay's registration proof check (`agentservices` parse, design), then `Cache.SetAdd` (record and index member, one step) |
+| `End(a)`, `Gone(a)` | `DeleteSession` (`Cache.DelIf` on its own session) |
+| `Expire(a)` | the record's TTL |
+| `Prune(a)` | `NF1Agents`'s prune (`ipInventory.prune`, `Cache.DelIf` on no record) |
+| `Snap`, `Read(a)` | `NF1Agents`: `SInter` of the set, then `Get` of each member |
+| `Decide`, `Dial` | `openNF1`: the rule over the members read, then `AgentServices` and `OnwardWithRetry`, newest first, next on a failed dial (design) |
+| `Reset` | the open answered; the next open |
+
+Invariants (`NF1Claim.cfg`, two holders, one address holder, five claims,
+`make spec`, 114,697 states (23,309 distinct), depth 16, 13 s; `COVERAGE=1`
+takes every action): `IndexComplete` (as `Directory.tla`'s, for every
+agent), `RouteSound` (an open reaches only a key holder), `NoFalseNotServed`
+(an open answers not served only if no key holder's record was live from
+its snapshot to its answer: no duplicate-address denial),
+`NoHolderRefused` (a key holder's declaration is never refused). Mutants
+(`make spec-mutants`), each caught: `no-proof` (any declaration of the rid
+taken, the code before NF1RISKS: `RouteSound`, 6 states deep),
+`exactly-one` (the open refuses unless one record is live, the code before
+NF1RISKS: `NoFalseNotServed`, 8), `no-fallback` (the first failed dial
+answers not served: `NoFalseNotServed`, 9), `refuse-second` (the rejected
+rule, a declaration refused while another agent's record is live:
+`NoHolderRefused`, 3). Witnesses, each reached: `WitnessTwoServing` (two
+holders' records live), `WitnessRoutedAmongTwo`, `WitnessFallback` (a
+dial fell back to an older claim), `WitnessRefused` (the address holder's
+declaration refused), `WitnessNotServed` (a member read live, gone by the
+dial). The order among holders is not an invariant: TLC finds none broken
+with the oldest claim first.
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `Decide`, `Dial` (`openNF1`) | `core/session/nf1.go` |
+| `Snap`, `Read`, `Prune` (`NF1Agents`) | `core/directory/nf1_index.go` |
+
 ## KeyAccount.tla: accounts of a key-file relay
 
 `KeyAccount.tla` models the key file of a relay without a database
