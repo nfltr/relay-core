@@ -36,7 +36,8 @@ import (
 // one whose service is down (its answer then says so: a stuck health flag
 // never hides the last capacity); uniform random. No instance left is
 // the answer an offline agent gets (AGENT_OFFLINE: a held open waits for
-// one to connect).
+// one to connect). a.Service may be a udp service's session target
+// (agentservices.DatagramTarget): instances publishing it as udp.
 func (d *Dispatcher) ResolveService(ctx context.Context, caller identity.Principal, reaches func(string) (bool, error), a AgentAddress, exclude []string) (string, *Refusal) {
 	name := a.Service + "@" + a.Group
 	refuse := func(reason relayv1.ErrorReason, msg string) (string, *Refusal) {
@@ -113,7 +114,8 @@ func (d *Dispatcher) excludedMachines(caller identity.Principal, exclude []strin
 // serviceDown reports whether agentID marks service down (its label
 // agentservices.HealthLabel is HealthDown, agentLabels).
 func (d *Dispatcher) serviceDown(ctx context.Context, agentID, service string) bool {
-	return d.agentLabels(ctx, agentID)[agentservices.HealthLabel(service)] == agentservices.HealthDown
+	name, _ := agentservices.SplitTarget(service)
+	return d.agentLabels(ctx, agentID)[agentservices.HealthLabel(name)] == agentservices.HealthDown
 }
 
 // agentLabels are agentID's current labels, the one source of its
@@ -231,9 +233,10 @@ func retryElsewhere(err error) bool {
 }
 
 // checkServiceTarget refuses a service by name whose open names another
-// service in its target ("" or the name's own).
+// service in its target ("", the name's own, or its udp service's
+// DatagramTarget).
 func checkServiceTarget(a AgentAddress, target string) *Refusal {
-	if target == "" || target == a.Service {
+	if target == "" || target == a.Service || target == agentservices.DatagramTarget(a.Service) {
 		return nil
 	}
 	return &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT, AgentID: a.Service + "@" + a.Group,

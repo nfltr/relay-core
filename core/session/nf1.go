@@ -67,7 +67,7 @@ func (c *Core) openNF1(ctx context.Context, t Target) (Opened, error) {
 		if i < len(agents)-1 {
 			retries = 1 // another server is left: a crashed one's record must not spend the budget
 		}
-		ep := TCPEndpoint{AgentID: agentID, TargetAddr: decl.Name, E2EE: true, Answer: t.Answer}
+		ep := TCPEndpoint{AgentID: agentID, TargetAddr: decl.Target(), E2EE: true, Answer: t.Answer}
 		s, done, err := c.TCPDispatcher.OnwardWithRetry(route, ep, retries, interval)
 		if err == nil {
 			return Opened{Session: s, AgentID: agentID, Release: func() {
@@ -78,7 +78,7 @@ func (c *Core) openNF1(ctx context.Context, t Target) (Opened, error) {
 			}}, nil
 		}
 		release()
-		dial := &DialError{AgentID: agentID, TargetAddr: decl.Name, Err: fmt.Errorf("nf1: %w", err)}
+		dial := &DialError{AgentID: agentID, TargetAddr: decl.Target(), Err: fmt.Errorf("nf1: %w", err)}
 		switch {
 		case errors.Is(dial, ErrDirectoryUnavailable): // not the agent's failure: never "not served"
 			return Opened{}, dirUnavailable

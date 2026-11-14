@@ -37,7 +37,7 @@ func servesOf(decls []agentservices.Decl) string {
 	var http, tcp bool
 	for _, d := range decls {
 		http = http || d.Kind == agentservices.HTTP
-		tcp = tcp || d.Kind == agentservices.TCP
+		tcp = tcp || d.Kind.Sessions() // a udp service counts as tcp in the serves metric
 	}
 	switch {
 	case http && tcp:
