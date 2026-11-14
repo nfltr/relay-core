@@ -10,6 +10,32 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Added
+
+- `platform/config.CheckNF1` and the setting `nf1.hosts` (env `NF1_HOSTS`),
+  `core/session.DispatcherConfig.NF1Hosts`: the relay hosts a relay's
+  capability addresses name. A relay calls `CheckNF1` before it starts: it
+  refuses `nf1.enabled` without `nf1.hosts` (`compose.Serve` does).
+
+### Changed
+
+- An agent's declaration of a capability address (`nf1=` in
+  `agentservices.Header`) is taken only with its server key's
+  registration proof (`agentservices.RegHeader`, relay
+  `capaddr.CheckRegistration`) for one of `nf1.hosts`; otherwise the
+  agent's ConnectHTTP is refused InvalidArgument (a hard cut: addresses
+  minted before relay client v0.21.36, whose rid is not bound to the key,
+  are refused; nfltr docs/decisions/nf1-risks-2026-11-14.md, spec
+  `NF1Claim.tla`). The proof is checked and dropped, never stored or
+  echoed. Migration: agents send `nf1.Listener.RegistrationProof`
+  (relay client v0.21.36's `nfnet` does), addresses are minted again, and
+  a relay with `nf1.enabled` sets `nf1.hosts`.
+- An nf1 open with several agents declaring its rid (the owner's servers)
+  goes to the newest claim first and falls back to the next on a failed
+  dial (`NF1Agents` returns its agents newest claim first); not served only
+  when none is left. A directory failure during the dial answers
+  DIRECTORY_UNAVAILABLE, not "not served".
+
 ### Changed (incompatible)
 
 - `core/directory.Cache.SetAdd` is replaced by `SetAddIf` (and on

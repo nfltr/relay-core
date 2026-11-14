@@ -1,0 +1,3 @@
+Compatible changes:
+- ./core/session.DispatcherConfig.NF1Hosts: added
+- ./platform/config.CheckNF1: added

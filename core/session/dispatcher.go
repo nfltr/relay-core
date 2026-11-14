@@ -67,6 +67,10 @@ type DispatcherConfig struct {
 	// (connect_e2ee.go). An empty policy is allow.
 	E2EEPolicy  string
 	E2EEDefault bool
+	// NF1Hosts are nf1.hosts: the relay hosts this relay's capability
+	// addresses name; a declaration of one is taken only with a
+	// registration proof for one of them (agent_services.go).
+	NF1Hosts []string
 	// Uncounted names agents the connected-agent limit does not count
 	// (and AgentCount does not report): the relay's own service agents.
 	Uncounted func(agentID string) bool
@@ -281,6 +285,7 @@ func NewDispatcherConfig() DispatcherConfig {
 		AdminMessageSet:          true,
 		E2EEPolicy:               viper.GetString("tcp.e2ee_policy"),
 		E2EEDefault:              viper.GetBool("tcp.e2ee_default"),
+		NF1Hosts:                 viper.GetStringSlice("nf1.hosts"),
 	}
 }
 

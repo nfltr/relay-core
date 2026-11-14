@@ -61,6 +61,9 @@ type Ports struct {
 // in the environment variable security.apikey.env names; with neither,
 // Serve returns an error wrapping ErrNoKeys.
 func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []frontend.Frontend, providers ...identity.Provider) error {
+	if err := config.CheckNF1(); err != nil {
+		return err
+	}
 	keys := -1 // keys loaded from the key file or environment; -1: providers given
 	// The core has no groups; the key file's accounts also resolve names.
 	var policy session.Policy = session.AccountIsOneGroup{}

@@ -23,14 +23,14 @@ func TestDeclaredServicesFailClosed(t *testing.T) {
 		}
 		return metadata.NewIncomingContext(context.Background(), md)
 	}
-	if d, err := declaredServices(ctx()); d != nil || err != nil {
+	if d, err := declaredServices(ctx(), nil); d != nil || err != nil {
 		t.Fatalf("no declaration: %v %v", d, err)
 	}
-	if d, err := declaredServices(ctx("web=http,db=tcp")); err != nil || len(d) != 2 {
+	if d, err := declaredServices(ctx("web=http,db=tcp"), nil); err != nil || len(d) != 2 {
 		t.Fatalf("declaration: %v %v", d, err)
 	}
 	for _, vals := range [][]string{{"web=http", "db=tcp"}, {"web"}, {"localhost:22=tcp"}, {""}} {
-		if _, err := declaredServices(ctx(vals...)); status.Code(err) != codes.InvalidArgument {
+		if _, err := declaredServices(ctx(vals...), nil); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("%q: %v, want InvalidArgument", vals, err)
 		}
 	}

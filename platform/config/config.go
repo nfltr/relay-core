@@ -379,7 +379,8 @@ func SetDefaultFlags() {
 	// Clients with no credential open the one service an address names
 	// (nfltr docs/decisions/nf1-rendezvous-2026-11-13.md); the serving
 	// agent's owner pays. Limits per replica; 0 turns a limit off.
-	_ = flag.Bool("nf1.enabled", false, "serve capability addresses (nf1...): data connections with no credential, which open nf1 sessions only")
+	_ = flag.Bool("nf1.enabled", false, "serve capability addresses (nf1...): data connections with no credential, which open nf1 sessions only; needs nf1.hosts")
+	_ = flag.StringSlice("nf1.hosts", nil, "the relay hosts this relay's capability addresses name, as the address text carries them (nfltr.xyz): an agent's declaration of an address is taken only with its server key's registration proof for one of them; empty: none taken")
 	_ = flag.Int("nf1.source_max", 16, "open data connections with no credential from one source address")
 	_ = flag.Float64("nf1.source_rate", 2, "new data connections with no credential a second from one source address")
 	_ = flag.Int("nf1.source_burst", 10, "burst of nf1.source_rate")
@@ -510,6 +511,16 @@ const (
 	E2EEAllow   = "allow"
 	E2EEForbid  = "forbid"
 )
+
+// CheckNF1 refuses nf1.enabled without nf1.hosts: such a relay would take
+// no address's declaration (nfltr docs/decisions/nf1-risks-2026-11-14.md).
+// A relay calls it before it starts.
+func CheckNF1() error {
+	if viper.GetBool("nf1.enabled") && len(viper.GetStringSlice("nf1.hosts")) == 0 {
+		return fmt.Errorf("nf1.enabled needs nf1.hosts: the relay hosts its capability addresses name")
+	}
+	return nil
+}
 
 // ValidE2EEPolicy reports whether p is a tcp.e2ee_policy value.
 func ValidE2EEPolicy(p string) bool {

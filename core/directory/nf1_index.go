@@ -4,9 +4,11 @@
 package directory
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
+	"slices"
 
 	"github.com/nfltr/relay/proto/wire/agentservices"
 )
@@ -18,7 +20,8 @@ import (
 // set beside the records, written by PutSession, removed by DeleteSession,
 // pruned and checked against the records when read, never their source.
 type NF1Index interface {
-	// NF1Agents returns the agents whose live records declare rid.
+	// NF1Agents returns the agents whose live records declare rid, newest
+	// claim (Session.Since) first (spec/NF1Claim.tla Next1).
 	NF1Agents(ctx context.Context, rid [agentservices.RIDSize]byte) ([]string, error)
 }
 
@@ -56,6 +59,7 @@ func (d *ipInventory) NF1Agents(ctx context.Context, rid [agentservices.RIDSize]
 		return nil, err
 	}
 	var out, stale []string
+	since := map[string]int64{}
 	for _, agentID := range members {
 		v, err := d.inventory.Get(ctx, d.getCacheKey(agentID))
 		switch {
@@ -68,11 +72,13 @@ func (d *ipInventory) NF1Agents(ctx context.Context, rid [agentservices.RIDSize]
 		if decls, err := agentservices.Parse(v.Services); err == nil {
 			if _, ok := agentservices.FindNF1(decls, rid); ok {
 				out = append(out, agentID)
+				since[agentID] = v.Since
 			}
 		}
 	}
 	if err := d.prune(ctx, key, stale, recordGone); err != nil {
 		d.logger.Warn("failed to prune stale nf1 index members", "count", len(stale), "error", err)
 	}
+	slices.SortStableFunc(out, func(a, b string) int { return cmp.Compare(since[b], since[a]) })
 	return out, nil
 }

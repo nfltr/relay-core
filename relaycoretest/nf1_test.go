@@ -28,6 +28,8 @@ import (
 	"github.com/nfltr/relay/proto/wire/agentservices"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // switchProxy forwards TCP to a target it can change; Switch also cuts
@@ -107,19 +109,35 @@ func startNF1Agent(t *testing.T, grpcAddr, keyFile string) nf1Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a, err := connectNF1Agent(t, grpcAddr, keyFile, "clip", l, l.RegistrationProof())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nf1Agent{l: l, key: key, agent: a}
+}
+
+// connectNF1Agent connects agent agentID serving l's address with the
+// registration proof reg (nil: none).
+func connectNF1Agent(t *testing.T, grpcAddr, keyFile, agentID string, l *nf1.Listener, reg []byte) (agent.Agent, error) {
+	t.Helper()
 	table, err := agent.NewServiceTable([]agent.Service{{Name: "clip", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, Target: echoListener(t), NF1: l}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	decl := agentservices.Format([]agentservices.Decl{{Name: "clip", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, NF1: l.Address().RID}})
-	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "clip", APIKeyFile: keyFile, Logger: slog.New(slog.DiscardHandler)},
-		agent.WithMetadata(agentservices.Header, decl, agentservices.ModesHeader, "1"),
+	md := []string{agentservices.Header, decl, agentservices.ModesHeader, "1"}
+	if reg != nil {
+		md = append(md, agentservices.RegHeader, agentservices.FormatReg(l.Address().RID, reg))
+	}
+	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: agentID, APIKeyFile: keyFile, Logger: slog.New(slog.DiscardHandler)},
+		agent.WithMetadata(md...),
 		agent.WithConnected(func(agent.Connection) (*agent.Tunnel, error) { return &agent.Tunnel{Services: table}, nil }))
 	if err := a.Connect(t.Context()); err != nil {
-		t.Fatal(err)
+		a.Close()
+		return nil, err
 	}
 	t.Cleanup(a.Close)
-	return nf1Agent{l: l, key: key, agent: a}
+	return a, nil
 }
 
 func writeKey(t *testing.T, file, key string) {
@@ -157,13 +175,19 @@ func echoes(t *testing.T, c net.Conn) {
 	}
 }
 
-// enableNF1 turns nf1 on with addressMax open sessions per address for the
-// relays the test starts, and off again once they stopped. viper is not
-// safe to change under a running relay: call it before relaycoretest.New.
+// enableNF1 turns nf1 on for host relay.test with addressMax open sessions
+// per address for the relays the test starts, and off again once they
+// stopped. viper is not safe to change under a running relay: call it
+// before relaycoretest.New.
 func enableNF1(t *testing.T, addressMax int) {
 	viper.Set("nf1.enabled", true)
+	viper.Set("nf1.hosts", []string{"relay.test"})
 	viper.Set("nf1.address_max", addressMax)
-	t.Cleanup(func() { viper.Set("nf1.enabled", false); viper.Set("nf1.address_max", 64) }) // runs after New's cleanups
+	t.Cleanup(func() { // runs after New's cleanups
+		viper.Set("nf1.enabled", false)
+		viper.Set("nf1.hosts", nil)
+		viper.Set("nf1.address_max", 64)
+	})
 }
 
 // TestNF1Disabled: a relay that serves no addresses (nf1.enabled off, the
@@ -330,4 +354,55 @@ func TestNF1CapsAndNotServed(t *testing.T) {
 	if !errors.Is(errUnknown, nf1.ErrNotServed) || errOffline == nil || errOffline.Error() != errUnknown.Error() {
 		t.Fatalf("offline %v, unknown %v: want one answer", errOffline, errUnknown)
 	}
+}
+
+// TestNF1TwoServersEndToEnd (nfltr docs/decisions/nf1-risks-2026-11-14.md
+// R1-R3): an address holder declaring the address under its own agent is
+// refused at its start, with no proof or another key's; two of the owner's
+// agents with one key file both serve it, and it stays served while either
+// is up.
+func TestNF1TwoServersEndToEnd(t *testing.T) {
+	enableNF1(t, 64)
+	r := relaycoretest.New(t)
+	keyFile := filepath.Join(t.TempDir(), "key")
+	writeKey(t, keyFile, r.Key)
+	first := startNF1Agent(t, r.GRPC, keyFile)
+	opts := nf1.Options{DialRelay: func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", r.Proxy)
+	}}
+	served := func() {
+		t.Helper()
+		c := dialUntil(t, first.l.Address(), opts)
+		defer c.Close() //nolint:errcheck
+		echoes(t, c)
+	}
+	served()
+
+	other, _, err := nf1.Mint("relay.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, reg := range map[string][]byte{"no proof": nil, "another key's proof": other.RegistrationProof()} {
+		if _, err := connectNF1Agent(t, r.GRPC, keyFile, "holder", first.l, reg); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("an address holder's declaration, %s: %v, want InvalidArgument", name, err)
+		}
+	}
+	served()
+
+	copied, err := nf1.NewListener(first.l.Address(), first.key) // a copy of the key file
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := connectNF1Agent(t, r.GRPC, keyFile, "clip2", copied, copied.RegistrationProof())
+	if err != nil {
+		t.Fatal(err)
+	}
+	served()
+	first.agent.Close()
+	served()
+	if _, err := connectNF1Agent(t, r.GRPC, keyFile, "clip", first.l, first.l.RegistrationProof()); err != nil {
+		t.Fatal(err)
+	}
+	second.Close()
+	served()
 }

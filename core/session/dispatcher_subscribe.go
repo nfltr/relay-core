@@ -104,7 +104,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 			return err
 		}
 	}
-	services, err := declaredServices(stream.Context())
+	services, err := declaredServices(stream.Context(), d.Config.NF1Hosts)
 	if err != nil {
 		return err
 	}

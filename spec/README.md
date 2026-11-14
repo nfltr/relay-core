@@ -725,8 +725,7 @@ replay found finding 36. Regenerate the walks when the spec changes.
 
 `NF1Claim.tla` models the agents whose records declare one capability
 address's rendezvous id and an open of that address (nfltr
-`docs/decisions/nf1-risks-2026-11-14.md`, lane NF1RISKS; a design: the
-code follows). Agents are agent ids: a reconnect or a replica takeover of
+`docs/decisions/nf1-risks-2026-11-14.md`, lanes NF1RISKS, NF1ROUTE). Agents are agent ids: a reconnect or a replica takeover of
 one agent replaces its own record (`Claim` again; `Directory.tla` checks
 that record), so a second record of a rid is always a second agent.
 `Holders` hold the address's server key (the owner's servers: a copy of
@@ -739,12 +738,12 @@ claim first and falls back to the next when a dial finds the agent gone.
 
 | action | Go |
 |---|---|
-| `Claim(a)` | `ClaimSession`/`PutSession` of an agent whose declaration carries `nf1=`: the relay's registration proof check (`agentservices` parse, design), then `Cache.SetAdd` (record and index member, one step) |
+| `Claim(a)`, `Accepts(a)` | `ClaimSession`/`PutSession` of an agent whose declaration carries `nf1=`: the relay's registration proof check (`checkRegistrations`: `agentservices.ParseReg`, `capaddr.CheckRegistration` for one of `nf1.hosts`), then `Cache.SetAdd` (record and index member, one step) |
 | `End(a)`, `Gone(a)` | `DeleteSession` (`Cache.DelIf` on its own session) |
 | `Expire(a)` | the record's TTL |
 | `Prune(a)` | `NF1Agents`'s prune (`ipInventory.prune`, `Cache.DelIf` on no record) |
 | `Snap`, `Read(a)` | `NF1Agents`: `SInter` of the set, then `Get` of each member |
-| `Decide`, `Dial` | `openNF1`: the rule over the members read, then `AgentServices` and `OnwardWithRetry`, newest first, next on a failed dial (design) |
+| `Decide`, `Next1`, `Dial` | `NF1Agents` orders the members read newest claim (`Session.Since`) first; `openNF1`: no member, not served; else `AgentServices` and `OnwardWithRetry` in that order, the next on a failed dial |
 | `Reset` | the open answered; the next open |
 
 Invariants (`NF1Claim.cfg`, two holders, one address holder, five claims,
@@ -771,8 +770,10 @@ with the oldest claim first.
 
 | what the spec models | file |
 |---|---|
+| `Accepts` (`declaredServices`, `checkRegistrations`) | `core/session/agent_services.go` |
 | `Decide`, `Dial` (`openNF1`) | `core/session/nf1.go` |
-| `Snap`, `Read`, `Prune` (`NF1Agents`) | `core/directory/nf1_index.go` |
+| `Snap`, `Read`, `Prune`, `Next1`'s order (`NF1Agents`) | `core/directory/nf1_index.go` |
+| `RouteSound`, `NoHolderRefused` (`TestNF1DeclarationProof`); `NoFalseNotServed`, fallback (`TestNF1TwoServers`, `TestNF1TwoServersEndToEnd`) | `core/session/nf1_test.go`, `relaycoretest/nf1_test.go` |
 
 ## KeyAccount.tla: accounts of a key-file relay
 
