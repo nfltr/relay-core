@@ -10,7 +10,9 @@ import (
 )
 
 // Serves values of nfltr_relay_connected_agents_by_serves: the kinds of
-// the services an agent declared at connect.
+// the services an agent declared at connect, each present one of http,
+// tcp and udp joined by "_" in that order (http_tcp, tcp_udp, ...), or
+// none.
 const (
 	ServesHTTP    = "http"
 	ServesTCP     = "tcp"
@@ -18,7 +20,7 @@ const (
 	ServesNone    = "none" // declared none
 )
 
-var servesValues = [...]string{ServesHTTP, ServesTCP, ServesHTTPTCP, ServesNone}
+var servesValues = [...]string{ServesHTTP, ServesTCP, "udp", ServesHTTPTCP, "http_udp", "tcp_udp", "http_tcp_udp", ServesNone}
 
 // AgentSource is one relay's connected agents as a scrape counts them: it
 // calls each with the agent's serves value (each agent once), and returns
@@ -37,7 +39,7 @@ var agents = register(&agentCollector{
 	total: prometheus.NewDesc(dispatcherNamespace+"_connected_agents",
 		"Agents connected: each agent once, whatever streams it holds (HTTP, TCP or both).", nil, nil),
 	byServes: prometheus.NewDesc("nfltr_relay_connected_agents_by_serves",
-		"Agents connected, by the kinds of services each declared at connect (http, tcp, http_tcp; none: it declared none).", []string{"serves"}, nil),
+		"Agents connected, by the kinds of services each declared at connect (http, tcp, udp, or those present joined by _, e.g. http_tcp, tcp_udp; none: it declared none).", []string{"serves"}, nil),
 })
 
 type agentCollector struct {

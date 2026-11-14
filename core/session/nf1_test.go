@@ -135,6 +135,16 @@ func TestNF1DeclarationProof(t *testing.T) {
 	if got, err := inv.(directory.NF1Index).NF1Agents(context.Background(), rid); err != nil || !slices.Equal(got, []string{"owner"}) {
 		t.Errorf("serving %v (%v), want only the owner", got, err)
 	}
+
+	// A udp service's address: the same check (nfltr
+	// docs/decisions/nf1-udp-2026-11-14.md).
+	decl = agentservices.Format([]agentservices.Decl{{Name: "clip", Kind: agentservices.UDP, E2EE: agentservices.E2EEOn, NF1: rid}})
+	if _, err := declaredServices(ctx(), hosts); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("a udp address without its proof: %v, want InvalidArgument", err)
+	}
+	if d, err := declaredServices(ctx(reg(owner.RegistrationProof())), hosts); err != nil || len(d) != 1 || d[0].Kind != agentservices.UDP {
+		t.Errorf("a udp address with its proof: %v %v", d, err)
+	}
 }
 
 // TestNF1TwoServers (R2, R3; spec/NF1Claim.tla Decide, Dial): two agents
@@ -167,12 +177,14 @@ func TestNF1TwoServers(t *testing.T) {
 
 	var mu sync.Mutex
 	var dialled []string
+	var target string
 	failing := map[string]bool{} // the agent stops when dialled
 	td := NewTCPDispatcher(slog.New(slog.DiscardHandler), nil, directory.NewNoOpInventory())
 	td.Links = linkOpenerFunc(func(_ context.Context, ep TCPEndpoint) (PeerSession, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		dialled = append(dialled, ep.AgentID)
+		target = ep.TargetAddr
 		if failing[ep.AgentID] {
 			stop(ep.AgentID)
 			return nil, errors.New("agent gone")
@@ -221,5 +233,14 @@ func TestNF1TwoServers(t *testing.T) {
 	var dial *DialError
 	if !errors.As(err, &dial) || dial.AgentID != "o1" || !slices.Equal(dialled, []string{"o2", "o1"}) {
 		t.Errorf("every dial failing: %v after %v, want o1's DialError after o2, o1", err, dialled)
+	}
+	// A udp service's address: the open names its udp service.
+	stop("o1")
+	stop("o2")
+	failing["o1"] = false
+	decl = agentservices.Format([]agentservices.Decl{{Name: "clip", Kind: agentservices.UDP, E2EE: agentservices.E2EEOn, NF1: rid}})
+	claim("o1", t0.Add(5*time.Second))
+	if open("o1", "o1"); target != agentservices.DatagramTarget("clip") {
+		t.Errorf("a udp address's open names %q, want %q", target, agentservices.DatagramTarget("clip"))
 	}
 }

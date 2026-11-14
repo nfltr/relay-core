@@ -12,6 +12,17 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Datagram (udp) services (relay proto `agentservices` kinds `udp`,
+  `udp+e2ee`, `udp+plain`; nfltr docs/decisions/nf1-udp-2026-11-14.md): a
+  session whose target is `agentservices.DatagramTarget(name)`
+  (`<name>+udp`) reaches the agent's udp service of that name, by agent,
+  by group (`<name>@<group>`) or by capability address (its declaration's
+  registration proof checked as a tcp one's); a name is declared once as a
+  stream service and once as udp, and routed by (name, kind). A relay
+  before this one refuses such a target (no service of that name), never
+  routes it to the stream service. `nfltr_relay_connected_agents_by_serves`
+  gains the values `udp`, `http_udp`, `tcp_udp` and `http_tcp_udp` (a udp
+  service counted as tcp before). No exported API change.
 - `platform/config.CheckNF1` and the setting `nf1.hosts` (env `NF1_HOSTS`),
   `core/session.DispatcherConfig.NF1Hosts`: the relay hosts a relay's
   capability addresses name. A relay calls `CheckNF1` before it starts: it

@@ -33,3 +33,21 @@ func TestCountAgentsCountsEveryConnectedAgent(t *testing.T) {
 		t.Fatalf("with a TCP-only agent: %v, want %v", got, want)
 	}
 }
+
+// TestServesOfUDP: a udp service is its own serves value (nfltr
+// docs/decisions/nf1-udp-2026-11-14.md), alone or beside the others.
+func TestServesOfUDP(t *testing.T) {
+	udp := agentservices.Decl{Name: "dns", Kind: agentservices.UDP}
+	for _, tc := range []struct {
+		decls []agentservices.Decl
+		want  string
+	}{
+		{[]agentservices.Decl{udp}, "udp"},
+		{[]agentservices.Decl{{Name: "dns", Kind: agentservices.TCP}, udp}, "tcp_udp"},
+		{[]agentservices.Decl{udp, {Name: "site", Kind: agentservices.HTTP}, {Name: "db", Kind: agentservices.TCP}}, "http_tcp_udp"},
+	} {
+		if got := servesOf(tc.decls); got != tc.want {
+			t.Errorf("servesOf(%v) = %q, want %q", tc.decls, got, tc.want)
+		}
+	}
+}

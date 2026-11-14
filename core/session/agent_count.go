@@ -4,6 +4,9 @@
 package session
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/nfltr/relay-core/platform/metrics"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 )
@@ -32,20 +35,17 @@ func (d *Dispatcher) countAgents(each func(serves string)) {
 	}
 }
 
-// servesOf is the serves value of an agent's declared services.
+// servesOf is the serves value of an agent's declared services: the kinds
+// present, http, tcp and udp in that order, joined by "_".
 func servesOf(decls []agentservices.Decl) string {
-	var http, tcp bool
-	for _, d := range decls {
-		http = http || d.Kind == agentservices.HTTP
-		tcp = tcp || d.Kind.Sessions() // a udp service counts as tcp in the serves metric
+	var kinds []string
+	for _, k := range []agentservices.Kind{agentservices.HTTP, agentservices.TCP, agentservices.UDP} {
+		if slices.ContainsFunc(decls, func(d agentservices.Decl) bool { return d.Kind == k }) {
+			kinds = append(kinds, string(k))
+		}
 	}
-	switch {
-	case http && tcp:
-		return metrics.ServesHTTPTCP
-	case http:
-		return metrics.ServesHTTP
-	case tcp:
-		return metrics.ServesTCP
+	if len(kinds) == 0 {
+		return metrics.ServesNone
 	}
-	return metrics.ServesNone
+	return strings.Join(kinds, "_")
 }
