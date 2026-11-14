@@ -71,7 +71,7 @@ func (d *ipInventory) NF1Agents(ctx context.Context, rid [agentservices.RIDSize]
 			}
 		}
 	}
-	if err := d.prune(ctx, key, stale); err != nil {
+	if err := d.prune(ctx, key, stale, recordGone); err != nil {
 		d.logger.Warn("failed to prune stale nf1 index members", "count", len(stale), "error", err)
 	}
 	return out, nil

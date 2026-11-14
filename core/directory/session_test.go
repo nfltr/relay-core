@@ -116,8 +116,8 @@ func TestPutSessionRenewYieldsToNewerSessionOnAnotherPod(t *testing.T) {
 	}
 }
 
-// A claim (a new session) always writes, and GetSession reads it back with
-// this pod as the loopback address.
+// A claim (a new session) writes over a record without a later claim's
+// Seq, and GetSession reads it back with this pod as the loopback address.
 func TestPutSessionClaimAndGetSession(t *testing.T) {
 	viper.Set("pod_ip.env_var", "POD_IP")
 	t.Cleanup(viper.Reset)

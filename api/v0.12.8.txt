@@ -1,0 +1,8 @@
+Incompatible changes:
+- ./core/directory.(*MemoryCache).SetAdd: removed
+- ./core/directory.Cache.SetAdd: removed
+- ./core/directory.Cache.SetAddIf: added
+- ./core/session/sessiontest/fake.(*MockCache).SetAdd: removed
+Compatible changes:
+- ./core/directory.(*MemoryCache).SetAddIf: added
+- ./core/session/sessiontest/fake.(*MockCache).SetAddIf: added

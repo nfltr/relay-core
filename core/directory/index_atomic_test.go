@@ -50,6 +50,11 @@ func (h *hookCache) SRem(ctx context.Context, key string, members ...string) (in
 	return h.Cache.SRem(ctx, key, members...)
 }
 
+func (h *hookCache) SetAddIf(ctx context.Context, key, ctr string, match func(*directory.Value, int64) bool, value directory.Value, exp time.Duration, member string, sets ...string) (bool, error) {
+	h.at(key)
+	return h.Cache.SetAddIf(ctx, key, ctr, match, value, exp, member, sets...)
+}
+
 func (h *hookCache) DelIf(ctx context.Context, key string, match func(*directory.Value) bool, member string, sets ...string) (bool, error) {
 	h.at(key)
 	for _, s := range sets {
@@ -109,6 +114,66 @@ func TestIndexStepsAreAtomic(t *testing.T) {
 		}
 		if got := listed(t, plain); !slices.Equal(got, []string{agent}) {
 			t.Fatalf("listed %v, want %s", got, agent)
+		}
+	})
+
+	// relay-server spec/README.md findings 3 and 2: a claim landing between
+	// a renewal's (or an older claim's) read and its write keeps the record
+	// (Directory.tla NoResurrect, mutant renew-get-set; Replicas.tla
+	// race:claim-order).
+	t.Run("renew", func(t *testing.T) {
+		_, h, hooked, plain := setup(t)
+		old := claim(t, plain, t0)
+		var next directory.Session
+		h.on = func(k string) bool { return k == key }
+		h.hook = func() { next = claim(t, plain, t0.Add(time.Second)) }
+		if err := hooked.(directory.SessionStore).PutSession(ctx, agent, old, true, nil, nil, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if _, s, err := plain.(directory.SessionStore).GetSession(ctx, agent); err != nil || s.Seq != next.Seq {
+			t.Fatalf("the renewal wrote the older session's record over the next one's: %+v, %v (next Seq %d)", s, err, next.Seq)
+		}
+	})
+
+	t.Run("claim", func(t *testing.T) {
+		_, h, hooked, plain := setup(t)
+		var next directory.Session
+		h.on = func(k string) bool { return k == key }
+		h.hook = func() { next = claim(t, plain, t0.Add(time.Second)) }
+		first := claim(t, hooked, t0)
+		if !next.Newer(first) {
+			t.Fatalf("the hooked claim took Seq %d, the claim inside it %d", first.Seq, next.Seq)
+		}
+		if _, s, err := plain.(directory.SessionStore).GetSession(ctx, agent); err != nil || s.Seq != next.Seq {
+			t.Fatalf("the older claim wrote over the newer one's record: %+v, %v (newer Seq %d)", s, err, next.Seq)
+		}
+		if got := listed(t, plain); !slices.Equal(got, []string{agent}) {
+			t.Fatalf("listed %v, want %s", got, agent)
+		}
+	})
+
+	t.Run("podless prune", func(t *testing.T) {
+		mc, h, hooked, plain := setup(t)
+		claim(t, plain, t0)
+		if _, err := mc.Set(ctx, key, directory.Value{}, time.Minute); err != nil { // a record without a pod
+			t.Fatal(err)
+		}
+		h.on = func(k string) bool { return k != key }
+		h.hook = func() { claim(t, plain, t0.Add(time.Second)) }
+		lister := func(inv directory.IPInventory) []directory.AgentRecord {
+			recs, err := inv.(interface {
+				ListAgentRecords(context.Context) ([]directory.AgentRecord, error)
+			}).ListAgentRecords(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return recs
+		}
+		if recs := lister(hooked); len(recs) != 0 {
+			t.Fatalf("listed %v before the claim", recs)
+		}
+		if recs := lister(plain); len(recs) != 1 || recs[0].AgentID != agent {
+			t.Fatalf("listed %v with the record live: the prune removed it", recs)
 		}
 	})
 

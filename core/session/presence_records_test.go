@@ -97,10 +97,10 @@ func (g *gatedCache) Set(ctx context.Context, key string, value any, exp time.Du
 	return g.MockCache.Set(ctx, key, value, exp)
 }
 
-// SetAdd is the record write PutSession makes (directory.Cache.SetAdd).
-func (g *gatedCache) SetAdd(ctx context.Context, key string, value directory.Value, exp time.Duration, member string, sets ...string) error {
+// SetAddIf is the record write PutSession makes (directory.Cache.SetAddIf).
+func (g *gatedCache) SetAddIf(ctx context.Context, key, ctr string, match func(*directory.Value, int64) bool, value directory.Value, exp time.Duration, member string, sets ...string) (bool, error) {
 	g.gate()
-	return g.MockCache.SetAdd(ctx, key, value, exp, member, sets...)
+	return g.MockCache.SetAddIf(ctx, key, ctr, match, value, exp, member, sets...)
 }
 
 // Finding 10 (Presence.tla renew-race): a renewal that read the stream's

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,10 +30,10 @@ import (
 // inventory over one store. A step runs the code its action names
 // (claimAgentRecord, renewAgentRecord, releaseAgentRecord, enterRotation,
 // yield, unregister, agentStream, attach, GetIP), each store write of the
-// record its own step as in the model (the store holds a call at its SET
-// or DEL until the walk's next step releases it; the delete compares and
-// deletes in one step, Cache.DelIf, the model's Atomic "delete", so it is
-// not held). After every step the
+// record its own step as in the model (the store holds a claim's write
+// until the walk's ClaimSet releases it; a renewal and a delete check and
+// write in one step, Cache.SetAddIf and Cache.DelIf, the model's Atomic
+// "renew" and "delete", so they are not held). After every step the
 // record, the Seq counter, each connection's Seq, phase and pending write,
 // each replica's routing and each session's outcome must be the model's.
 //
@@ -114,10 +115,13 @@ type rwHeld struct {
 	go_ chan bool
 }
 
-// rwStore holds each SET and DEL of the record until released.
+// rwStore holds each SET and DEL of the record, and a claim's SetAddIf,
+// until released; a renewal's SetAddIf (renewing set) is one step, as the
+// model's Atomic "renew".
 type rwStore struct {
 	directory.Cache
-	held chan *rwHeld
+	held     chan *rwHeld
+	renewing atomic.Bool
 }
 
 func (s *rwStore) hold(seq int64) error {
@@ -142,13 +146,13 @@ func (s *rwStore) Set(ctx context.Context, key string, v any, exp time.Duration)
 	return s.Cache.Set(ctx, key, v, exp)
 }
 
-func (s *rwStore) SetAdd(ctx context.Context, key string, v directory.Value, exp time.Duration, member string, sets ...string) error {
-	if key == rwRecKey {
+func (s *rwStore) SetAddIf(ctx context.Context, key, ctr string, match func(*directory.Value, int64) bool, v directory.Value, exp time.Duration, member string, sets ...string) (bool, error) {
+	if key == rwRecKey && !s.renewing.Load() {
 		if err := s.hold(v.Seq); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return s.Cache.SetAdd(ctx, key, v, exp, member, sets...)
+	return s.Cache.SetAddIf(ctx, key, ctr, match, v, exp, member, sets...)
 }
 
 func (s *rwStore) Del(ctx context.Context, keys ...string) (int64, error) {
@@ -278,21 +282,16 @@ func (p *rwReplay) step(m rwState) error {
 		c.as.agent, c.as.session = rwAgent, c.s
 		p.d[c.r].enterRotation(rwAgent, c.as)
 	case "RenewGet":
+		p.store.renewing.Store(true)
 		err := p.run(c, func() error {
 			return renewAgentRecord(ctx, p.inv[c.r], rwAgent, c.s, nil, nil, ttl)
 		})
+		p.store.renewing.Store(false)
 		if errors.Is(err, directory.ErrSuperseded) {
 			p.d[c.r].yield(rwAgent, c.as) // sendLoop's answer
 			return nil
 		}
 		return err
-	case "RenewSet", "DelDo":
-		if err := p.release(c, true); err != nil {
-			return err
-		}
-		if m.A == "DelDo" {
-			c.dpend = "no"
-		}
 	case "End":
 		d := p.d[c.r]
 		if c.as != nil {
@@ -535,7 +534,7 @@ func TestReplicasModelWalks(t *testing.T) {
 	// Every relay step, a yield, a forward, a refusal and a cut session
 	// (not Finish: the client's end, rare in random walks since a Die
 	// disables it; removeSession is all it runs here).
-	for _, a := range []string{"Connect", "ClaimIncr", "ClaimSet", "Register", "RenewGet", "RenewSet", "Die", "End",
+	for _, a := range []string{"Connect", "ClaimIncr", "ClaimSet", "Register", "RenewGet", "Die", "End",
 		"DelGet", "Expire", "Crash", "Restart", "Arrive", "Route", "Accept",
 		"ph:yielded", "st:fwd", "st:refused", "st:cut"} {
 		if seen[a] == 0 {

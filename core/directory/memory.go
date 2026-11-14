@@ -114,20 +114,34 @@ func (m *MemoryCache) Incr(_ context.Context, key string, by int64, ttl time.Dur
 	return e.n, nil
 }
 
-// SetAdd implements Cache.SetAdd.
-func (m *MemoryCache) SetAdd(_ context.Context, key string, value Value, expiration time.Duration, member string, sets ...string) error {
+// SetAddIf implements Cache.SetAddIf.
+func (m *MemoryCache) SetAddIf(_ context.Context, key, ctr string, match func(*Value, int64) bool, value Value, expiration time.Duration, member string, sets ...string) (bool, error) {
 	v, err := toValue(value)
 	if err != nil {
-		return err
+		return false, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if match != nil {
+		var cur *Value
+		if e, ok := m.liveLocked(key); ok && !e.counter {
+			c := e.v
+			cur = &c
+		}
+		var n int64
+		if e, ok := m.liveLocked(ctr); ctr != "" && ok && e.counter {
+			n = e.n
+		}
+		if !match(cur, n) {
+			return false, nil
+		}
+	}
 	now := m.writeLocked()
 	m.kv[key] = memoryEntry{v: v, exp: expiry(now, expiration)}
 	for _, set := range sets {
 		m.saddLocked(set, member)
 	}
-	return nil
+	return true, nil
 }
 
 // DelIf implements Cache.DelIf.

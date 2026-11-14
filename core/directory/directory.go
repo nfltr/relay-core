@@ -60,10 +60,15 @@ type Cache interface {
 	SRem(ctx context.Context, key string, members ...string) (int64, error)
 	SInter(ctx context.Context, keys ...string) ([]string, error)
 
-	// SetAdd writes value at key (as Set) and adds member to each of sets,
-	// in one step: no reader sees the record without its set entries
-	// (nfltr docs/decisions/nf1-index-atomic-2026-11-14.md).
-	SetAdd(ctx context.Context, key string, value Value, expiration time.Duration, member string, sets ...string) error
+	// SetAddIf, in one step against every other write of key and of the
+	// counter at ctr: when match holds for key's record (nil: none) and
+	// that counter (0: none, or ctr empty), writes value at key (as Set),
+	// adds member to each of sets and reports true. No reader sees the
+	// record without its set entries (nfltr
+	// docs/decisions/nf1-index-atomic-2026-11-14.md); no write lands
+	// between match's reads and this write (spec/README.md finding 38).
+	// match nil: always; match must not call the store.
+	SetAddIf(ctx context.Context, key, ctr string, match func(cur *Value, n int64) bool, value Value, expiration time.Duration, member string, sets ...string) (bool, error)
 	// DelIf, in one step against every other write of key: when match
 	// holds for key's record (nil: none), removes member from each of sets
 	// and deletes key, and reports true. match must not call the store.
