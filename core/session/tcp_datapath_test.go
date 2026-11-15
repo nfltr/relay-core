@@ -86,11 +86,25 @@ func TestTCPTunnelIdleAgentKeepsOneStream(t *testing.T) {
 	h.WaitStreams(t, 1)
 	h.WaitConns(t, 1)
 	for range 2 {
-		a, b := h.Dial(t), h.Dial(t) // two at once: busy
-		h.WaitStreams(t, tcpAgentStreams)
-		h.WaitConns(t, tcpAgentStreams)
-		_ = a.Close()
-		_ = b.Close()
+		// Busy: sessions held open at once. The further streams it opens
+		// carry none of the first two (placed before they existed), so the
+		// relay retires each harnessAuxIdle after it registered, maybe
+		// before the last registered (a loaded machine: 3 of 4 seen). A
+		// session more per check lands on the data connections in turn and
+		// keeps them; each one also makes the agent reopen a retired stream.
+		held := []net.Conn{h.Dial(t), h.Dial(t)}
+		waitUntil(t, func() bool {
+			if h.Streams() == tcpAgentStreams && int(h.Conns.Load()) == tcpAgentStreams {
+				return true
+			}
+			held = append(held, h.Dial(t))
+			return false
+		}, func() string {
+			return fmt.Sprintf("busy agent (%d sessions): %d streams on %d connections, want %d", len(held), h.Streams(), h.Conns.Load(), tcpAgentStreams)
+		})
+		for _, c := range held {
+			_ = c.Close()
+		}
 		// Idle again: the auxiliary connections close, the primary stays.
 		h.WaitStreams(t, 1)
 		h.WaitConns(t, 1)
