@@ -10,7 +10,7 @@
 (* clients). A declaration of the rid is accepted only with a              *)
 (* registration proof (rid = H("nf1-rid", n, spki) and a signature by that *)
 (* key over ("nf1-reg", R, rid)), which only Holders can make (relay       *)
-(* spec/proverif/cap_address.pv queries 25, 26). The index set and the     *)
+(* spec/proverif/cap_address.pv queries 27, 28). The index set and the     *)
 (* record are written in one store step and pruned in one (Directory.tla   *)
 (* IndexComplete). One open at a time, repeated: the snapshot of the set,  *)
 (* each member's record read in its own step, then the dial, newest claim  *)

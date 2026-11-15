@@ -732,7 +732,7 @@ that record), so a second record of a rid is always a second agent.
 the key file, the same key under another agent name), `Others` at most the
 address (its clients). A declaration of the rid is accepted only with a
 registration proof, which only a key holder can make (relay
-`spec/proverif/cap_address.pv` queries 25 and 26); the open reads the
+`spec/proverif/cap_address.pv` queries 27 and 28); the open reads the
 index set, each member's record in its own step, then dials the newest
 claim first and falls back to the next when a dial finds the agent gone.
 
