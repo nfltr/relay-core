@@ -777,9 +777,9 @@ with the oldest claim first.
 
 ## NF1Anon.tla: an nf1 address served with no account
 
-`NF1Anon.tla` (the Go column: what lane NF1ANON-CORE builds) models an `nf1` address served with no account on either
-side (nfltr `docs/decisions/nf1-anon-2026-11-16.md`, lane NF1ANON; design,
-no code yet). The owner's rule: such a session's bytes go peer to peer; the
+`NF1Anon.tla` models an `nf1` address served with no account on either
+side (nfltr `docs/decisions/nf1-anon-2026-11-16.md`, lane NF1ANON; code
+lane NFA1: `core/nf1anon`, its traces below). The owner's rule: such a session's bytes go peer to peer; the
 relay carries its signalling (the rendezvous answer, TLS, the proof, the
 control exchange) and never its bulk. The relay cannot tell the two apart
 (both are ciphertext), so it counts every byte of an anonymous session's
@@ -797,11 +797,11 @@ proof, unchanged).
 
 | action | Go |
 |---|---|
-| `Register` | an anonymous ConnectHTTP/ConnectTCP: no credential, one `nf1=` declaration with its registration proof (`checkRegistrations`), the principal `nf1anon` with agent id from the rid and `NotAfter` |
+| `Register` | an anonymous ConnectHTTP (`grpcauth.NF1AnonStreamInterceptor`, `nf1anon.Registry.Register`): no credential, only `nf1=` declarations each with its registration proof, the principal `nf1anon` with agent id `nf1:<rid>` and `NotAfter`; its ConnectTCP joins it |
 | `Tick` | time |
-| `Expire` | the principal's `NotAfter` (`identity.Principal`): the agent's connection ends, its relayed sessions with it |
-| `Open(s, v, r)` | `serveNF1Session` (r = nf1: a data connection's open, or a browser's WebSocket, `nf1ws.go`); every other route (`Reach`, HTTP ingress, A2A) refuses an `nf1anon` agent (r = keyed) |
-| `Relay(s)` | the budgeted onward leg of an anonymous session (`serveNF1Session`'s route wraps it): a write within both budgets is carried, else the leg is aborted with `ERROR_REASON_ACCOUNT_REQUIRED` |
+| `Expire` | the principal's `NotAfter` (`identity.Principal`, `Hold`): the agent's connection ends Unavailable, its relayed sessions with it (`Registry.Expired`) |
+| `Open(s, v, r)` | `serveNF1Session` (r = nf1: a data connection's open, or a browser's WebSocket, `nf1ws.go`; `Registry.Leg`); every other route (`Reach`, `A2AReaches`: HTTP ingress, listings, A2A) refuses an `nf1anon` agent (r = keyed) |
+| `Relay(s)` | the budgeted onward leg of an anonymous session (`frontend/connect` `budgeted`, `Leg.Take`): what fits both budgets is carried, then the leg is aborted both ways with `ERROR_REASON_ACCOUNT_REQUIRED` |
 | `TimeCut(s)` | the anonymous leg's time limit (the same abort) |
 | `Punch(s)`, `Direct(s)`, `Lose(s)` | the peers' direct path (relay `client/agent` `DirectSession`, link `DirectPath.tla`): the relayed leg is released at the move |
 | `Reattach(s)` | a relayed re-attach (`A`): a new nf1 open, budgeted like the first |
@@ -848,14 +848,43 @@ registration expired and the server registered again),
 | a connection's principal ends at its `NotAfter` | `core/identity` (`Principal.NotAfter`, `Hold`) |
 | the budgets count per replica, as every nf1 cap (N replicas: N x) | nfltr `nf1-risks-2026-11-14.md` Risk 2 |
 
+The address budget is the source's bucket at an instant: its refill
+(`nf1.anon.bucket_rate`, bytes a second) is outside the model, so over a
+window T the source's relayed bytes are bounded by the bucket plus the rate
+times T (the decision's "1 MiB, then 1 KiB/s"); the traces run with no
+refill, where the two agree.
+
+### NF1Anon traces
+
+`make spec-traces` runs relaycoretest's `TestNF1Anon*` with `-tags
+relaytrace`: `core/nf1anon` (`trace_on.go`) writes one source's steps on
+one relay to `nf1anon-<source>-<n>.ndjson` (its limits first, then
+Register, Leave, Expire, Open, Relay of n bytes, Cut, TimeCut, End, each
+under the registry's trace lock inside the step), and
+`TraceNF1Anon.tla` (`TraceNF1AnonLog.tla`) checks each against the model
+with `TypeOK` and every invariant above. The relay sees its side only: End
+is the model's Punch, GiveUp or Done; Leave (the agent left, or its next
+connection took the registration over) is Expire after the Ticks it skipped;
+a Relay line of n bytes is n Relay steps (`RelayN`). Rejected fixtures, one
+per invariant and one unknown step (`spec/testdata/reject-nf1anon-*`): a
+leg over its budget, the address over its budget across two legs, a cut on
+an account's session, an untyped cut, an open after the registration
+ended, a step the model has no action for, a refilling bucket. Gaps
+(`COVERAGE=1`): an account's legs are not wrapped, so not traced (`Open`
+with an account's server is taken only by the fixtures); Punch, Direct,
+Lose and Reattach are the peers' (the relay sees a re-attach as a new open).
+
 ### Code map (drift check)
 
 | what the spec models | file |
 |---|---|
 | `Open`, `Relay`, `TimeCut` (`serveNF1Session`, the budget) | `frontend/connect/nf1.go` |
 | `Open` from a browser (the WebSocket's session into `serveNF1Session`) | `frontend/connect/nf1ws.go` |
-| `Register`, `Expire` (the anonymous principal, the declaration) | `core/session/agent_services.go` |
-| `Open`'s other routes refused (`openNF1`, `Reach`) | `core/session/nf1.go` |
+| the budgeted leg, both legs aborted | `frontend/connect/nf1anon.go` |
+| `Register`, `Expire`, the budgets, the recorder | `core/nf1anon/` |
+| `Register`'s stream, `Expire`'s end | `grpcauth/nf1anon_interceptor.go` |
+| `Open`'s other routes refused (`Reach`, `A2AReaches`) | `core/session/agent_reach.go` |
+| the trace check | `spec/TraceNF1Anon.tla` |
 
 ## KeyAccount.tla: accounts of a key-file relay
 

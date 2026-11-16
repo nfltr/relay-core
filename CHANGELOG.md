@@ -12,6 +12,25 @@ changes listed (from the first tag on).
 
 ### Added
 
+- nf1 addresses served with no account (nfltr
+  docs/decisions/nf1-anon-2026-11-16.md, spec/NF1Anon.tla, lane NFA1):
+  with `nf1.anon.enabled` an agent stream with no credential that declares
+  only capability addresses, each with its registration proof, registers
+  anonymously (`core/nf1anon`: provider `nf1anon`, agent id `nf1:<rid>`,
+  no owner, `NotAfter` after `nf1.anon.lifetime`, then its connection ends
+  Unavailable and it registers again; caps `nf1.anon.max`, `source_max`,
+  `source_rate`/`source_burst`). Every relayed leg of a session to such an
+  agent is budgeted (`nf1.anon.leg_bytes`, `leg_time`, and the source's
+  bucket `bucket_bytes` refilling `bucket_rate`, across its sessions and
+  registrations) and past either cut at both ends with
+  `ERROR_REASON_ACCOUNT_REQUIRED`; an account's session never is. No route
+  but an nf1 open reaches such an agent (`Reach`, `A2AReaches`). A
+  composition passes `grpcfactory.WithNF1Anon(core.NF1Anon())` (compose's
+  agent port does). connlimit keys an IPv6 source by its /64
+  (`connlimit.SourceKey`), for every per-source cap of `Accounts`. Off by
+  default. `grpcauth.NF1AnonStreamInterceptor`, `grpcfactory.WithNF1Anon`,
+  `(*session.Core).NF1Anon`, `connlimit.SourceKey`, package `nf1anon`; no
+  other exported API change.
 - A browser's nf1 session over a WebSocket (nfltr
   docs/decisions/browser-peer-2026-11-16.md section 2, lane BP2):
   `GET /nf1/v1`, subprotocol `nf1.v1`, no credential; the first binary

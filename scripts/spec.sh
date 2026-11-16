@@ -262,8 +262,38 @@ CFG
 }
 
 # check_trace FILE: the checker for FILE's kind.
+# natrace FILE: one source's anonymous nf1 registrations and legs
+# (nf1anon-*.ndjson, core/nf1anon's recorder) against spec/TraceNF1Anon.tla.
+natrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Sess <- TraceSess
+    LegBudget <- TraceLegBudget
+    AddrBudget <- TraceAddrBudget
+    MaxUnits <- TraceUnits
+    Lifetime = 1
+    MaxRegs <- TraceRegs
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    LegBounded
+    AddrBounded
+    NoCutOnAccount
+    TypedFailure
+    RegBounded
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceNF1Anon.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
 check_trace() {
 	case $(basename "$1") in
+	nf1anon-* | reject-nf1anon-*) natrace "$1" ;;
 	presence-* | reject-presence-*) ptrace "$1" ;;
 	move-* | reject-move-*) trace_move "$1" ;;
 	handoff-* | reject-handoff-*) htrace "$1" ;;
@@ -599,6 +629,13 @@ traces)
 		cat "$work/test.out"
 		exit 1
 	}
+	# Anonymous nf1 addresses (spec/TraceNF1Anon.tla): the relay end to end.
+	mkdir -p "$work/natraces"
+	RELAYTRACE=$work/natraces go test -tags relaytrace -count=1 -run "${NF1ANON_TESTS:-^TestNF1Anon}" ./relaycoretest/ >>"$work/test.out" 2>&1 || {
+		cat "$work/test.out"
+		exit 1
+	}
+	find "$work/natraces" -type f ! -name 'nf1anon-*' -exec rm {} + # the other recorders' steps of the same run
 	mkdir -p "$work/client"
 	RELAYTRACE=$work/client go test -tags relaytrace -count=1 -run "$ctests" github.com/nfltr/relay/client/agent >>"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
@@ -629,6 +666,8 @@ traces)
 		echo "$r: rejected"
 	done
 	st=0
+	echo "== NF1Anon (spec/TraceNF1Anon.tla)"
+	checktraces "$work/natraces" natrace || st=1
 	echo "== AgentLink (spec/Trace.tla)"
 	checktraces "$work/traces" trace || st=1
 	echo "== Move (spec/TraceMove.tla)"

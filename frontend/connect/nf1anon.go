@@ -12,7 +12,6 @@ import (
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/nf1anon"
 	"github.com/nfltr/relay-core/platform/metrics"
-	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
@@ -55,7 +54,7 @@ func (b *budget) cut(why string) {
 	b.once.Do(func() {
 		b.timer.Stop()
 		metrics.RecordConnectSession(true, "nf1_anon_cut_"+why)
-		a := &link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED), Msg: nf1anon.Msg}
+		a := &link.Abort{Code: dataplane.AbortCode(nf1anon.Reason), Msg: nf1anon.Msg}
 		abort(b.out, a)
 		abort(b.in, a)
 	})

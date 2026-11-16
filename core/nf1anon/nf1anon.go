@@ -49,6 +49,12 @@ func AgentID(rid [agentservices.RIDSize]byte) string {
 // nf1 open reaches it (spec/NF1Anon.tla Open, mutant keyed-route).
 func IsAgent(agentID string) bool { return strings.HasPrefix(agentID, agentPrefix) }
 
+// Reason is the cut's reason, at both ends (relay proto 52).
+const Reason = relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED
+
+// why is Reason as a trace names it (spec/NF1Anon.tla CutWhy).
+var why = strings.ToLower(strings.TrimPrefix(Reason.String(), "ERROR_REASON_"))
+
 // Msg is the cut's message, at both ends.
 const Msg = "nf1: no direct path formed, and this address has no account behind it: relaying needs the serving side's nfltr account"
 
@@ -196,12 +202,14 @@ func (r *Registry) traceStep(src netip.Addr, ev string) {
 }
 
 // event is one line of a trace (-tags relaytrace, trace_on.go): ev the
-// step, s the leg, srv its server, n the bytes a Relay carried.
+// step, s the leg, srv its server, n the bytes a Relay carried, why a
+// cut's reason.
 type event struct {
 	Ev  string `json:"ev"`
 	S   int    `json:"s,omitempty"`
 	Srv string `json:"srv,omitempty"`
 	N   int    `json:"n,omitempty"`
+	Why string `json:"why,omitempty"`
 }
 
 // Source is ip's source key: an IPv4 address, an IPv6 /64.
@@ -285,20 +293,20 @@ func (l *Leg) Take(n int) int {
 	}
 	if fit < int64(n) {
 		l.ended = true
-		l.r.trace(l.src, event{Ev: "Cut", S: l.id}, l.id)
+		l.r.trace(l.src, event{Ev: "Cut", S: l.id, Why: why}, l.id)
 	}
 	return int(fit)
 }
 
 // TimeUp ends the leg at its time limit (TimeCut): false when it had
 // ended already.
-func (l *Leg) TimeUp() bool { return l.end("TimeCut") }
+func (l *Leg) TimeUp() bool { return l.end(event{Ev: "TimeCut", Why: why}) }
 
 // End notes the leg ended otherwise (its peers ended it, a punch released
 // it): false when it had ended already.
-func (l *Leg) End() bool { return l.end("End") }
+func (l *Leg) End() bool { return l.end(event{Ev: "End"}) }
 
-func (l *Leg) end(ev string) bool {
+func (l *Leg) end(e event) bool {
 	defer l.r.traceLock()()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -306,7 +314,8 @@ func (l *Leg) end(ev string) bool {
 		return false
 	}
 	l.ended = true
-	l.r.trace(l.src, event{Ev: ev, S: l.id}, l.id)
+	e.S = l.id
+	l.r.trace(l.src, e, l.id)
 	return true
 }
 

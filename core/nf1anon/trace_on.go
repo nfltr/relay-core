@@ -59,6 +59,11 @@ func (r *Registry) trace(src netip.Addr, e event, id int) int {
 		}
 		t = &traceFile{f: f}
 		r.tr.files[src] = t
+		// The limits first: the trace's constants (spec/TraceNF1Anon.tla).
+		b, _ := json.Marshal(map[string]any{"ev": "Limits", "leg": r.s.LegBytes, "addr": r.s.BucketBytes, "rate": r.s.BucketRate})
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			panic(err)
+		}
 	}
 	if e.Ev == "Open" {
 		t.legs++
