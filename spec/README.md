@@ -808,10 +808,13 @@ proof, unchanged).
 | `GiveUp(s)` | the SDK's direct-required bound: the client aborts with the same reason |
 | `Done(s)` | the transfer's clean end |
 
-Invariants (`NF1Anon.cfg`: two sessions, an anonymous server and an
-account's, three units per transfer against a leg budget of two and an
-address budget of three; `make spec`, 600,167 states (207,443 distinct),
-depth 25, 23 s on 4 workers under load; `COVERAGE=1` takes every action):
+Invariants (`NF1Anon.cfg`: one session, to the anonymous server or an
+account's, four units per transfer against a leg budget of two and an
+address budget of two, the smallest size that catches every mutant; `make
+spec`, 4,189 states (2,172 distinct), about a second; `COVERAGE=1` takes
+every action; `NF1AnonLarge.cfg`, two sessions, three units, address
+budget three, nightly: 600,167 states (207,443 distinct), depth 25, 23 s
+on 4 workers under load):
 `LegBounded` (no relayed leg of an anonymous session carries more than its
 budget), `AddrBounded` (all of the address's relayed legs together carry at
 most its budget: no bulk by chunking into sessions or by re-attaching),
@@ -824,7 +827,7 @@ fairness of the relay's time limit only.
 
 Mutants (`make spec-mutants`), each caught: `no-budget` (the relay counts
 nothing: `LegBounded`, 6 states deep), `reattach-unbudgeted` (a relayed
-fallback carried as an account's: `AddrBounded`, 11), `cut-account` (every
+fallback carried as an account's: `AddrBounded`, 9), `cut-account` (every
 nf1 session budgeted, an account's too: `NoCutOnAccount`, 3), `untyped-cut`
 (the cut is a plain reset: `TypedFailure`, 5), `no-expiry` (the connection
 runs past `NotAfter`: `RegBounded`, 4), `keyed-route` (another route names

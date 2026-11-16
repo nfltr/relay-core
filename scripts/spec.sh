@@ -13,7 +13,8 @@
 #             WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
-#             Presence's with a crash (nightly, weekly).
+#             Presence's with a crash; spec/NF1AnonLarge.cfg: two sessions
+#             (nightly, weekly).
 #   mutants   each Mutant must be caught, and each documented race found
 #             (spec/README.md "Findings") (CI).
 #   liveness  TLC on spec/AgentLinkLive.cfg, AgentLinkBreak.cfg,
@@ -397,6 +398,7 @@ nightly)
 	run AgentLink.cfg MCAgentLink.tla
 	run AgentLinkLarge.cfg MCAgentLink.tla
 	run PresenceLarge.cfg Presence.tla
+	run NF1AnonLarge.cfg NF1Anon.tla
 	;;
 liveness)
 	run AgentLinkLive.cfg MCAgentLink.tla
