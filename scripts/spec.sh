@@ -9,7 +9,7 @@
 #   check     actions, then TLC on spec/AgentLink.cfg (Refines left out),
 #             AgentLinkIface.cfg (Refines on fewer bytes), spec/Handoff.cfg,
 #             spec/Move.cfg, spec/Presence.cfg, spec/Directory.cfg and
-#             DirectoryHeal.cfg, spec/NF1Claim.cfg, spec/Failover.cfg and FailoverShare.cfg: invariants; spec/AgentLinkWrite.cfg:
+#             DirectoryHeal.cfg, spec/NF1Claim.cfg, spec/NF1Anon.cfg, spec/Failover.cfg and FailoverShare.cfg: invariants; spec/AgentLinkWrite.cfg:
 #             WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
@@ -18,7 +18,7 @@
 #             (spec/README.md "Findings") (CI).
 #   liveness  TLC on spec/AgentLinkLive.cfg, AgentLinkBreak.cfg,
 #             HandoffLive.cfg, MoveLive.cfg, PresenceLive.cfg and
-#             FailoverLive.cfg (weekly).
+#             FailoverLive.cfg and NF1AnonLive.cfg (weekly).
 #   simulate  random walks on two sessions with larger sizes (weekly).
 #   traces    the core/session tests in TRACE_TESTS run with -tags
 #             relaytrace; each stream's trace checked against spec/Trace.tla,
@@ -331,7 +331,7 @@ checktraces() {
 # ways) and each trace module's event names against the recorder's Go.
 actions_check() {
 	ok=0
-	for m in AgentLink Handoff Move Presence Directory NF1Claim KeyAccount AccountLimit Failover; do
+	for m in AgentLink Handoff Move Presence Directory NF1Claim NF1Anon KeyAccount AccountLimit Failover; do
 		# A step: a definition whose body primes or keeps a variable (not a temporal formula).
 		acts=$(awk '
 			function flush() { if (name != "" && act && !tmp) print name; name = "" }
@@ -391,6 +391,7 @@ check)
 	run FailoverShare.cfg Failover.tla
 	run DirectoryHeal.cfg Directory.tla
 	run NF1Claim.cfg NF1Claim.tla
+	run NF1Anon.cfg NF1Anon.tla
 	;;
 nightly)
 	run AgentLink.cfg MCAgentLink.tla
@@ -405,6 +406,7 @@ liveness)
 	run PresenceLive.cfg Presence.tla
 	run AccountLimitLive.cfg AccountLimit.tla
 	run FailoverLive.cfg Failover.tla
+	run NF1AnonLive.cfg NF1Anon.tla
 	;;
 mutants)
 	m='s/Mutant = "none"/Mutant = "'
@@ -556,6 +558,19 @@ mutants)
 	expect NF1Claim.cfg NF1Claim.tla witness:nf1-fallback -e 's/^    NoFalseNotServed$/    WitnessFallback/'
 	expect NF1Claim.cfg NF1Claim.tla witness:nf1-refused -e 's/^    NoHolderRefused$/    WitnessRefused/'
 	expect NF1Claim.cfg NF1Claim.tla witness:nf1-not-served -e 's/^    NoFalseNotServed$/    WitnessNotServed/'
+	# NF1Anon.tla: an nf1 address served with no account (NF1ANON, design):
+	# the relay's budget, its scope and the registration's lifetime put back
+	# wrong; witnesses.
+	for b in no-budget reattach-unbudgeted cut-account untyped-cut no-expiry keyed-route; do
+		expect NF1Anon.cfg NF1Anon.tla "anon:$b" -e "$m$b\"/"
+	done
+	expect NF1AnonLive.cfg NF1Anon.tla anon:no-time-limit -e "$m"'no-time-limit"/'
+	for w in DirectDone Cut AccountRelayed ReattachCut; do
+		expect NF1Anon.cfg NF1Anon.tla "witness:anon-$w" -e "s/^    LegBounded\$/    Witness$w/"
+	done
+	for w in Renewed DirectOutlivesReg; do
+		expect NF1Anon.cfg NF1Anon.tla "witness:anon-$w" -e "s/^    RegBounded\$/    Witness$w/"
+	done
 	expect Presence.cfg Presence.tla no-crash-resync -e "$m"'no-crash-resync"/' -e 's/Crash = FALSE/Crash = TRUE/'
 	exit $fail
 	;;

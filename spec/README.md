@@ -775,6 +775,84 @@ with the oldest claim first.
 | `Snap`, `Read`, `Prune`, `Next1`'s order (`NF1Agents`) | `core/directory/nf1_index.go` |
 | `RouteSound`, `NoHolderRefused` (`TestNF1DeclarationProof`); `NoFalseNotServed`, fallback (`TestNF1TwoServers`, `TestNF1TwoServersEndToEnd`) | `core/session/nf1_test.go`, `relaycoretest/nf1_test.go` |
 
+## NF1Anon.tla: an nf1 address served with no account
+
+`NF1Anon.tla` (the Go column: what lane NF1ANON-CORE builds) models an `nf1` address served with no account on either
+side (nfltr `docs/decisions/nf1-anon-2026-11-16.md`, lane NF1ANON; design,
+no code yet). The owner's rule: such a session's bytes go peer to peer; the
+relay carries its signalling (the rendezvous answer, TLS, the proof, the
+control exchange) and never its bulk. The relay cannot tell the two apart
+(both are ciphertext), so it counts every byte of an anonymous session's
+relayed legs against a leg budget and the address's budget (a per-source
+token bucket that a new registration does not refill) and cuts the leg past
+either, or past the leg's time limit, with the typed reason
+`account_required`, which both ends get. The peers are arbitrary: a patched
+client or agent writes whatever it likes on its relayed leg, re-attaches
+relayed after its direct path died, or opens the agent by another route; the
+relay's rules alone must hold the bounds. An anonymous registration lives
+at most `Lifetime` (the principal's `NotAfter`), then the relay ends its
+connection and every relayed leg it holds; a direct path is the peers' and
+lives on. Who may register the rid is `NF1Claim.tla`'s (the registration
+proof, unchanged).
+
+| action | Go |
+|---|---|
+| `Register` | an anonymous ConnectHTTP/ConnectTCP: no credential, one `nf1=` declaration with its registration proof (`checkRegistrations`), the principal `nf1anon` with agent id from the rid and `NotAfter` |
+| `Tick` | time |
+| `Expire` | the principal's `NotAfter` (`identity.Principal`): the agent's connection ends, its relayed sessions with it |
+| `Open(s, v, r)` | `serveNF1Session` (r = nf1); every other route (`Reach`, HTTP ingress, A2A) refuses an `nf1anon` agent (r = keyed) |
+| `Relay(s)` | the budgeted onward leg of an anonymous session (`serveNF1Session`'s route wraps it): a write within both budgets is carried, else the leg is aborted with `ERROR_REASON_ACCOUNT_REQUIRED` |
+| `TimeCut(s)` | the anonymous leg's time limit (the same abort) |
+| `Punch(s)`, `Direct(s)`, `Lose(s)` | the peers' direct path (relay `client/agent` `DirectSession`, link `DirectPath.tla`): the relayed leg is released at the move |
+| `Reattach(s)` | a relayed re-attach (`A`): a new nf1 open, budgeted like the first |
+| `GiveUp(s)` | the SDK's direct-required bound: the client aborts with the same reason |
+| `Done(s)` | the transfer's clean end |
+
+Invariants (`NF1Anon.cfg`: two sessions, an anonymous server and an
+account's, three units per transfer against a leg budget of two and an
+address budget of three; `make spec`, 600,167 states (207,443 distinct),
+depth 25, 23 s on 4 workers under load; `COVERAGE=1` takes every action):
+`LegBounded` (no relayed leg of an anonymous session carries more than its
+budget), `AddrBounded` (all of the address's relayed legs together carry at
+most its budget: no bulk by chunking into sessions or by re-attaching),
+`NoCutOnAccount` (the cut is never forced on a session with an account
+behind it), `TypedFailure` (a failed session ends with `account_required`
+or `expired`, the same at both ends), `RegBounded` (a registration lives at
+most its lifetime). Liveness (`NF1AnonLive.cfg`, `make spec-liveness`):
+`LeavesRelay` (an anonymous session does not stay relayed), under weak
+fairness of the relay's time limit only.
+
+Mutants (`make spec-mutants`), each caught: `no-budget` (the relay counts
+nothing: `LegBounded`, 6 states deep), `reattach-unbudgeted` (a relayed
+fallback carried as an account's: `AddrBounded`, 11), `cut-account` (every
+nf1 session budgeted, an account's too: `NoCutOnAccount`, 3), `untyped-cut`
+(the cut is a plain reset: `TypedFailure`, 5), `no-expiry` (the connection
+runs past `NotAfter`: `RegBounded`, 4), `keyed-route` (another route names
+the anonymous agent and carries no budget: `LegBounded`, 6), `no-time-limit`
+(`LeavesRelay`, 7). Witnesses, each reached: `WitnessDirectDone` (an
+anonymous transfer done with its bulk direct), `WitnessCut`,
+`WitnessAccountRelayed` (an account's session carries more than the leg
+budget relayed and completes), `WitnessReattachCut`, `WitnessRenewed` (a
+registration expired and the server registered again),
+`WitnessDirectOutlivesReg` (a direct session outlives its registration).
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| the relay sees every byte of a relayed leg and can abort it both ways with a reason | link `ForwardConfig`/`Abort` (`docs/design/chaining.md`), relay-core `session_chain.go` |
+| a direct path's bytes never cross the relay | relay `client/agent` direct paths, link `spec/DirectPath.tla`; measured: 6.8 KB of 4.9 GB relayed (nfltr `nf1-direct-2026-11-14.md`) |
+| a connection's principal ends at its `NotAfter` | `core/identity` (`Principal.NotAfter`, `Hold`) |
+| the budgets count per replica, as every nf1 cap (N replicas: N x) | nfltr `nf1-risks-2026-11-14.md` Risk 2 |
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `Open`, `Relay`, `TimeCut` (`serveNF1Session`, the budget) | `frontend/connect/nf1.go` |
+| `Register`, `Expire` (the anonymous principal, the declaration) | `core/session/agent_services.go` |
+| `Open`'s other routes refused (`openNF1`, `Reach`) | `core/session/nf1.go` |
+
 ## KeyAccount.tla: accounts of a key-file relay
 
 `KeyAccount.tla` models the key file of a relay without a database
