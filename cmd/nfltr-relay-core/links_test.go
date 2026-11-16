@@ -39,6 +39,8 @@ var modules = []string{
 	"github.com/fsnotify/fsnotify",
 	"github.com/hashicorp/golang-lru/v2",
 	"github.com/flynn/noise",
+	"github.com/jackpal/gateway", // NAT-PMP port mapping of the direct path (relay/client, lane PORTMAP)
+	"github.com/jackpal/go-nat-pmp",
 	"golang.org/x/",
 }
 
