@@ -130,7 +130,9 @@ func (f *Frontend) serveNF1Session(r *http.Request, open *pb.TCPData, s peerlink
 		// The serving agent's owner pays (the owner's decision 2026-11-13).
 		session.MeterChain(ctx, f.Core.Dispatcher.OpenMeter(metrics.PathConnect, out.AgentID))
 		began := metrics.TransferBegin(metrics.PathConnect)
-		return out.Session, func() {
+		// An address served with no account: its relayed leg is budgeted
+		// (nf1anon.go); an account's is out.Session itself.
+		return budgeted(s, out.Session, f.Core.NF1Anon().Leg(out.AgentID)), func() {
 			if out.Release != nil {
 				out.Release()
 			}

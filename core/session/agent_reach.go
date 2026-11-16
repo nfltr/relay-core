@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nfltr/relay-core/core/identity"
+	"github.com/nfltr/relay-core/core/nf1anon"
 )
 
 // Action is what a reach decision is asked for (identity.Action: the
@@ -36,9 +37,12 @@ type Policy interface {
 // A different account is refused before any policy is asked; no Policy
 // refuses everything (fail closed, no legacy pass-through). An owner the
 // directory could not read is an error, not "no". Under SingleTenant (DEV
-// ONLY) every authenticated principal reaches every agent.
+// ONLY) every authenticated principal reaches every agent, but for an
+// agent with no account (core/nf1anon), which no principal reaches.
 func (d *Dispatcher) Reach(p identity.Principal, agentID string, a Action) (bool, error) {
-	if p.Owner == "" && p.Subject == "" {
+	if (p.Owner == "" && p.Subject == "") || nf1anon.IsAgent(agentID) || p.Provider == nf1anon.Provider {
+		// An agent with no account is reached by nf1 opens only (they ask
+		// no Reach), and reaches nothing (spec/NF1Anon.tla keyed-route).
 		return false, nil
 	}
 	if d.SingleTenant {
@@ -114,7 +118,7 @@ func (d *Dispatcher) ownerProvider(owner string) string {
 // The replica that forwards a call and the one that delivers it
 // (RelayTunnel) both ask it.
 func (d *Dispatcher) A2AReaches(source, target string) (bool, error) {
-	if source == "" {
+	if source == "" || nf1anon.IsAgent(source) || nf1anon.IsAgent(target) {
 		return false, nil
 	}
 	if d.SingleTenant {

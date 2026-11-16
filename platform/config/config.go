@@ -391,6 +391,19 @@ func SetDefaultFlags() {
 	_ = flag.Int("nf1.address_max", 64, "open sessions of one capability address")
 	_ = flag.Float64("nf1.address_rate", 10, "new sessions a second of one capability address")
 	_ = flag.Int("nf1.address_burst", 20, "burst of nf1.address_rate")
+	// An nf1 address served with no account (nfltr
+	// docs/decisions/nf1-anon-2026-11-16.md): direct only, the relay
+	// carries its sessions' signalling. Per replica.
+	_ = flag.Bool("nf1.anon.enabled", false, "take nf1 addresses served with no account (an agent with no credential declaring only capability addresses, each with its registration proof): their sessions' relayed legs carry signalling only; needs nf1.enabled")
+	_ = flag.Duration("nf1.anon.lifetime", time.Hour, "an anonymous registration's lifetime: the relay ends its connection then and the agent registers again")
+	_ = flag.Int64("nf1.anon.leg_bytes", 128<<10, "bytes one relayed leg of an anonymous address's session carries, both ways, before the relay cuts it (account_required)")
+	_ = flag.Duration("nf1.anon.leg_time", 2*time.Minute, "how long one relayed leg of an anonymous address's session lives before the relay cuts it (account_required)")
+	_ = flag.Int("nf1.anon.bucket_bytes", 1<<20, "relayed bytes of all the anonymous sessions of one source (IPv4 address, IPv6 /64), across its registrations")
+	_ = flag.Float64("nf1.anon.bucket_rate", 1024, "refill of nf1.anon.bucket_bytes, bytes a second")
+	_ = flag.Int("nf1.anon.max", 1024, "anonymous registrations open on this replica")
+	_ = flag.Int("nf1.anon.source_max", 8, "anonymous registrations open from one source (IPv4 address, IPv6 /64)")
+	_ = flag.Float64("nf1.anon.source_rate", 1.0/60, "new anonymous registrations a second from one source")
+	_ = flag.Int("nf1.anon.source_burst", 8, "burst of nf1.anon.source_rate")
 
 	// ── Admin API ───────────────────────────────────────────────────────
 	_ = flag.String("admin.message", "", "admin message displayed to agents on connect and on the landing page (empty = no message)")
@@ -515,11 +528,24 @@ const (
 )
 
 // CheckNF1 refuses nf1.enabled without nf1.hosts: such a relay would take
-// no address's declaration (nfltr docs/decisions/nf1-risks-2026-11-14.md).
+// no address's declaration (nfltr docs/decisions/nf1-risks-2026-11-14.md);
+// and nf1.anon.enabled without nf1.enabled, or with a limit that is not
+// positive (nfltr docs/decisions/nf1-anon-2026-11-16.md).
 // A relay calls it before it starts.
 func CheckNF1() error {
 	if viper.GetBool("nf1.enabled") && len(viper.GetStringSlice("nf1.hosts")) == 0 {
 		return fmt.Errorf("nf1.enabled needs nf1.hosts: the relay hosts its capability addresses name")
+	}
+	if !viper.GetBool("nf1.anon.enabled") {
+		return nil
+	}
+	switch {
+	case !viper.GetBool("nf1.enabled"):
+		return fmt.Errorf("nf1.anon.enabled needs nf1.enabled")
+	case viper.GetDuration("nf1.anon.lifetime") <= 0, viper.GetInt64("nf1.anon.leg_bytes") <= 0, viper.GetDuration("nf1.anon.leg_time") <= 0,
+		viper.GetInt("nf1.anon.bucket_bytes") <= 0, viper.GetFloat64("nf1.anon.bucket_rate") < 0,
+		viper.GetInt("nf1.anon.max") <= 0, viper.GetInt("nf1.anon.source_max") <= 0, viper.GetFloat64("nf1.anon.source_rate") <= 0, viper.GetInt("nf1.anon.source_burst") <= 0:
+		return fmt.Errorf("nf1.anon.*: every limit must be positive (bucket_rate may be 0): an anonymous address without them is a free relay")
 	}
 	return nil
 }

@@ -140,3 +140,20 @@ func BenchmarkAccountsAdmitNoLimits(b *testing.B) {
 		r()
 	}
 }
+
+// TestAccountsIPv6SourceIsSlash64: the addresses of one IPv6 /64 are one
+// source (an attacker with a /64 holds 2^64 addresses), another /64 is
+// another (nfltr docs/decisions/nf1-anon-2026-11-16.md, the anonymous
+// caps).
+func TestAccountsIPv6SourceIsSlash64(t *testing.T) {
+	a := NewAccounts(Limits{SourceMax: 1})
+	if _, why := a.Admit("acct", net.ParseIP("2001:db8:1:2::1")); why != "" {
+		t.Fatal(why)
+	}
+	if _, why := a.Admit("acct", net.ParseIP("2001:db8:1:2:ffff::9")); why != ReasonAccountSourceConns {
+		t.Fatalf("same /64: %q, want %s", why, ReasonAccountSourceConns)
+	}
+	if _, why := a.Admit("acct", net.ParseIP("2001:db8:1:3::1")); why != "" {
+		t.Fatalf("another /64: %q", why)
+	}
+}

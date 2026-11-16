@@ -88,6 +88,17 @@ func (a *Accounts) Limits() Limits {
 
 func nop() {}
 
+// SourceKey is the source a cap counts a's connections under: an IPv4
+// address, an IPv6 /64 (one host's usual share: an attacker with a /64
+// is one source, not 2^64), as WrapPacketConn keys datagrams.
+func SourceKey(a netip.Addr) netip.Addr {
+	a = a.Unmap()
+	if a.Is6() {
+		a = netip.PrefixFrom(a, 64).Masked().Addr()
+	}
+	return a
+}
+
 // Admit counts a connection of account from ip: release frees its counts
 // (once, however often called), or reason says which limit refused it
 // (release then is nil). No account (""), no address or no limit admits.
@@ -100,7 +111,7 @@ func (a *Accounts) Admit(account string, ip net.IP) (release func(), reason stri
 	if l.none() || account == "" || !ok {
 		return nop, ""
 	}
-	k := srcKey{account, addr.Unmap()}
+	k := srcKey{account, SourceKey(addr)}
 	var src string // the source bucket's key
 	if l.SourceRate > 0 {
 		src = account + " " + k.ip.String()

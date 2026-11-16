@@ -46,7 +46,7 @@ type AgentPort struct {
 // it (TCPDispatcher.Link), so it comes before the QUIC link and before
 // the gRPC server accepts (TestAgentLinkSurvivesReconnect).
 func (p AgentPort) Serve(ctx context.Context) error {
-	opts := []grpcfactory.GRPCServerOption{grpcfactory.WithAuthenticator(p.Auth), grpcfactory.WithRelayID(p.Core.Dispatcher.RelayID)}
+	opts := []grpcfactory.GRPCServerOption{grpcfactory.WithAuthenticator(p.Auth), grpcfactory.WithRelayID(p.Core.Dispatcher.RelayID), grpcfactory.WithNF1Anon(p.Core.NF1Anon())}
 	if p.PeerCertificates {
 		opts = append(opts, grpcfactory.WithPeerCertificates())
 	}

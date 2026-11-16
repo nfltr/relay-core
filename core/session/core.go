@@ -6,11 +6,14 @@ package session
 import (
 	"crypto/tls"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/relay-core/broker"
 	"github.com/nfltr/relay-core/core/directory"
+	"github.com/nfltr/relay-core/core/nf1anon"
+	"github.com/spf13/viper"
 )
 
 // Core is one replica's session core: its agents' sessions (Dispatcher,
@@ -49,6 +52,9 @@ type Core struct {
 	// PresenceBus shares presence with peer replicas (presence.go).
 	PresenceBus PresenceBus
 
+	nf1anonOnce sync.Once
+	nf1anon     *nf1anon.Registry
+
 	// AgentLinkUDP and AgentLinkTLS take agents' agent-link connections
 	// over QUIC; nil: TCP only.
 	AgentLinkUDP net.PacketConn
@@ -58,4 +64,13 @@ type Core struct {
 	// policy for Open.
 	Reach      Reach
 	DialPolicy DialPolicy
+}
+
+// NF1Anon is the replica's registry of nf1 addresses served with no
+// account (nf1.anon.*, nf1.hosts; read at first use): the gRPC
+// interceptor registers them, the connect frontend budgets their
+// sessions' relayed legs (core/nf1anon).
+func (c *Core) NF1Anon() *nf1anon.Registry {
+	c.nf1anonOnce.Do(func() { c.nf1anon = nf1anon.New(nf1anon.FromSettings(), viper.GetStringSlice("nf1.hosts")) })
+	return c.nf1anon
 }

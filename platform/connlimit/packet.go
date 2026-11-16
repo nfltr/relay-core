@@ -110,9 +110,7 @@ func (f *packetFilter) admit(a net.Addr, long bool, now time.Time) bool {
 	if f.cfg.ExemptLoopback && ip.IsLoopback() {
 		return true
 	}
-	if ip.Is6() {
-		ip = netip.PrefixFrom(ip, 64).Masked().Addr()
-	}
+	ip = SourceKey(ip)
 	if now.Sub(f.swept) > time.Minute {
 		f.sweep(now)
 	}

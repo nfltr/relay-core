@@ -14,6 +14,7 @@ import (
 	"github.com/nfltr/relay-core/grpcauth"
 
 	"github.com/nfltr/relay-core/core/identity"
+	"github.com/nfltr/relay-core/core/nf1anon"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/experimental"
@@ -56,6 +57,7 @@ type grpcServerConfig struct {
 	auth      *identity.Authenticator
 	peerCerts bool
 	relayID   string
+	nf1anon   *nf1anon.Registry
 }
 
 // WithRelayID names the relay's id (session.Dispatcher.RelayID) in the
@@ -76,6 +78,13 @@ func WithPeerCertificates() GRPCServerOption {
 // (grpcauth.AuthStreamInterceptor).
 func WithAuthenticator(auth *identity.Authenticator) GRPCServerOption {
 	return func(cfg *grpcServerConfig) { cfg.auth = auth }
+}
+
+// WithNF1Anon registers agent streams with no credential that declare
+// only capability addresses as anonymous with r
+// (grpcauth.NF1AnonStreamInterceptor), when r takes such registrations.
+func WithNF1Anon(r *nf1anon.Registry) GRPCServerOption {
+	return func(cfg *grpcServerConfig) { cfg.nf1anon = r }
 }
 
 // NewGRPCServer creates a gRPC server with logging, request-ID, validation,
@@ -132,6 +141,9 @@ func NewGRPCServer(logger *slog.Logger, opts ...GRPCServerOption) *grpc.Server {
 		// Credential authentication, and the stream held under its credential (a
 		// revocation or expiry ends it).
 		grpcauth.AuthStreamInterceptor(cfg.auth),
+		// An agent with no credential serving only capability addresses:
+		// anonymous, held until its NotAfter. No-op when not enabled.
+		grpcauth.NF1AnonStreamInterceptor(cfg.auth, cfg.nf1anon),
 
 		// request-Id interceptor
 		requestid.StreamServerInterceptor(),

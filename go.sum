@@ -168,6 +168,8 @@ github.com/nfltr/relay/client v0.22.2 h1:PuAOvuxdQ9YjDpF8iXuCRQPPatVky8a8W3JZ+eV
 github.com/nfltr/relay/client v0.22.2/go.mod h1:oHwCX7rsrsWdsqRaWHFBba3MIBIaRd30KZkevC8PqHo=
 github.com/nfltr/relay/proto v0.20.1 h1:WanbCJYEWVbR9+MZhZQWXJt2fzmbARjfXVvhDg0uAes=
 github.com/nfltr/relay/proto v0.20.1/go.mod h1:8pImY8C6O0j9CVWDnGF9PEJd+TDLkAPeBhQlVRBNDV8=
+github.com/nfltr/relay/proto v0.20.2-0.20261116093655-dfda8e361ba1 h1:M21ZzqB4WR90q7jzPgO5zuWJ7FxbPd6/xw80yoF+v5k=
+github.com/nfltr/relay/proto v0.20.2-0.20261116093655-dfda8e361ba1/go.mod h1:8pImY8C6O0j9CVWDnGF9PEJd+TDLkAPeBhQlVRBNDV8=
 github.com/opentracing/opentracing-go v1.1.0/go.mod h1:UkNAQd3GIcIGf0SeVgPpRdFStlNbqXla1AfSYxPUl2o=
 github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
 github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
