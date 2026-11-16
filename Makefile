@@ -7,7 +7,7 @@ export GOWORK := off
 GOVULNCHECK_VERSION := v1.8.0
 
 .PHONY: check test-identity build vet check-fmt test test-race fuzz-short fuzz-long check-gosec check-semgrep check-govulncheck check-publish check-binary-size examples readme-quickstart
-check: build vet check-fmt test-identity test-race fuzz-short check-gosec check-semgrep check-govulncheck check-publish check-binary-size examples readme-quickstart
+check: build vet check-fmt test-identity check-gosec check-semgrep check-govulncheck check-publish check-binary-size test-race fuzz-short examples readme-quickstart
 
 # check-fmt: gofmt (the toolchain's, not one on PATH) changes no tracked Go
 # file (vendor/ aside); go vet and the tests accept unformatted code.

@@ -20,6 +20,45 @@ on:
 permissions:
   contents: read
 jobs:
+  api:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [check-api]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # check-api compares against the latest release tag
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make ${{ matrix.target }}
+  # Fail fast: the cheap checks (each under a minute) run first (make ci
+  # runs the jobs in order), before make check's tests and the TLC models.
+  static:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # ProVerif is built from source once (scripts/fetch-proverif.sh).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/relay-proverif
+          key: proverif-${{ runner.os }}-${{ hashFiles('scripts/fetch-proverif.sh') }}
+      - run: make spec-proverif
+      # the model's bindings against the code (spec/proverif/README.md "Bindings")
+      - run: make spec-bindings
+      - run: make check-spec-drift
   check:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
@@ -41,35 +80,6 @@ jobs:
         with:
           persist-credentials: false
       - run: make spec spec-mutants
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      # ProVerif is built from source once (scripts/fetch-proverif.sh).
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/relay-proverif
-          key: proverif-${{ runner.os }}-${{ hashFiles('scripts/fetch-proverif.sh') }}
-      - run: make spec-proverif
-      # the model's bindings against the code (spec/proverif/README.md "Bindings")
-      - run: make spec-bindings
-      - run: make check-spec-drift
-  api:
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [check-api]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0 # check-api compares against the latest release tag
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - run: make ${{ matrix.target }}
   spec-full:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
