@@ -13,7 +13,7 @@ require (
 	github.com/nfltr/link v0.12.14
 	github.com/nfltr/link/peerlink/quiclink v0.5.21
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52
-	github.com/nfltr/relay/client v0.22.3-0.20261116111324-0972c3b585f5
+	github.com/nfltr/relay/client v0.22.3-0.20261116131243-249a06ead064
 	github.com/nfltr/relay/proto v0.20.2-0.20261116095538-0c46f730f6ef
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
