@@ -1,8 +1,18 @@
 Compatible changes:
+- ./grpcauth.NF1AnonStreamInterceptor: added
+- ./grpcfactory.WithNF1Anon: added
+- ./core/session.(*Core).NF1Anon: added
+- ./platform/metrics.NF1AnonCut: added
+- ./platform/metrics.NF1AnonCutBytes: added
+- ./platform/metrics.NF1AnonCutTime: added
+- ./platform/metrics.NF1AnonExpired: added
+- ./platform/metrics.NF1AnonLeft: added
+- ./platform/metrics.NF1AnonRefusedLimit: added
+- ./platform/metrics.NF1AnonRefusedProof: added
+- ./platform/metrics.NF1AnonRegistered: added
+- ./platform/metrics.NF1AnonRegistration: added
+- ./platform/metrics.NF1AnonRelayed: added
+- ./platform/connlimit.SourceKey: added
 - ./frontend/connect.NF1Subprotocol: added
 - ./frontend/connect.NF1WebSocketPath: added
-- ./grpcauth.NF1AnonStreamInterceptor: added
-- ./core/session.(*Core).NF1Anon: added
-- ./platform/connlimit.SourceKey: added
-- ./grpcfactory.WithNF1Anon: added
 - package github.com/nfltr/relay-core/core/nf1anon: added

@@ -19,6 +19,7 @@ import (
 	"github.com/nfltr/relay/client/nf1"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/dataplane"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -103,6 +104,28 @@ func isAccountRequired(err error) bool {
 		strings.Contains(err.Error(), nf1anon.Msg))
 }
 
+// anonMetric is the value of the dispatcher's nf1_anon_<name> series whose
+// one label (if any) is value: the relay's counts of anonymous
+// registrations and legs (platform/metrics metrics_nf1anon.go).
+func anonMetric(t *testing.T, name, value string) float64 {
+	t.Helper()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "rpc_server_dispatcher_nf1_anon_"+name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if l := m.GetLabel(); value == "" || len(l) == 1 && l[0].GetValue() == value {
+				return m.GetCounter().GetValue() + m.GetGauge().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
 // TestNF1AnonLegBudget (nfltr docs/decisions/nf1-anon-2026-11-16.md
 // section 4; spec/NF1Anon.tla LegBounded, TypedFailure): an agent with no
 // credential serves its address; a session's relayed leg carries its
@@ -117,12 +140,19 @@ func TestNF1AnonLegBudget(t *testing.T) {
 	c := dialUntil(t, ag.l.Address(), proxyOpts(r))
 	defer c.Close() //nolint:errcheck
 	echoes(t, c)
+	cuts, relayed := anonMetric(t, "cut_total", "bytes"), anonMetric(t, "relayed_bytes_total", "")
 	got, err := pump(c, 200<<10)
 	if !isAccountRequired(err) {
 		t.Fatalf("200 KiB relayed: %v after %d bytes back, want ERROR_REASON_ACCOUNT_REQUIRED", err, got)
 	}
 	if got > leg/2 {
 		t.Fatalf("%d bytes echoed: over the leg's budget (%d both ways)", got, leg)
+	}
+	if d := anonMetric(t, "cut_total", "bytes") - cuts; d != 1 {
+		t.Errorf("nf1_anon_cut_total{reason=bytes} moved by %v, want 1", d)
+	}
+	if d := anonMetric(t, "relayed_bytes_total", "") - relayed; d <= 0 || d > leg {
+		t.Errorf("nf1_anon_relayed_bytes_total moved by %v, want within the leg's %d", d, leg)
 	}
 }
 
@@ -132,11 +162,15 @@ func TestNF1AnonLegTime(t *testing.T) {
 	enableNF1Anon(t, anonSettings{legTime: time.Second})
 	r := relaycoretest.New(t)
 	ag := startAnonAgent(t, r.GRPC)
+	cuts := anonMetric(t, "cut_total", "time")
 	c := dialUntil(t, ag.l.Address(), proxyOpts(r))
 	defer c.Close() //nolint:errcheck
 	_ = c.SetReadDeadline(time.Now().Add(20 * time.Second))
 	if _, err := c.Read(make([]byte, 1)); !isAccountRequired(err) {
 		t.Fatalf("a leg past its time: %v, want ERROR_REASON_ACCOUNT_REQUIRED", err)
+	}
+	if d := anonMetric(t, "cut_total", "time") - cuts; d != 1 {
+		t.Errorf("nf1_anon_cut_total{reason=time} moved by %v, want 1", d)
 	}
 }
 
@@ -206,6 +240,7 @@ func TestNF1AnonAccountNotCut(t *testing.T) {
 func TestNF1AnonNotAfter(t *testing.T) {
 	enableNF1Anon(t, anonSettings{life: 3 * time.Second, legTime: time.Minute})
 	r := relaycoretest.New(t)
+	expired := anonMetric(t, "registration_events_total", "expired")
 	ag := startAnonAgent(t, r.GRPC)
 	opts := proxyOpts(r)
 	c := dialUntil(t, ag.l.Address(), opts)
@@ -217,6 +252,9 @@ func TestNF1AnonNotAfter(t *testing.T) {
 	c = dialUntil(t, ag.l.Address(), opts)
 	echoes(t, c)
 	_ = c.Close()
+	if d := anonMetric(t, "registration_events_total", "expired") - expired; d < 1 {
+		t.Errorf("nf1_anon_registration_events_total{event=expired} moved by %v, want at least 1", d)
+	}
 }
 
 // TestNF1AnonRegistration: with no credential only proven capability
@@ -225,6 +263,11 @@ func TestNF1AnonNotAfter(t *testing.T) {
 func TestNF1AnonRegistration(t *testing.T) {
 	enableNF1Anon(t, anonSettings{sourceMax: 1})
 	r := relaycoretest.New(t)
+	events := func() [3]float64 {
+		return [3]float64{anonMetric(t, "registration_events_total", "registered"), anonMetric(t, "registration_events_total", "refused_proof"),
+			anonMetric(t, "registration_events_total", "refused_limit")}
+	}
+	before, open := events(), anonMetric(t, "registrations", "")
 	l, _, err := nf1.Mint("relay.test")
 	if err != nil {
 		t.Fatal(err)
@@ -239,5 +282,11 @@ func TestNF1AnonRegistration(t *testing.T) {
 	}
 	if _, err := connectNF1Agent(t, r.GRPC, "", "clip", l2, l2.RegistrationProof()); status.Code(err) != codes.ResourceExhausted {
 		t.Errorf("over the source's cap: %v, want ResourceExhausted", err)
+	}
+	if after := events(); after[0]-before[0] != 1 || after[1]-before[1] != 1 || after[2]-before[2] != 1 {
+		t.Errorf("nf1_anon_registration_events_total registered, refused_proof, refused_limit moved by %v - %v, want 1 each", after, before)
+	}
+	if d := anonMetric(t, "registrations", "") - open; d != 1 {
+		t.Errorf("nf1_anon_registrations moved by %v with one registration open, want 1", d)
 	}
 }

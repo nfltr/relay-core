@@ -11,7 +11,6 @@ import (
 	"github.com/nfltr/link"
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/nf1anon"
-	"github.com/nfltr/relay-core/platform/metrics"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
@@ -32,7 +31,7 @@ func budgeted(in, out peerlink.Session, leg *nf1anon.Leg) peerlink.Session {
 	b := &budget{in: in, out: out, leg: leg}
 	b.timer = time.AfterFunc(leg.Time, func() {
 		if leg.TimeUp() {
-			b.cut("time")
+			b.cut()
 		}
 	})
 	if c, ok := out.(peerlink.ChainSession); ok {
@@ -50,10 +49,9 @@ type budget struct {
 }
 
 // cut aborts both legs with the typed reason, once.
-func (b *budget) cut(why string) {
+func (b *budget) cut() {
 	b.once.Do(func() {
-		b.timer.Stop()
-		metrics.RecordConnectSession(true, "nf1_anon_cut_"+why)
+		b.timer.Stop() // counted by its reason where the leg ended (nf1anon.Leg: Take, TimeUp)
 		a := &link.Abort{Code: dataplane.AbortCode(nf1anon.Reason), Msg: nf1anon.Msg}
 		abort(b.out, a)
 		abort(b.in, a)
@@ -74,7 +72,7 @@ func abort(s peerlink.Session, a *link.Abort) {
 func (b *budget) take(n int) int {
 	fit := b.leg.Take(n)
 	if fit < n {
-		b.cut("bytes")
+		b.cut()
 	}
 	return fit
 }

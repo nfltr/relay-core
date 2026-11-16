@@ -24,6 +24,7 @@ import (
 	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/core/relaystatus"
 	"github.com/nfltr/relay-core/platform/connlimit"
+	"github.com/nfltr/relay-core/platform/metrics"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 	"github.com/spf13/viper"
@@ -141,6 +142,7 @@ func (r *Registry) Register(decl string, regs []string, ip net.IP, register bool
 	for _, d := range decls {
 		p, ok := proofs[d.NF1]
 		if !ok || !slices.ContainsFunc(r.hosts, func(h string) bool { return agentservices.CheckRegistration(h, d.NF1, p) == nil }) {
+			metrics.NF1AnonRegistration(metrics.NF1AnonRefusedProof)
 			return identity.Principal{}, nil, status.Errorf(codes.InvalidArgument, "service %s: an address served with no account needs its registration proof for this relay (%s)", d.Name, agentservices.RegHeader)
 		}
 	}
@@ -158,6 +160,7 @@ func (r *Registry) Register(decl string, regs []string, ip net.IP, register bool
 	}
 	release, reason := r.regs.Admit(account, src.AsSlice())
 	if reason != "" {
+		metrics.NF1AnonRegistration(metrics.NF1AnonRefusedLimit)
 		return identity.Principal{}, nil, relaystatus.New(codes.ResourceExhausted, relayv1.ErrorReason_ERROR_REASON_LIMIT_EXCEEDED, "nf1: over the relay's limit on registrations with no account ("+reason+")").Err()
 	}
 	g := reg{src, p.NotAfter}
@@ -169,7 +172,9 @@ func (r *Registry) Register(decl string, regs []string, ip net.IP, register bool
 		r.traceStep(old.src, "Leave")
 	}
 	r.traceStep(src, "Register")
+	metrics.NF1AnonRegistration(metrics.NF1AnonRegistered)
 	return p, sync.OnceFunc(func() {
+		metrics.NF1AnonLeft()
 		r.mu.Lock()
 		left := r.src[id] == g
 		if left {
@@ -192,7 +197,21 @@ func (r *Registry) Expired(agentID string) {
 	r.mu.Unlock()
 	if ok {
 		r.traceStep(g.src, "Expire")
+		metrics.NF1AnonRegistration(metrics.NF1AnonExpired)
 	}
+}
+
+// SourceOf is the source (an IPv4 address, an IPv6 /64) agentID's
+// anonymous registration came from, while it is registered here: what an
+// audit line names instead of the agent's owner, which it has none of.
+func (r *Registry) SourceOf(agentID string) (netip.Addr, bool) {
+	if r == nil {
+		return netip.Addr{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g, ok := r.src[agentID]
+	return g.src, ok
 }
 
 // traceStep logs a registration's step ev for src.
@@ -290,9 +309,11 @@ func (l *Leg) Take(n int) int {
 		l.b.AllowN(now, int(fit))
 		l.left -= fit
 		l.r.trace(l.src, event{Ev: "Relay", S: l.id, N: int(fit)}, l.id)
+		metrics.NF1AnonRelayed(int(fit))
 	}
 	if fit < int64(n) {
 		l.ended = true
+		metrics.NF1AnonCut(metrics.NF1AnonCutBytes)
 		l.r.trace(l.src, event{Ev: "Cut", S: l.id, Why: why}, l.id)
 	}
 	return int(fit)
@@ -300,7 +321,13 @@ func (l *Leg) Take(n int) int {
 
 // TimeUp ends the leg at its time limit (TimeCut): false when it had
 // ended already.
-func (l *Leg) TimeUp() bool { return l.end(event{Ev: "TimeCut", Why: why}) }
+func (l *Leg) TimeUp() bool {
+	if !l.end(event{Ev: "TimeCut", Why: why}) {
+		return false
+	}
+	metrics.NF1AnonCut(metrics.NF1AnonCutTime)
+	return true
+}
 
 // End notes the leg ended otherwise (its peers ended it, a punch released
 // it): false when it had ended already.

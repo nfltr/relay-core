@@ -64,6 +64,7 @@ func TestNF1AnonSDKEndToEnd(t *testing.T) {
 	_, err = dial(nfnet.DirectOff)
 	wantCode(t, "an anonymous address dialled with Direct off", err, nfnet.CodeDirectRequired)
 
+	relayed, cuts := anonMetric(t, "relayed_bytes_total", ""), anonMetric(t, "cut_total", "bytes")
 	payload := bytes.Repeat([]byte("nf1anon!"), 1<<17) // 1 MiB
 	served := make(chan error, 1)
 	go func() {
@@ -96,5 +97,13 @@ func TestNF1AnonSDKEndToEnd(t *testing.T) {
 	}
 	if err := <-served; err != nil {
 		t.Fatalf("the anonymous listener's session: %v", err)
+	}
+	// the relay carried the signalling (the session's TLS, the C control
+	// exchange) and nothing it had to cut
+	if d := anonMetric(t, "relayed_bytes_total", "") - relayed; d <= 0 || d > 2*budget {
+		t.Errorf("relayed %v bytes for a direct transfer: want some signalling, within the bucket (%d)", d, 2*budget)
+	}
+	if d := anonMetric(t, "cut_total", "bytes") - cuts; d != 0 {
+		t.Errorf("%v legs cut in a direct transfer", d)
 	}
 }

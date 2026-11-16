@@ -18,6 +18,15 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Anonymous nf1 registrations and legs on `/metrics` (lane NFA2), counts
+  and bytes by bounded reasons, never by agent or source:
+  `rpc_server_dispatcher_nf1_anon_registrations` (open),
+  `..._nf1_anon_registration_events_total{event}` (registered,
+  refused_limit, refused_proof, expired), `..._nf1_anon_relayed_bytes_total`,
+  `..._nf1_anon_cut_total{reason}` (bytes, time; the cut no longer counts in
+  `connect_sessions_total`, whose result is an open or an ErrorReason).
+  `(*nf1anon.Registry).SourceOf`: a registration's source, for an audit
+  line. `metrics.NF1Anon*`.
 - nf1 addresses served with no account (nfltr
   docs/decisions/nf1-anon-2026-11-16.md, spec/NF1Anon.tla, lane NFA1):
   with `nf1.anon.enabled` an agent stream with no credential that declares
