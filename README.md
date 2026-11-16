@@ -130,3 +130,9 @@ the latest release tag.
 vet, tests with `-race`, short fuzzing, gosec, semgrep (docker), govulncheck,
 the publish check, the binary size budget, the examples and this README's
 quickstart. `make hooks` installs a pre-push hook that runs it.
+
+A TLC run, ProVerif model whose inputs did not change is not checked again:
+`scripts/cicache.sh` keys each by the sha256 of what it reads (config,
+models, jars, arguments) and replays a stored pass (`CICACHE=off`
+disables it, `CICACHE_VERIFY=1` reruns every hit and fails on a different
+verdict; `make test-cicache` is its soundness test).

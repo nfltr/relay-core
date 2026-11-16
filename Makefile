@@ -110,7 +110,7 @@ spec-mutants:
 # The ProVerif model of the E2EE share gate (spec/proverif/README.md):
 # every line of spec/proverif/expect.txt, mutants included (in make ci, seconds).
 .PHONY: spec-proverif
-spec-proverif:
+spec-proverif: test-cicache
 	./spec/proverif/run.sh
 # The model's bindings against the code (spec/proverif/README.md
 # "Bindings"): each BIND id of e2ee_share.pv has a test row that sends a
@@ -159,3 +159,10 @@ hooks:
 check-spec-drift:
 	./scripts/check-spec-drift.sh maps
 	./scripts/check-spec-drift.sh ci
+
+# scripts/cicache.sh (the same file in every nfltr repository): the result
+# cache of TLC runs and ProVerif models; a hit skips a check whose inputs
+# did not change. Its soundness test, ahead of the first check using it.
+.PHONY: test-cicache
+test-cicache:
+	./scripts/cicache_test.sh
