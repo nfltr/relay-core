@@ -361,8 +361,8 @@ func SetDefaultFlags() {
 	// single machine's handshake or slow-connection flood stops there
 	// (docs/decisions/relay-flood-hardening-2026-11-05.md in nfltr). Loopback
 	// peers are exempt. 0 turns a limit off.
-	_ = flag.Int("security.conn_limit.per_ip_max", 5000, "open connections one source IP may hold on each public port, before TLS or any account is known: the flood floor (0 = no limit)")
-	_ = flag.Float64("security.conn_limit.per_ip_rate", 1000, "new connections a second one source IP may open on each public port: the flood floor (0 = no limit)")
+	_ = flag.Int("security.conn_limit.per_ip_max", 5000, "open connections one source (IPv4 address, IPv6 /64) may hold on each public port, before TLS or any account is known: the flood floor (0 = no limit)")
+	_ = flag.Float64("security.conn_limit.per_ip_rate", 1000, "new connections a second one source (IPv4 address, IPv6 /64) may open on each public port: the flood floor (0 = no limit)")
 	_ = flag.Int("security.conn_limit.per_ip_burst", 5000, "burst of security.conn_limit.per_ip_rate")
 	_ = flag.Int("security.conn_limit.account_max", 0, "open E2EE share connections of one account (its agents' owner), past the flood floor; a hosted relay takes its plan's limits from the accounts service instead (0 = no limit)")
 	_ = flag.Float64("security.conn_limit.account_rate", 0, "new E2EE share connections a second of one account (0 = no limit)")

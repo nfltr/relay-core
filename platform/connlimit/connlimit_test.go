@@ -183,3 +183,35 @@ func refusals(listener, reason string) float64 {
 	}
 	return 0
 }
+
+// addrConn is a connection from ip (only its address and Close are used).
+type addrConn struct {
+	net.Conn
+	ip string
+}
+
+func (c addrConn) RemoteAddr() net.Addr { return &net.TCPAddr{IP: net.ParseIP(c.ip), Port: 4242} }
+func (c addrConn) Close() error         { return nil }
+
+// TestIPv6SourceIsSlash64: the addresses of one IPv6 /64 are one source
+// (SourceKey), for the open cap and the rate, as for the accounts' caps and
+// the packet filter; another /64 is another source.
+func TestIPv6SourceIsSlash64(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inner.Close() //nolint:errcheck
+	for name, cfg := range map[string]Config{"open": {Listener: "test", MaxPerIP: 1}, "rate": {Listener: "test", Rate: 0.001, Burst: 1}} {
+		l := Wrap(inner, cfg).(*listener)
+		if _, ok := l.admit(addrConn{ip: "2001:db8::1"}); !ok {
+			t.Fatalf("%s: the first connection was refused", name)
+		}
+		if _, ok := l.admit(addrConn{ip: "2001:db8::ffff:2"}); ok {
+			t.Fatalf("%s: another address of the same /64 got a source of its own", name)
+		}
+		if _, ok := l.admit(addrConn{ip: "2001:db8:0:1::1"}); !ok {
+			t.Fatalf("%s: another /64 was refused", name)
+		}
+	}
+}

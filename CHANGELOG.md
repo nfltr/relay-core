@@ -10,6 +10,12 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Fixed
+
+- `connlimit.Wrap` keys a source by `SourceKey` (an IPv4 address, an IPv6
+  /64) for `security.conn_limit.per_ip_max` and `per_ip_rate`: a /64
+  holder had a slot and a bucket per address (lane NFA2).
+
 ### Added
 
 - nf1 addresses served with no account (nfltr

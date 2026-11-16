@@ -1,9 +1,10 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-// Package connlimit refuses connections per source IP at accept, before the
-// relay reads a byte: no SNI peek, TLS handshake, goroutine or buffer is
-// spent on a connection over its IP's limits. Two limits, each off at 0:
+// Package connlimit refuses connections per source IP (an IPv4 address, an
+// IPv6 /64: SourceKey) at accept, before the relay reads a byte: no SNI
+// peek, TLS handshake, goroutine or buffer is spent on a connection over
+// its IP's limits. Two limits, each off at 0:
 // connections an IP holds open at once (MaxPerIP) and new connections an IP
 // opens a second (Rate, bursts up to Burst). A refused connection is closed
 // and counted (metrics.IncrConnRefusals).
@@ -13,6 +14,7 @@ package connlimit
 
 import (
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -42,8 +44,6 @@ func Wrap(l net.Listener, cfg Config) net.Listener {
 	}
 	w := &listener{Listener: l, cfg: cfg, open: map[string]int{}}
 	if cfg.Rate > 0 {
-		// ponytail: a bucket per address; an IPv6 attacker with a /64 gets
-		// one per address, group by prefix if that is seen.
 		w.rate = ratelimit.New(cfg.Rate, max(cfg.Burst, 1), time.Minute, 5*time.Minute)
 	}
 	return w
@@ -54,7 +54,7 @@ type listener struct {
 	cfg  Config
 	rate *ratelimit.Limiter
 	mu   sync.Mutex
-	open map[string]int // admitted connections not yet closed, by IP
+	open map[string]int // admitted connections not yet closed, by source (ipKey)
 }
 
 // Accept returns the next connection within its IP's limits; it closes the
@@ -76,7 +76,7 @@ func (l *listener) admit(c net.Conn) (net.Conn, bool) {
 	if ip == nil || (l.cfg.ExemptLoopback && ip.IsLoopback()) {
 		return c, true
 	}
-	key := ip.String()
+	key := ipKey(ip) // an IPv6 /64 is one source (SourceKey)
 	reason := ""
 	l.mu.Lock()
 	switch {
@@ -134,4 +134,10 @@ func sourceIP(a net.Addr) net.IP {
 		return nil
 	}
 	return net.ParseIP(host)
+}
+
+// ipKey is the source ip counts under: SourceKey's text.
+func ipKey(ip net.IP) string {
+	a, _ := netip.AddrFromSlice(ip)
+	return SourceKey(a).String()
 }
