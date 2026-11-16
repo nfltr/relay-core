@@ -27,6 +27,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 
 	"github.com/nfltr/relay/proto/wire/wsframe"
 )
@@ -64,6 +66,27 @@ type Conn struct {
 // the connection, and writes the 101 Switching Protocols response.
 // The caller is responsible for calling Conn.Close when done.
 func Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+	return UpgradeProtocol(w, r, "")
+}
+
+// OffersProtocol reports whether r's Sec-WebSocket-Protocol offers
+// protocol (RFC 6455 section 4.2.1: comma-separated tokens).
+func OffersProtocol(r *http.Request, protocol string) bool {
+	for _, h := range r.Header.Values("Sec-Websocket-Protocol") {
+		for p := range strings.SplitSeq(h, ",") {
+			if strings.TrimSpace(p) == protocol {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// UpgradeProtocol is Upgrade answering with subprotocol protocol (its
+// Sec-WebSocket-Protocol; none when empty), which the caller checked r
+// offers (OffersProtocol): a browser fails a connection whose 101 names
+// no protocol it offered, or none when it offered one.
+func UpgradeProtocol(w http.ResponseWriter, r *http.Request, protocol string) (*Conn, error) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") ||
 		!strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") {
 		return nil, ErrNotUpgrade
@@ -91,13 +114,16 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 	}
 
 	// Write 101 response directly to the buffered writer.
+	if protocol != "" {
+		protocol = "Sec-WebSocket-Protocol: " + protocol + "\r\n"
+	}
 	_, writeErr := fmt.Fprintf(rw,
 		"HTTP/1.1 101 Switching Protocols\r\n"+
 			"Upgrade: websocket\r\n"+
 			"Connection: Upgrade\r\n"+
 			"Sec-WebSocket-Accept: %s\r\n"+
-			"\r\n",
-		accept,
+			"%s\r\n",
+		accept, protocol,
 	)
 	if writeErr != nil {
 		_ = conn.Close()
@@ -145,6 +171,26 @@ func (c *Conn) WriteMessage(opcode byte, payload []byte) error {
 		return err
 	}
 	return c.rw.Flush()
+}
+
+// NetConn is the hijacked connection under c (its addresses and
+// deadlines).
+func (c *Conn) NetConn() net.Conn { return c.conn }
+
+// CloseWith sends a close frame with code and reason (cut to the 123
+// bytes a control frame leaves it), unless one was sent, and closes the
+// connection.
+func (c *Conn) CloseWith(code uint16, reason string) error {
+	if len(reason) > 123 {
+		reason = reason[:123]
+		for !utf8.ValidString(reason) {
+			reason = reason[:len(reason)-1]
+		}
+	}
+	// A write blocked on a peer that reads nothing gives up the lock.
+	_ = c.conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_ = c.WriteMessage(OpClose, append(wsframe.ClosePayload(code), reason...))
+	return c.conn.Close()
 }
 
 // Close sends a normal-closure close frame (code 1000), unless a close frame

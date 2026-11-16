@@ -86,6 +86,10 @@ type Frontend struct {
 // host (ssh.proxy.target_host, default localhost) or a managed capability's
 // address.
 func (f *Frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == NF1WebSocketPath { // a browser's nf1 session (nf1ws.go)
+		f.serveNF1WebSocket(w, r, f.Config())
+		return
+	}
 	// POST over HTTP/2 carries the tunnel as one stream (stream.go).
 	stream := IsStream(r)
 	if r.Method != http.MethodGet && r.Method != http.MethodConnect && !stream {

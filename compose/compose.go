@@ -176,6 +176,7 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 			}
 			mux := http.NewServeMux()
 			mux.Handle(connect.Path, front)
+			mux.Handle(connect.NF1WebSocketPath, front)
 			if journal != nil {
 				mux.Handle(sharecode.JournalPath, journal)
 			}

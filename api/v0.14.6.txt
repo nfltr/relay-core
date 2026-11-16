@@ -1,0 +1,3 @@
+Compatible changes:
+- ./frontend/connect.NF1Subprotocol: added
+- ./frontend/connect.NF1WebSocketPath: added

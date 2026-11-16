@@ -12,6 +12,20 @@ changes listed (from the first tag on).
 
 ### Added
 
+- A browser's nf1 session over a WebSocket (nfltr
+  docs/decisions/browser-peer-2026-11-16.md section 2, lane BP2):
+  `GET /nf1/v1`, subprotocol `nf1.v1`, no credential; the first binary
+  message is the address's rid, every later one the session's bytes both
+  ways. It is the anonymous nf1 open of a data connection (the same caps,
+  refusals, metering and agent session); a refusal is the close code: 4003
+  not served, 4004 refused (the reason in the close reason), 4009 balance,
+  1013 no route now (draining), 1011 a reset after the open, 1001 idle,
+  1003 a text message. Off unless `nf1.websocket` (env `NF1_WEBSOCKET`)
+  with `nf1.enabled` and `tcp.enabled`; `nf1.websocket_idle` (default 10m)
+  bounds a session with no byte either way. `connect.NF1WebSocketPath`,
+  `connect.NF1Subprotocol`; `Frontend.ServeHTTP` serves the path, so a
+  composition mounts it on the same frontend. No other exported API
+  change.
 - Datagram (udp) services (relay proto `agentservices` kinds `udp`,
   `udp+e2ee`, `udp+plain`; nfltr docs/decisions/nf1-udp-2026-11-14.md): a
   session whose target is `agentservices.DatagramTarget(name)`

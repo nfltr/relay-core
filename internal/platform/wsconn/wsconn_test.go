@@ -82,3 +82,17 @@ func TestWSConnPingInsideFragmentedMessage(t *testing.T) {
 type discardNetConn struct{ net.Conn }
 
 func (discardNetConn) Close() error { return nil }
+
+// TestCloseWithCutsReason: a close frame's reason is cut to the 123 bytes
+// a control frame leaves it, never inside a UTF-8 character.
+func TestCloseWithCutsReason(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close() //nolint:errcheck
+	c := &Conn{conn: a, rw: bufio.NewReadWriter(bufio.NewReader(a), bufio.NewWriter(a))}
+	go func() { _ = c.CloseWith(4004, string(bytes.Repeat([]byte("é"), 100))) }()
+	var mr wsframe.MessageReader
+	op, p, err := mr.ReadMessage(bufio.NewReader(b), 125)
+	if err != nil || op != OpClose || len(p) != 2+122 {
+		t.Fatalf("close frame %d, %d bytes, %v", op, len(p), err)
+	}
+}

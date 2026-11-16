@@ -29,6 +29,7 @@ import (
 // and source).
 type nf1Limits struct {
 	conns, opens, address *connlimit.Accounts
+	ws                    nf1WS // nf1ws.go
 }
 
 const nf1Account = "nf1"
@@ -46,6 +47,7 @@ func newNF1Limits() nf1Limits {
 		opens: connlimit.NewAccounts(connlimit.Limits{SourceRate: viper.GetFloat64("nf1.open_rate"), SourceBurst: viper.GetInt("nf1.open_burst")}),
 		address: connlimit.NewAccounts(connlimit.Limits{Max: viper.GetInt("nf1.address_max"),
 			Rate: viper.GetFloat64("nf1.address_rate"), Burst: viper.GetInt("nf1.address_burst")}),
+		ws: nf1WS{enabled: viper.GetBool("nf1.websocket"), idle: viper.GetDuration("nf1.websocket_idle")},
 	}
 }
 

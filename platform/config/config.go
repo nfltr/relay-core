@@ -386,6 +386,8 @@ func SetDefaultFlags() {
 	_ = flag.Int("nf1.source_burst", 10, "burst of nf1.source_rate")
 	_ = flag.Float64("nf1.open_rate", 5, "nf1 opens a second from one source address, before the address is looked up")
 	_ = flag.Int("nf1.open_burst", 20, "burst of nf1.open_rate")
+	_ = flag.Bool("nf1.websocket", false, "serve capability addresses to browsers too: a WebSocket at /nf1/v1 (subprotocol nf1.v1) carries one anonymous nf1 session (nfltr docs/decisions/browser-peer-2026-11-16.md); needs nf1.enabled")
+	_ = flag.Duration("nf1.websocket_idle", 10*time.Minute, "close a browser's nf1 WebSocket after this long with no byte either way (0: never)")
 	_ = flag.Int("nf1.address_max", 64, "open sessions of one capability address")
 	_ = flag.Float64("nf1.address_rate", 10, "new sessions a second of one capability address")
 	_ = flag.Int("nf1.address_burst", 20, "burst of nf1.address_rate")

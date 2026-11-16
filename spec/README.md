@@ -800,7 +800,7 @@ proof, unchanged).
 | `Register` | an anonymous ConnectHTTP/ConnectTCP: no credential, one `nf1=` declaration with its registration proof (`checkRegistrations`), the principal `nf1anon` with agent id from the rid and `NotAfter` |
 | `Tick` | time |
 | `Expire` | the principal's `NotAfter` (`identity.Principal`): the agent's connection ends, its relayed sessions with it |
-| `Open(s, v, r)` | `serveNF1Session` (r = nf1); every other route (`Reach`, HTTP ingress, A2A) refuses an `nf1anon` agent (r = keyed) |
+| `Open(s, v, r)` | `serveNF1Session` (r = nf1: a data connection's open, or a browser's WebSocket, `nf1ws.go`); every other route (`Reach`, HTTP ingress, A2A) refuses an `nf1anon` agent (r = keyed) |
 | `Relay(s)` | the budgeted onward leg of an anonymous session (`serveNF1Session`'s route wraps it): a write within both budgets is carried, else the leg is aborted with `ERROR_REASON_ACCOUNT_REQUIRED` |
 | `TimeCut(s)` | the anonymous leg's time limit (the same abort) |
 | `Punch(s)`, `Direct(s)`, `Lose(s)` | the peers' direct path (relay `client/agent` `DirectSession`, link `DirectPath.tla`): the relayed leg is released at the move |
@@ -853,6 +853,7 @@ registration expired and the server registered again),
 | what the spec models | file |
 |---|---|
 | `Open`, `Relay`, `TimeCut` (`serveNF1Session`, the budget) | `frontend/connect/nf1.go` |
+| `Open` from a browser (the WebSocket's session into `serveNF1Session`) | `frontend/connect/nf1ws.go` |
 | `Register`, `Expire` (the anonymous principal, the declaration) | `core/session/agent_services.go` |
 | `Open`'s other routes refused (`openNF1`, `Reach`) | `core/session/nf1.go` |
 
