@@ -142,9 +142,17 @@ func TestCertBoundToLine(t *testing.T) {
 	if _, err := certPrincipal(p, newTestCA(t).sign(t, m.ID, &k1.PublicKey)); !errors.Is(err, identity.ErrUnknownCredential) {
 		t.Fatalf("other CA: %v", err)
 	}
+	var cut []string
+	km.OnRevoke(func(s string) { cut = append(cut, s) })
+	if err := km.Rebind(m.ID, &k1.PublicKey); err != nil || len(cut) != 0 {
+		t.Fatalf("renewal (same key): %v, cut %v", err, cut)
+	}
 	k2 := newKey(t)
 	if err := km.Rebind(m.ID, &k2.PublicKey); err != nil {
 		t.Fatal(err)
+	}
+	if len(cut) != 1 || cut[0] != string(m.ID) {
+		t.Fatalf("rotation cut %v, want the machine's connections", cut)
 	}
 	if _, err := certPrincipal(p, c1); !errors.Is(err, identity.ErrUnknownCredential) {
 		t.Fatalf("rotated-away key: %v", err)

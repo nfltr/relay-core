@@ -144,7 +144,7 @@ func (km *KeyManager) Enrol(code string, pub crypto.PublicKey, now time.Time) (M
 
 // Rebind makes machine id's line bind pub (spec Reissue): the same key
 // renews, a new one rotates, and the old key's certificates authenticate
-// nothing from then on. The caller has authenticated id's current
+// nothing from then on (OnRevoke runs for id: its connections end). The caller has authenticated id's current
 // certificate (MachineByCert) and checked the rotation proof.
 func (km *KeyManager) Rebind(id identity.MachineID, pub crypto.PublicKey) error {
 	spki, err := x509.MarshalPKIXPublicKey(pub)
@@ -173,6 +173,11 @@ func (km *KeyManager) Rebind(id identity.MachineID, pub crypto.PublicKey) error 
 	}
 	if old == h {
 		return nil
+	}
+	// The old key's connections end and the core's cached answers go, as
+	// for a revoke: the machine reconnects with the new certificate.
+	if km.onRevoke != nil {
+		km.onRevoke(string(id))
 	}
 	return km.rewriteFile()
 }
