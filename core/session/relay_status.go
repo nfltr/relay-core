@@ -21,3 +21,12 @@ const RelayErrorDomain = relaystatus.Domain
 func RelayStatus(code codes.Code, reason relayv1.ErrorReason, msg string) *status.Status {
 	return relaystatus.New(code, reason, msg)
 }
+
+// errNoPrincipal refuses an agent stream that carries no principal: no
+// credential, and the relay registers none with no account (nf1.anon
+// off, or not capability addresses only). Typed, so a client reports
+// auth rather than a reset.
+func errNoPrincipal() error {
+	return RelayStatus(codes.PermissionDenied, relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED,
+		"no credential: this relay serves no agent without an account (present an API key or a machine certificate)").Err()
+}

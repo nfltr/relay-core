@@ -37,7 +37,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	agentID, err := auth.GetAgentIDFromContext(stream.Context())
 	if err != nil {
 		d.Logger.Error("error determining agentID from context", "error", err)
-		return status.Error(codes.PermissionDenied, "Error determining agentID from context")
+		return errNoPrincipal()
 	}
 	if err := d.Config.Reserved.RefuseAgentName(agentID); err != nil {
 		return err

@@ -14,6 +14,7 @@ import (
 
 	"github.com/nfltr/relay-core/broker"
 	"github.com/nfltr/relay-core/core/directory"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc/codes"
@@ -38,6 +39,7 @@ func TestConnectHTTP_NoJWT(t *testing.T) {
 	if !strings.Contains(err.Error(), "PermissionDenied") {
 		t.Fatalf("expected PermissionDenied, got: %v", err)
 	}
+	wantUnauthenticatedReason(t, err)
 }
 
 func TestConnectHTTP_AlreadyConnected(t *testing.T) {
@@ -241,6 +243,7 @@ func TestAgentTunnel_NoJWT(t *testing.T) {
 	if !strings.Contains(err.Error(), "PermissionDenied") {
 		t.Fatalf("expected PermissionDenied, got: %v", err)
 	}
+	wantUnauthenticatedReason(t, err)
 }
 
 func TestAgentTunnel_ThresholdReached(t *testing.T) {
@@ -572,5 +575,17 @@ func TestConnectHTTP_ConsumerUnsubscribeError(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("ConnectHTTP didn't return")
+	}
+}
+
+// wantUnauthenticatedReason: a stream with no principal (no credential,
+// and the relay serves none with no account) is refused with the typed
+// reason ERROR_REASON_UNAUTHENTICATED, so a client reports auth, not a
+// reset (lane SENDFIX).
+func wantUnauthenticatedReason(t *testing.T, err error) {
+	t.Helper()
+	st, _ := status.FromError(err)
+	if got := attachedReason(st); got != relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED.String() {
+		t.Fatalf("refusal reason = %q, want ERROR_REASON_UNAUTHENTICATED (%v)", got, err)
 	}
 }
