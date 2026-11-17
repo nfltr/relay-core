@@ -421,6 +421,7 @@ check)
 	run Presence.cfg Presence.tla
 	run Directory.cfg Directory.tla
 	run KeyAccount.cfg KeyAccount.tla
+	run KeyAccountCert.cfg KeyAccount.tla
 	run AccountLimit.cfg AccountLimit.tla
 	run Failover.cfg Failover.tla
 	run FailoverShare.cfg Failover.tla
@@ -453,6 +454,13 @@ mutants)
 	done
 	for w in OutlivesFirst NameReused NameInTwoAccounts; do
 		expect KeyAccount.cfg KeyAccount.tla "witness:$w" -e "s/^    ResolveOwnAccount$/    Witness$w/"
+	done
+	# The data dir's machine CA: code enrolment and certificates (lane L5).
+	for b in code-reuse cert-after-revoke cert-any-key code-join-outside code-dup-name; do
+		expect KeyAccountCert.cfg KeyAccount.tla "cert:$b" -e "$m$b\"/"
+	done
+	for w in CodeJoins RotatedAway CertOfRevoked; do
+		expect KeyAccountCert.cfg KeyAccount.tla "witness:$w" -e "s/^    EnrolledAsCoded$/    Witness$w/"
 	done
 	# AccountLimit.tla: an account's own connection limits (CONNLIMIT).
 	for b in count-by-ip-only cache-stale-plan release-twice; do

@@ -907,6 +907,9 @@ leaves the account to the others.
 | `Join(m, n, j)` | `KeyManager.Join` (`accountOfMember`: j by id, or a name one machine holds) |
 | `Revoke(m)` | `KeyManager.Revoke` |
 | `Reload(m, n, a)` | `KeyManager.Reload` (the edited file: `readAPIKeys`; refused when a kept machine's account changed) |
+| `MintCode(c, n, j)` | `KeyManager.MintCode` (`nfltr-relay machines code`; the self-hosted relay's first start for `admin`) |
+| `Enrol(c, m, k)` | `KeyManager.Enrol` (the relay's enrol route: the code's line removed, the machine's `spki:` line written, the CA signs) |
+| `Reissue(m, k)` | `KeyManager.Reissue` (the reissue route: renew, or rotate to a new key's `spki:`) |
 
 `Owner(m)` is `Provider.Authenticate`'s owner (`Machine.AccountOf`) and
 `Resolve(c, n)` is `Policy.ResolveMachine` (`APIKeyStore.resolve`).
@@ -927,6 +930,21 @@ machine was revoked), `WitnessNameReused` (a revoked machine's name taken
 again in its account at once), `WitnessNameInTwoAccounts`. Tests:
 keyfile `TestKeyFileAccounts`, `TestLoadAPIKeysRefuses`. No trace
 recorder yet (each manager call is one locked step of one process).
+
+Lane L5 (nfltr/nfltr `docs/decisions/api-key-cut-2026-11-15.md` "L5
+SELFHOST design"): the self-hosted relay's data dir holds a machine CA. A
+single-use code (`MintCode`) enrols a machine (`Enrol`): a fresh line that
+binds the key the certificate certifies; `Reissue` renews or rotates it,
+and `Authenticates(m, k)` is the provider's certificate check (the line is
+live and binds the leaf's key). `KeyAccountCert.cfg` (`make spec`, 3 ids,
+2 names, 1 code, 2 keys: 87,275 states (18,279 distinct), `COVERAGE=1`
+takes every action; `KeyAccount.cfg` has no codes or keys, so its run takes neither `MintCode`, `Enrol` nor `Reissue`, its state count unchanged) adds
+`EnrolCodeSingleUse`, `CertBoundToLine` (a certificate authenticates only
+its live machine's current key: neither a revoked line nor a rotated-away
+key admits it) and `EnrolledAsCoded` (the code's account, or its own).
+Mutants, each caught: `code-reuse`, `cert-after-revoke`, `cert-any-key`,
+`code-join-outside`, `code-dup-name`. Witnesses, each violated:
+`WitnessCodeJoins`, `WitnessRotatedAway`, `WitnessCertOfRevoked`.
 
 ### Code map (drift check)
 
