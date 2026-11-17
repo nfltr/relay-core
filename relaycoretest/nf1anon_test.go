@@ -198,7 +198,10 @@ func TestNF1AnonSourceBucket(t *testing.T) {
 				return false
 			case isAccountRequired(err):
 				return true
-			case !errors.Is(err, nf1.ErrNotServed) || time.Now().After(deadline):
+			// The agent between links (its registration not yet there, or its
+			// old link dying under the relay's leg: unreachable at the open)
+			// is retried; a busy runner showed the second.
+			case !(errors.Is(err, nf1.ErrNotServed) || errors.Is(err, nf1.ErrUnreachable)) || time.Now().After(deadline):
 				t.Fatalf("a session: %v", err)
 			}
 		}
