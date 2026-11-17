@@ -73,7 +73,7 @@ func (km *KeyManager) MintCode(name, member string, ttl time.Duration, now time.
 		return "", err
 	}
 	code := "enr_" + hex.EncodeToString(b)
-	if err := os.MkdirAll(km.codesDir(), 0o700); err != nil {
+	if err := os.MkdirAll(km.codesDir(), 0o700); err != nil { // nosemgrep: incorrect-default-permission -- a directory: owner only, rwx
 		return "", err
 	}
 	f, err := os.OpenFile(km.codePath(code), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- a file in the operator's data dir
