@@ -18,6 +18,14 @@ changes listed (from the first tag on).
 
 ### Added
 
+- Certificate machines in a key file (lane L5, spec/KeyAccount.tla
+  `MintCode`, `Enrol`, `Reissue`): `KeyManager.MintCode` writes a
+  single-use code, `KeyManager.Enrol` spends it and adds a `spki:` line
+  binding the machine's key (`Machine.Cert`), `KeyManager.Rebind` renews
+  or rotates it (a rotation ends the old key's connections), and
+  `APIKeyStore.MachineByCert` / `Provider.CAs` authenticate the
+  certificate a relay's CA signed for it (`MachineTrustDomain`,
+  `ErrEnrolRefused`). Additive: key lines and callers are unchanged.
 - Anonymous nf1 registrations and legs on `/metrics` (lane NFA2), counts
   and bytes by bounded reasons, never by agent or source:
   `rpc_server_dispatcher_nf1_anon_registrations` (open),

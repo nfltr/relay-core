@@ -1,0 +1,9 @@
+Compatible changes:
+- ./keyfile.(*APIKeyStore).MachineByCert: added
+- ./keyfile.(*KeyManager).Enrol: added
+- ./keyfile.(*KeyManager).MintCode: added
+- ./keyfile.(*KeyManager).Rebind: added
+- ./keyfile.ErrEnrolRefused: added
+- ./keyfile.Machine.Cert: added
+- ./keyfile.MachineTrustDomain: added
+- ./keyfile.Provider.CAs: added
