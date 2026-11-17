@@ -11,7 +11,6 @@ import (
 
 // frontends are the frontends nfltr-relay-core attaches to its core
 // (frontend.CoreHost): HTTP ingress (a key's own requests to its agents)
-// and SNI E2EE passthrough; WireGuard with the build tag wireguard
-// (frontends_wireguard.go). The client sessions' frontend (frontend/connect)
+// and SNI E2EE passthrough. The client sessions' frontend (frontend/connect)
 // is served on the proxy port directly.
 var frontends = []frontend.Frontend{httpingress.Frontend{}, sni.Frontend{}}

@@ -123,9 +123,6 @@ type Stream[S, R proto.Message] struct {
 	bytesRecv              atomic.Int64
 	requestCount           atomic.Int64
 	lastOutboundDataSentAt atomic.Int64
-	// hooked is a session hook's part in the session (session_hook.go);
-	// nil for none. Set before the receive loop.
-	hooked HookedSession
 	// takeover lets a reconnect of the same agent replace this session
 	// (ConnectHTTP sessions only; nil otherwise).
 	takeover *sessionTakeover

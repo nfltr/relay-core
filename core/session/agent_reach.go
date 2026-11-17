@@ -74,8 +74,8 @@ func (d *Dispatcher) agentOwner(ref identity.AgentRef, agentID string) (string, 
 }
 
 // DialReaches is Reach(p, ·, Dial) for the entry points that open bytes to
-// an agent (HTTP /connect and data sessions, the direct agent subdomain,
-// WireGuard exits): the relay's in-process agents are never reached this
+// an agent (HTTP /connect and data sessions, the direct agent subdomain):
+// the relay's in-process agents are never reached this
 // way.
 func (d *Dispatcher) DialReaches(p identity.Principal) func(agentID string) (bool, error) {
 	return func(agentID string) (bool, error) {

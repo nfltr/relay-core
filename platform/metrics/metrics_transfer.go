@@ -38,7 +38,6 @@ const (
 	PathTCPGRPC                 // a session on the agent's gRPC frame streams
 	PathA2A                     // an agent-to-agent call
 	PathReplica                 // a session another replica carries
-	PathWG                      // WireGuard
 	PathP2PRelay                // p2p relayed through the relay
 	PathMailbox                 // the mailbox service
 	PathBlob                    // the blob service
@@ -48,7 +47,7 @@ const (
 
 var pathNames = [numPaths]string{
 	"http_link", "http_grpc", "sni", "connect", "ssh", "tcp_link", "tcp_quic", "tcp_dataconn",
-	"tcp_grpc", "a2a", "replica", "wg", "p2p_relay", "mailbox", "blob", "accounts",
+	"tcp_grpc", "a2a", "replica", "p2p_relay", "mailbox", "blob", "accounts",
 }
 
 // String is the path's label value.

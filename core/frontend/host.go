@@ -9,15 +9,13 @@ import (
 	"net"
 	"sync"
 
-	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/core/session"
 )
 
 // CoreHost is a Host over the session core alone (nfltr-relay-core): no
 // hosted product behind it, so shares only as the issuer's verifier
 // (Shares, nil: none), no endpoint
-// registry (Registered false), no relay cookies, nowhere to keep a
-// WireGuard key, and no TLS of its own on the gRPC port. The composition
+// registry (Registered false), no relay cookies and no TLS of its own on the gRPC port. The composition
 // fills its fields, attaches its frontends (Attach), then serves what they
 // mounted (HTTP).
 type CoreHost struct {
@@ -59,20 +57,6 @@ func (h *CoreHost) Core() *session.Core { return h.C }
 
 // Logger returns the host's logger.
 func (h *CoreHost) Logger() *slog.Logger { return h.Log }
-
-// Visible is the agents p may dial, the rule the core's sessions reach by
-// (Dispatcher.DialReaches): the WireGuard frontend's exits. An owner the
-// directory cannot read is out of scope.
-func (h *CoreHost) Visible(p identity.Principal) func(agentID string) bool {
-	reaches := h.C.Dispatcher.DialReaches(p)
-	return func(agentID string) bool {
-		ok, _ := reaches(agentID)
-		return ok
-	}
-}
-
-// RecordWireGuardKey does nothing: the core keeps no endpoint registry.
-func (h *CoreHost) RecordWireGuardKey(string, string) {}
 
 // WrapGRPCListener returns false: the core puts nothing in front of the
 // gRPC port's TLS.

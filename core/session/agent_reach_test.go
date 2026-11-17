@@ -177,8 +177,8 @@ func TestReachRefusesRevokedAfterApply(t *testing.T) {
 // TestReachEveryPath: with a policy that denies, every path that opens
 // bytes to an agent of the caller's own account is refused (the mutant:
 // a path that skips the policy). connect (KeyReach), A2A (dispatch and
-// the delivering replica's RelayTunnel), WireGuard's and the direct
-// subdomain's DialReaches, and the serving replica's ServeLinkTCP. Browse
+// the delivering replica's RelayTunnel), the direct subdomain's
+// DialReaches, and the serving replica's ServeLinkTCP. Browse
 // is relay-server's (its own table).
 func TestReachEveryPath(t *testing.T) {
 	d := newTwoAccountDispatcher(t, denyAll{})
@@ -188,7 +188,7 @@ func TestReachEveryPath(t *testing.T) {
 		t.Errorf("connect: %v, want AGENT_NOT_FOUND", err)
 	}
 	if ok, _ := d.DialReaches(alice)(aliceNode); ok {
-		t.Error("DialReaches (WireGuard exits, the agent subdomain): allowed")
+		t.Error("DialReaches (the agent subdomain): allowed")
 	}
 	if delivered, _ := routeA2A(t, d, aliceHub, aliceNode, true); delivered {
 		t.Error("A2A: delivered")

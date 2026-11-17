@@ -156,10 +156,9 @@ func SetDefaultFlags() {
 	// The relay states its heartbeat in each agent stream's accept headers;
 	// an agent ends a connection silent for three of them, so 5s (was 15s)
 	// notices a relay that died without a FIN reaching the agent within 15s.
-	// It also
-	// keeps consumer-NAT mappings warm. Last-seen and WireGuard lease
-	// refreshes stay at most every 15s. The recv threshold (agent→relay) is
-	// unchanged at 45s.
+	// It also keeps consumer-NAT mappings warm. Last-seen refreshes stay
+	// at most every 15s. The recv threshold (agent→relay) is unchanged at
+	// 45s.
 	_ = flag.Duration("rpc.agent.heartbeat.sendduration", 5*time.Second, "interval between heartbeat pings sent to each agent (server→agent); agents end a connection silent for three of them")
 	_ = flag.Duration("rpc.agent.heartbeat.recvthreshold", 45*time.Second, "max time without a heartbeat from agent before disconnect")
 

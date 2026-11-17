@@ -126,6 +126,14 @@ changes listed (from the first tag on).
   to users and production ran them off). Migration: drop the
   `public_tcp.*` settings and any `publictcp.Frontend` from the
   composition; the zero-account path is `nf1`.
+- WireGuard (lane WGREMOVE, nfltr docs/decisions/wg-removed-2026-11-17.md:
+  nfltr removes `nfltr wg` and the relay's WireGuard frontend, no plugin):
+  `session.SessionHook`, `session.HookedSession` and
+  `Dispatcher.SessionHook` (the WireGuard frontend was its only user),
+  `frontend.Host.Visible` and `Host.RecordWireGuardKey` (and `CoreHost`'s),
+  `metrics.IncrWGIPAllocations` (`rpc_server_dispatcher_wg_ip_allocations_total`)
+  and `metrics.PathWG` (label `wg`; the paths after it renumber). Migration:
+  drop the hook and the two `Host` methods from a composition.
 
 ### Added
 

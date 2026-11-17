@@ -47,14 +47,10 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	}
 
 	// The API key identifies the principal allowed to take this session over.
-	var apiKeyHash, keyBase string
+	var apiKeyHash string
 	if key := firstIncoming(stream.Context(), "x-api-key"); key != "" {
 		apiKeyHash = hashAPIKey(key)
 	}
-	// The pre-scoped key identity, for A2A target resolution and
-	// ownership; registerAgent records it once this session holds the
-	// agent (a session it takes over removes the agent's on its way out).
-	keyBase = keyBaseOf(stream.Context())
 
 	sessionCtx, cancel := context.WithCancelCause(stream.Context()) // will cancel if `stream context` cancels
 	defer cancel(nil)
@@ -95,14 +91,6 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	md.Append(agentwire.LabelUpdatesKey, "1")       // and applies the agent's LabelUpdate frames
 	if msg := d.Config.AdminMessage; msg != "" {
 		md.Append("x-admin-message", msg)
-	}
-	// A frontend's part in the session (SessionHook): it may add to the
-	// accept or refuse the session.
-	var hooked HookedSession
-	if h := d.SessionHook; h != nil {
-		if hooked, err = h.Join(stream.Context(), agentID, keyBase, md); err != nil {
-			return err
-		}
 	}
 	services, err := declaredServices(stream.Context(), d.Config.NF1Hosts)
 	if err != nil {
@@ -262,16 +250,6 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 		d.Logger.Warn("failed to send resolved agent-id header", "error", err)
 	}
 
-	// The hook's part starts before the receive loop below, so none of the
-	// session's frames arrive before it is ready.
-	if hooked != nil {
-		if err := hooked.Start(agentStream.Send, func() { cancel(nil) }); err != nil {
-			return err
-		}
-		agentStream.hooked = hooked
-		defer hooked.Close()
-	}
-
 	eg, ctx := errgroup.WithContext(ctx)
 	// Recv returns only when the gRPC stream ends, and the stream ends only
 	// when this handler returns. The receive loop therefore runs outside the
@@ -307,7 +285,7 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 	interval := d.agentHeartbeat(stream.streamCtx)
 	heartbeatTicker := time.NewTicker(interval)
 	defer heartbeatTicker.Stop()
-	var bookkept, renewed time.Time
+	var bookkept time.Time
 	var bookkeeping atomic.Bool
 	incomingMessages := consumer.Chan()
 	moveDone := stream.moveDone
@@ -332,14 +310,6 @@ func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStrea
 			}
 			logger.Info("agent moved to another replica: told it no request follows on its old stream")
 		case <-heartbeatTicker.C:
-			// The hook renews busy or not: a session that keeps sending data
-			// skips its heartbeats, and a skipped renewal let a busy
-			// WireGuard tunnel's address expire under it (relay-server
-			// spec/IPAM.tla "busy-skips-renew", TestBusyHookedSessionStillRenews).
-			if h := stream.hooked; h != nil && time.Since(renewed) >= heartbeatBookkeepingEvery {
-				renewed = time.Now()
-				h.Renew()
-			}
 			if stream.OutboundDataSentWithin(interval) {
 				logger.Debug("skipping heartbeat to agentID agent: outbound data recently sent")
 				continue
@@ -417,7 +387,6 @@ func (d *Dispatcher) receiveFromHTTPAgent(ctx context.Context, stream *HTTPStrea
 
 // processHTTPInput handles a single message received from an HTTP-mode agent.
 // Heartbeats (nil response or empty transaction ID) are forwarded to the heartbeat channel.
-// Frames a session hook claims go to the session's part (SessionHook).
 // Data messages are enriched with metadata and forwarded via the broker.
 func (d *Dispatcher) processHTTPInput(ctx context.Context, stream *HTTPStream, input *pb.HTTPProxyResponse, receivedAt time.Time) error {
 	if !stream.moving.Load() {
@@ -436,14 +405,6 @@ func (d *Dispatcher) processHTTPInput(ctx context.Context, stream *HTTPStream, i
 			return ctx.Err()
 		}
 		d.markAgentStreamAlive(stream, input)
-		return nil
-	}
-
-	// A frame a session hook claims goes to the session's part, unread.
-	if h := d.SessionHook; h != nil && h.Claims(input.Response.TransactionId) {
-		if p := stream.hooked; p != nil {
-			p.Frame(input.Response.TransactionId, input.Response.Payload)
-		}
 		return nil
 	}
 

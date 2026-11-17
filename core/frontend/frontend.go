@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package frontend is the contract between the relay's core and its
-// frontends: each maps an outside protocol (WireGuard,
-// SNI E2EE passthrough, HTTP ingress) onto the core's sessions. A frontend
+// frontends: each maps an outside protocol (SNI E2EE
+// passthrough, HTTP ingress) onto the core's sessions. A frontend
 // is a package under frontend/ that imports the core and shared leaf
 // utilities, never another frontend or the composition (the relay
 // package); a binary links the frontends it attaches.
@@ -12,7 +12,6 @@ package frontend
 import (
 	"context"
 	"errors"
-	"github.com/nfltr/relay-core/core/identity"
 	"log/slog"
 	"net"
 	"net/http"
@@ -49,14 +48,6 @@ type Host interface {
 	// Core is the replica's session core.
 	Core() *session.Core
 	Logger() *slog.Logger
-	// Visible is the agents p may dial (session.Dispatcher.Reach), the
-	// WireGuard frontend's exits; nil when the relay authenticates no one,
-	// every agent then.
-	Visible(p identity.Principal) func(agentID string) bool
-	// RecordWireGuardKey keeps an agent's WireGuard public key in the
-	// endpoint registry, which the dashboard and proof page show.
-	RecordWireGuardKey(agentID, publicKey string)
-
 	// WrapGRPCListener puts wrap in front of the gRPC port's TLS: wrap
 	// gets the raw listener, the relay applies TLS to what it returns.
 	// False (and wrap unused) when the relay applies no TLS there.

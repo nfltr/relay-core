@@ -14,10 +14,3 @@ func PrincipalOwner(ctx context.Context) string {
 	p, _ := identity.FromContext(ctx)
 	return p.Owner
 }
-
-// keyBaseOf is the credential subject (a key's agent id, a token's id) of
-// the principal ctx carries ("" none).
-func keyBaseOf(ctx context.Context) string {
-	p, _ := identity.FromContext(ctx)
-	return p.Subject
-}

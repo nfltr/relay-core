@@ -46,7 +46,7 @@ var modules = []string{
 
 // TestModuleLinksOnlyItsDependencies: the module's packages (tests aside)
 // link the standard library, the modules above and none of a hosted
-// product (SQL, Redis, WireGuard, pion); no cgo.
+// product (SQL, Redis, pion); no cgo.
 func TestModuleLinksOnlyItsDependencies(t *testing.T) {
 	cmd := exec.Command("go", "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}} {{with .Module}}{{.Path}}{{end}} {{len .CgoFiles}}{{end}}", "./...")
 	cmd.Dir = "../.."

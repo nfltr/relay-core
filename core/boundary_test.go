@@ -11,7 +11,7 @@ import (
 )
 
 // forbidden are what the core links never: a frontend, the composition,
-// SQL, the Redis client, OPA, WireGuard. One replica's directory is in
+// SQL, the Redis client, OPA. One replica's directory is in
 // process; several replicas share a directory implemented outside this
 // module (directory.Cache).
 var forbidden = []string{
@@ -22,10 +22,6 @@ var forbidden = []string{
 	"github.com/jackc/pgx/",
 	"modernc.org/sqlite",
 	"github.com/open-policy-agent/",
-	// WireGuard is a frontend of the hosted relay: the core carries its
-	// frames through a session hook and speaks none of its protocol.
-	"github.com/nfltr/relay/proto/wire/wgwire",
-	"golang.zx2c4.com/wireguard",
 }
 
 // TestCoreLinksNoFrontendOrStore: go list -deps ./core/... names none of

@@ -220,10 +220,6 @@ type Dispatcher struct {
 	// sessions share (agentOwners) with forgetAgent's removal.
 	agentStateMu sync.Mutex
 
-	// SessionHook is a frontend's part in agent sessions (session_hook.go);
-	// nil for none. Set before the dispatcher serves.
-	SessionHook SessionHook
-
 	// overShare: this replica holds more than its share of the fleet's
 	// agents and refuses new agent sessions (agent_rebalance.go).
 	overShare atomic.Bool

@@ -330,7 +330,7 @@ type Action uint8
 // The actions a principal may take on an agent (cedar's Action::"dial",
 // Action::"list").
 const (
-	Dial Action = iota // open bytes or a call to it: connect, E2EE, A2A, browse, WireGuard, a peer replica's session
+	Dial Action = iota // open bytes or a call to it: connect, E2EE, A2A, browse, a peer replica's session
 	List               // see it in a listing (presence, my agents, Fleet)
 )
 

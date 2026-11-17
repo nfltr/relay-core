@@ -1,3 +1,17 @@
+Incompatible changes:
+- ./core/session.Dispatcher.SessionHook: removed
+- ./core/session.HookedSession: removed
+- ./core/session.SessionHook: removed
+- ./core/frontend.(*CoreHost).RecordWireGuardKey: removed
+- ./core/frontend.(*CoreHost).Visible: removed
+- ./core/frontend.Host.RecordWireGuardKey: removed
+- ./core/frontend.Host.Visible: removed
+- ./platform/metrics.IncrWGIPAllocations: removed
+- ./platform/metrics.PathAccounts: value changed from 15 to 14
+- ./platform/metrics.PathBlob: value changed from 14 to 13
+- ./platform/metrics.PathMailbox: value changed from 13 to 12
+- ./platform/metrics.PathP2PRelay: value changed from 12 to 11
+- ./platform/metrics.PathWG: removed
 Compatible changes:
 - ./keyfile.(*APIKeyStore).MachineByCert: added
 - ./keyfile.(*KeyManager).Enrol: added

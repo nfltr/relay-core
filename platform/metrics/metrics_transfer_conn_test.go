@@ -71,7 +71,7 @@ func TestCountConnCountsBothDirectionsAndOneFirstByte(t *testing.T) {
 // TestCountHTTPCountsBodiesAndHeaderAsFirstByte: a request's body goes to
 // the agent, the response's comes from it, its header is the first byte.
 func TestCountHTTPCountsBodiesAndHeaderAsFirstByte(t *testing.T) {
-	p := PathWG // no production caller: the test owns its counters
+	p := PathP2PRelay // no caller in this module: the test owns its counters
 	before, firstBefore := scrape(t, p), histCount(t, p)
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("hello"))
 	rec := httptest.NewRecorder()

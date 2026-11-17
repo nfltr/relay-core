@@ -62,8 +62,8 @@ func TestFrontendsImportOnlyTheCore(t *testing.T) {
 	}
 }
 
-// frontendOf is the frontend a package belongs to ("wireguard" for
-// frontend/wireguard and anything under it), "" for none.
+// frontendOf is the frontend a package belongs to ("sni" for
+// frontend/sni and anything under it), "" for none.
 func frontendOf(pkg string) string {
 	rest, ok := strings.CutPrefix(pkg, frontends)
 	if !ok {
