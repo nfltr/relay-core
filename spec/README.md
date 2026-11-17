@@ -928,8 +928,7 @@ others), `reload-account` (a reload changing an account), `owner-own-id`
 violated: `WitnessOutlivesFirst` (two machines of an account whose first
 machine was revoked), `WitnessNameReused` (a revoked machine's name taken
 again in its account at once), `WitnessNameInTwoAccounts`. Tests:
-keyfile `TestKeyFileAccounts`, `TestLoadAPIKeysRefuses`. No trace
-recorder yet (each manager call is one locked step of one process).
+keyfile `TestKeyFileAccounts`, `TestLoadAPIKeysRefuses`; traces below.
 
 Lane L5 (nfltr/nfltr `docs/decisions/api-key-cut-2026-11-15.md` "L5
 SELFHOST design"): the self-hosted relay's data dir holds a machine CA. A
@@ -949,6 +948,27 @@ keyfile `TestEnrolCodeSingleUse`, `TestCertBoundToLine`,
 `TestCodeJoinsAccount`, `TestKeyTokenIsNotACertificate` (a token equal to a
 certificate machine's public key never validates as a key).
 
+### KeyAccount traces
+
+`make spec-traces` (and `scripts/spec.sh katraces` alone, minutes: one
+TLC run per trace) runs the keyfile tests with `-tags relaytrace`
+(`KEYACCOUNT_TESTS`, default all): `keyfile` (`trace_on.go`) writes one
+store's steps to `keyaccount-<n>.ndjson`: Load (a line the file held at
+start, a certificate machine's with its key), Generate (its own account,
+else the model's Join), Revoke, MintCode, Enrol (with the account and
+name the machine got), Reissue, Auth (the provider's answer for a
+certificate that chains to the CA). A step that changes the store is
+written under its write lock and an Auth under its read lock, inside the
+step. `TraceKeyAccount.tla` (`TraceKeyAccountLog.tla`) checks each with
+`TypeOK` and every invariant above; an Auth that admits needs a
+certificate the CA signed (Enrol, Reissue or a Load). Not modelled, so
+not traced: a key line rekeyed by a file edit (the model has no key of a
+key line) and a second key of one machine (the store API before
+machines). Rejected fixtures (`spec/testdata/reject-keyaccount-*`), one
+per invariant the new actions guard and one unknown step: a code used
+twice, a certificate after its revoke, a rotated-away key, an enrol
+outside the code's account, a name twice in an account.
+
 ### Code map (drift check)
 
 | what the spec models | file |
@@ -957,6 +977,8 @@ certificate machine's public key never validates as a key).
 | `Reload` | `keyfile/keyfile_reload.go` |
 | `Owner`, `Resolve` | `keyfile/provider.go` |
 | `MintCode`, `Enrol`, `Reissue`, `Authenticates` | `keyfile/machine_cert.go` |
+| the recorder | `keyfile/trace_on.go`, `keyfile/trace.go` |
+| the trace check | `spec/TraceKeyAccount.tla` |
 
 ## AccountLimit.tla: an account's own connection limits
 

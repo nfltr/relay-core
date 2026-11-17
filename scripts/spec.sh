@@ -295,8 +295,40 @@ CFG
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
 }
 
+# katrace FILE: one key file's lines, codes and certificates
+# (keyaccount-*.ndjson, keyfile's recorder) against spec/TraceKeyAccount.tla.
+katrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Ids <- TraceIds
+    Names <- TraceNames
+    Codes <- TraceCodes
+    Keys <- TraceKeys
+    None = None
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    AccountStable
+    AccountRooted
+    NamesUnique
+    SameAccountReaches
+    ResolveOwnAccount
+    EnrolCodeSingleUse
+    CertBoundToLine
+    EnrolledAsCoded
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceKeyAccount.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
 check_trace() {
 	case $(basename "$1") in
+	keyaccount-* | reject-keyaccount-*) katrace "$1" ;;
 	nf1anon-* | reject-nf1anon-*) natrace "$1" ;;
 	presence-* | reject-presence-*) ptrace "$1" ;;
 	move-* | reject-move-*) trace_move "$1" ;;
@@ -627,6 +659,24 @@ simulate)
 	grep -E 'states generated|traces generated|Finished in|Error|violated' "$work/sim.out" || true
 	[ $st = 0 ] || { tail -60 "$work/sim.out"; exit $st; }
 	;;
+katraces)
+	# The key file's traces alone (seconds): the keyfile tests' recorded
+	# steps and the reject-keyaccount-* fixtures (make spec-traces runs them too).
+	mkdir -p "$work/katraces"
+	RELAYTRACE=$work/katraces go test -tags relaytrace -count=1 -run "${KEYACCOUNT_TESTS:-.}" ./keyfile/ >"$work/test.out" 2>&1 || {
+		cat "$work/test.out"
+		exit 1
+	}
+	for r in spec/testdata/reject-keyaccount-*.ndjson; do
+		cp "$r" "$work/$(basename "$r")"
+		if katrace "$work/$(basename "$r")"; then
+			echo "$r: accepted, want rejected"
+			exit 1
+		fi
+		echo "$r: rejected"
+	done
+	checktraces "$work/katraces" katrace
+	;;
 traces)
 	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions|TestTCPTunnelClientResetResetsTargetEndToEnd|TestTraceWriteAfterFinishIsLeftOut)$'}
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown|TestAgentLinkResumedByTheNextPrimary|TestAgentLinkCarriesSessions)$'}
@@ -648,6 +698,12 @@ traces)
 		exit 1
 	}
 	find "$work/natraces" -type f ! -name 'nf1anon-*' -exec rm {} + # the other recorders' steps of the same run
+	# The key file's accounts, codes and certificates (spec/TraceKeyAccount.tla).
+	mkdir -p "$work/katraces"
+	RELAYTRACE=$work/katraces go test -tags relaytrace -count=1 -run "${KEYACCOUNT_TESTS:-.}" ./keyfile/ >>"$work/test.out" 2>&1 || {
+		cat "$work/test.out"
+		exit 1
+	}
 	mkdir -p "$work/client"
 	RELAYTRACE=$work/client go test -tags relaytrace -count=1 -run "$ctests" github.com/nfltr/relay/client/agent >>"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
@@ -680,6 +736,8 @@ traces)
 	st=0
 	echo "== NF1Anon (spec/TraceNF1Anon.tla)"
 	checktraces "$work/natraces" natrace || st=1
+	echo "== KeyAccount (spec/TraceKeyAccount.tla)"
+	checktraces "$work/katraces" katrace || st=1
 	echo "== AgentLink (spec/Trace.tla)"
 	checktraces "$work/traces" trace || st=1
 	echo "== Move (spec/TraceMove.tla)"
