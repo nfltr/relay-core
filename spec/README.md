@@ -908,8 +908,8 @@ leaves the account to the others.
 | `Revoke(m)` | `KeyManager.Revoke` |
 | `Reload(m, n, a)` | `KeyManager.Reload` (the edited file: `readAPIKeys`; refused when a kept machine's account changed) |
 | `MintCode(c, n, j)` | `KeyManager.MintCode` (`nfltr-relay machines code`; the self-hosted relay's first start for `admin`) |
-| `Enrol(c, m, k)` | `KeyManager.Enrol` (the relay's enrol route: the code's line removed, the machine's `spki:` line written, the CA signs) |
-| `Reissue(m, k)` | `KeyManager.Reissue` (the reissue route: renew, or rotate to a new key's `spki:`) |
+| `Enrol(c, m, k)` | `KeyManager.Enrol` (the relay's enrol route: the code's file removed, the machine's `spki:` line written, the CA signs) |
+| `Reissue(m, k)` | `KeyManager.Rebind` (the reissue route: renew, or rotate to a new key's `spki:`) |
 
 `Owner(m)` is `Provider.Authenticate`'s owner (`Machine.AccountOf`) and
 `Resolve(c, n)` is `Policy.ResolveMachine` (`APIKeyStore.resolve`).
@@ -944,7 +944,10 @@ its live machine's current key: neither a revoked line nor a rotated-away
 key admits it) and `EnrolledAsCoded` (the code's account, or its own).
 Mutants, each caught: `code-reuse`, `cert-after-revoke`, `cert-any-key`,
 `code-join-outside`, `code-dup-name`. Witnesses, each violated:
-`WitnessCodeJoins`, `WitnessRotatedAway`, `WitnessCertOfRevoked`.
+`WitnessCodeJoins`, `WitnessRotatedAway`, `WitnessCertOfRevoked`. Tests:
+keyfile `TestEnrolCodeSingleUse`, `TestCertBoundToLine`,
+`TestCodeJoinsAccount`, `TestKeyTokenIsNotACertificate` (a token equal to a
+certificate machine's public key never validates as a key).
 
 ### Code map (drift check)
 
@@ -953,6 +956,7 @@ Mutants, each caught: `code-reuse`, `cert-after-revoke`, `cert-any-key`,
 | `Generate`, `Join`, `Revoke`, the line's account | `keyfile/keymanager.go`, `keyfile/apikey.go` |
 | `Reload` | `keyfile/keyfile_reload.go` |
 | `Owner`, `Resolve` | `keyfile/provider.go` |
+| `MintCode`, `Enrol`, `Reissue`, `Authenticates` | `keyfile/machine_cert.go` |
 
 ## AccountLimit.tla: an account's own connection limits
 

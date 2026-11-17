@@ -25,7 +25,10 @@ import (
 	"github.com/nfltr/relay-core/core/identity"
 )
 
-const hashPrefix = "sha256:"
+const (
+	hashPrefix = "sha256:"
+	spkiPrefix = "spki:"
+)
 
 // Machine is one machine of the key file: its id, its name and its
 // account (spec/KeyAccount.tla): "" is its own (its id), else the id of
@@ -35,6 +38,11 @@ type Machine struct {
 	ID      identity.MachineID
 	Name    string
 	Account identity.MachineID
+	// Cert: the line binds a machine key (spki:, the SHA-256 of its
+	// SubjectPublicKeyInfo) that certificates of the data dir's machine CA
+	// certify, not an API key (sha256:). A key token never validates
+	// against it: the SPKI is public.
+	Cert bool
 }
 
 // AccountOf is m's account: the principal's owner (Provider), the scope of
@@ -190,6 +198,9 @@ func (s *APIKeyStore) Validate(candidate string) (m Machine, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	m, ok = s.keys[h]
+	if m.Cert {
+		return Machine{}, false
+	}
 	return
 }
 
@@ -205,8 +216,8 @@ func (s *APIKeyStore) HasKeyHash(keyHash string) bool {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.keys[h]
-	return ok
+	m, ok := s.keys[h]
+	return ok && !m.Cert
 }
 
 // Count returns the number of keys in the store.
@@ -217,13 +228,13 @@ func (s *APIKeyStore) Count() int {
 }
 
 // parseLine reads one machine line: "<machine id> <name> sha256:<hex>
-// [account=<machine id>]".
+// [account=<machine id>]", or spki:<hex> for a certificate machine.
 func parseLine(line string) (Machine, [32]byte, error) {
 	f := strings.Fields(line)
-	if (len(f) != 3 && (len(f) != 4 || !strings.HasPrefix(f[3], accountField))) || !strings.HasPrefix(f[2], hashPrefix) {
+	if (len(f) != 3 && (len(f) != 4 || !strings.HasPrefix(f[3], accountField))) || (!strings.HasPrefix(f[2], hashPrefix) && !strings.HasPrefix(f[2], spkiPrefix)) {
 		return Machine{}, [32]byte{}, errors.New(`want "<machine id> <name> sha256:<hex> [account=<machine id>]" (a line with a services field, or a key file from before machines: re-add each machine with nfltr-relay keys add)`)
 	}
-	m := Machine{ID: identity.MachineID(f[0]), Name: f[1]}
+	m := Machine{ID: identity.MachineID(f[0]), Name: f[1], Cert: strings.HasPrefix(f[2], spkiPrefix)}
 	if len(f) == 4 {
 		m.Account = identity.MachineID(strings.TrimPrefix(f[3], accountField))
 		if m.Account == m.ID {
@@ -233,7 +244,8 @@ func parseLine(line string) (Machine, [32]byte, error) {
 	if err := validMachine(m); err != nil {
 		return Machine{}, [32]byte{}, err
 	}
-	h, err := decodeHashPrefix(f[2][len(hashPrefix):])
+	_, hexHash, _ := strings.Cut(f[2], ":")
+	h, err := decodeHashPrefix(hexHash)
 	return m, h, err
 }
 
@@ -243,7 +255,11 @@ func (m Machine) Line(key string) string { return m.line(sha256.Sum256([]byte(ke
 
 // line is m's key file line for the key hash h.
 func (m Machine) line(h [32]byte) string {
-	l := fmt.Sprintf("%s %s %s%s", m.ID, m.Name, hashPrefix, hex.EncodeToString(h[:]))
+	prefix := hashPrefix
+	if m.Cert {
+		prefix = spkiPrefix
+	}
+	l := fmt.Sprintf("%s %s %s%s", m.ID, m.Name, prefix, hex.EncodeToString(h[:]))
 	if m.Account != "" && m.Account != m.ID {
 		l += " " + accountField + string(m.Account)
 	}

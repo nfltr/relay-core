@@ -5,6 +5,7 @@ package keyfile
 
 import (
 	"context"
+	"crypto/x509"
 	"time"
 
 	"github.com/nfltr/relay-core/core/identity"
@@ -25,7 +26,14 @@ const CredentialCacheTTL = 30 * time.Second
 // SameAccountReaches); it registers any valid service name (its own id's
 // refs) and lives until it is revoked (KeyManager.Revoke, which drops the
 // core's cached answers). It links no database.
-type Provider struct{ Store *APIKeyStore }
+//
+// With CAs (the self-hosted relay's data-dir machine CA) it authenticates
+// a TLS client certificate too (machine_cert.go: spec/KeyAccount.tla
+// Authenticates).
+type Provider struct {
+	Store *APIKeyStore
+	CAs   *x509.CertPool
+}
 
 // Name implements identity.Provider.
 func (Provider) Name() string { return ProviderName }
@@ -35,12 +43,24 @@ func (k Provider) Authenticate(_ context.Context, c identity.Credential) (identi
 	if k.Store == nil {
 		return identity.Principal{}, identity.ErrUnknownCredential
 	}
+	if c.Token == "" && k.CAs != nil && len(c.PeerCerts) > 0 {
+		m, err := k.Store.MachineByCert(k.CAs, c.PeerCerts, time.Now())
+		if err != nil {
+			return identity.Principal{}, err
+		}
+		p := principalOf(m)
+		p.NotAfter = c.PeerCerts[0].NotAfter
+		return p, nil
+	}
 	m, ok := k.Store.Validate(c.Token)
 	if !ok {
 		return identity.Principal{}, identity.ErrUnknownCredential
 	}
-	id := string(m.ID)
-	return identity.Principal{Owner: string(m.AccountOf()), Machine: m.ID, Subject: id, CacheTTL: CredentialCacheTTL}, nil
+	return principalOf(m), nil
+}
+
+func principalOf(m Machine) identity.Principal {
+	return identity.Principal{Owner: string(m.AccountOf()), Machine: m.ID, Subject: string(m.ID), CacheTTL: CredentialCacheTTL}
 }
 
 // Policy is the reach policy of a key-file relay: an account is one group

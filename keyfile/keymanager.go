@@ -241,6 +241,11 @@ func (km *KeyManager) IsOwnedBy(id identity.MachineID, email string) bool {
 // appendToFile appends machine m's line with key's hash to the key file:
 // the plaintext key is never written to disk.
 func (km *KeyManager) appendToFile(m Machine, key string) error {
+	return km.appendLine(m, sha256.Sum256([]byte(key)))
+}
+
+// appendLine appends machine m's line for hash h to the key file.
+func (km *KeyManager) appendLine(m Machine, h [32]byte) error {
 	if km.filePath == "" {
 		return nil // no file persistence (e.g., env-only mode)
 	}
@@ -251,7 +256,7 @@ func (km *KeyManager) appendToFile(m Machine, key string) error {
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		data = append(data, '\n')
 	}
-	data = append(append(data, m.line(sha256.Sum256([]byte(key)))...), '\n')
+	data = append(append(data, m.line(h)...), '\n')
 	return writeFileAtomic(km.filePath, data)
 }
 
@@ -265,7 +270,7 @@ func (km *KeyManager) rewriteFile() error {
 	km.store.mu.RLock()
 	var lines []string
 	lines = append(lines, "# API keys managed by the relay (do not edit manually)")
-	lines = append(lines, "# Format: <machine id> <name> sha256:<hex_hash> [account=<machine id>]")
+	lines = append(lines, "# Format: <machine id> <name> sha256:<hex_hash>|spki:<hex_hash> [account=<machine id>]")
 	for hash, m := range km.store.keys {
 		lines = append(lines, m.line(hash))
 	}
