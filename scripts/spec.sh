@@ -482,17 +482,17 @@ mutants)
 	m='s/Mutant = "none"/Mutant = "'
 	# A bug put back per invariant.
 	# KeyAccount.tla: the key file's accounts (KEYACCT).
-	for b in join-outside dup-name revoke-reassigns reload-account owner-own-id resolve-global; do
+	for b in revoke-reassigns reload-account owner-own-id resolve-global code-dup-name; do
 		expect KeyAccount.cfg KeyAccount.tla "$b" -e "$m$b\"/"
 	done
-	for w in OutlivesFirst NameReused NameInTwoAccounts; do
+	for w in OutlivesFirst NameReused NameInTwoAccounts CodeJoins; do
 		expect KeyAccount.cfg KeyAccount.tla "witness:$w" -e "s/^    ResolveOwnAccount$/    Witness$w/"
 	done
 	# The data dir's machine CA: code enrolment and certificates (lane L5).
-	for b in code-reuse cert-after-revoke cert-any-key code-join-outside code-dup-name; do
+	for b in code-reuse cert-after-revoke cert-any-key code-join-outside; do
 		expect KeyAccountCert.cfg KeyAccount.tla "cert:$b" -e "$m$b\"/"
 	done
-	for w in CodeJoins RotatedAway CertOfRevoked; do
+	for w in RotatedAway CertOfRevoked; do
 		expect KeyAccountCert.cfg KeyAccount.tla "witness:$w" -e "s/^    EnrolledAsCoded$/    Witness$w/"
 	done
 	# AccountLimit.tla: an account's own connection limits (CONNLIMIT).

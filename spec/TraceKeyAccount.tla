@@ -2,10 +2,10 @@
 (* Trace validation of KeyAccount.tla (spec/README.md "KeyAccount traces"): *)
 (* the steps one key file's store takes in the keyfile tests (-tags        *)
 (* relaytrace), recorded by keyfile trace_on.go, must be a behaviour of    *)
-(* KeyAccount. A Load line is one the file held at start (Load below). A   *)
-(* Generate line is the model's Generate when the machine is its own       *)
-(* account, else its Join of a live machine of that account; an Enrol line *)
-(* names the account and name the machine got (EnrolledAsCoded); an Auth   *)
+(* KeyAccount. A Load line is one the file held at start (Load below); an *)
+(* Enrol line names the account and name the machine got (EnrolledAsCoded); *)
+(* a line of a step KeyAccount has no action for (Generate, a key line's,   *)
+(* gone with the API key cut) is refused (OTHER); an Auth                  *)
 (* line is the provider's answer for a certificate that chains to the CA   *)
 (* (Authenticates), which changes nothing: true only for a certificate the *)
 (* CA signed. The trace is accepted when TLC reaches its end: TraceNotDone *)
@@ -17,24 +17,22 @@ VARIABLE l   \* the next line
 E == Log[l]
 
 \* A line the key file holds at start (a restart): machine m, named n, of
-\* account a, a certificate machine's line binding k (k = ""; a key line).
+\* account a, its line binding k (every line binds a key: no key lines).
 \* An account whose first machine is no longer in the file is that revoked
 \* machine's: it goes to used, the id never assigned again.
 Load(m, n, a, k) ==
     LET r == {a} \ (used \cup {m}) IN
-    /\ m \notin used /\ NameFree(a, n)
+    /\ m \notin used /\ NameFree(a, n) /\ k # ""
     /\ live' = live \cup {m} /\ used' = used \cup {m} \cup r
     /\ acct' = [x \in Ids |-> IF x = m \/ x \in r THEN a ELSE acct[x]]
     /\ nm' = [x \in Ids |-> IF x = m \/ x \in r THEN n ELSE nm[x]]
     /\ fixed' = [x \in Ids |-> IF x = m \/ x \in r THEN a ELSE fixed[x]]
-    /\ bound' = IF k = "" THEN bound ELSE [bound EXCEPT ![m] = k]
-    /\ certs' = IF k = "" THEN certs ELSE certs \cup {<<m, k>>}
+    /\ bound' = [bound EXCEPT ![m] = k]
+    /\ certs' = certs \cup {<<m, k>>}
     /\ UNCHANGED <<code, spent>>
 
 Step ==
     CASE E.ev = "Load" -> Load(E.m, E.n, E.a, E.k)
-      [] E.ev = "Generate" -> IF E.a = E.m THEN Generate(E.m, E.n)
-                              ELSE \E j \in live : acct[j] = E.a /\ Join(E.m, E.n, j)
       [] E.ev = "Revoke" -> Revoke(E.m)
       [] E.ev = "MintCode" -> IF E.a = "" THEN MintCode(E.c, E.n, None)
                               ELSE \E j \in live : acct[j] = E.a /\ MintCode(E.c, E.n, j)

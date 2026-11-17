@@ -2,23 +2,24 @@
 (* Accounts of a key-file relay (keyfile: no database; nfltr/nfltr        *)
 (* docs/decisions/tenants-reach-policy-2026-11-07.md "KEYACCT"). Each line  *)
 (* of the file is one machine: an id the file assigns (never reused), a     *)
-(* name and an account. A line generated alone is its own account (the      *)
-(* account id is that first machine's id); `keys generate --account X`      *)
-(* joins the account of X, a machine the file holds. The provider's owner   *)
-(* is the line's account, so the machines of one account reach each other  *)
-(* (relay-core Reach: owner == owner) and only they do. A name is a label:  *)
-(* unique among an account's live machines, resolved within the caller's    *)
-(* account only, free again once its machine is revoked. A reload swaps     *)
-(* keys and the (account, name) index in one step and is refused when it     *)
-(* would change a live machine's account. Revoking the first machine        *)
-(* leaves its account to the others.                                        *)
-(* Lane L5 (nfltr/nfltr docs/decisions/api-key-cut-2026-11-15.md "L5        *)
-(* SELFHOST"): a machine may instead enrol with a single-use code minted    *)
-(* from the data dir; its line then binds the key its certificate (signed   *)
-(* by the data dir's machine CA) certifies, and a certificate authenticates *)
-(* only while its machine's line is live and binds that same key. A        *)
-(* reissue with a new key rebinds the line (Rotate); the old certificate    *)
-(* is still unexpired but authenticates nothing.                            *)
+(* name, an account and the key its certificate certifies. A machine joins *)
+(* only by a single-use code minted from the data dir (lane L5, nfltr/nfltr *)
+(* docs/decisions/api-key-cut-2026-11-15.md "L5 SELFHOST"); a code minted   *)
+(* without --account makes the machine its own account (the account id is  *)
+(* that first machine's id), one with --account X joins the account of X, a *)
+(* machine the file holds. The provider's owner is the line's account, so  *)
+(* the machines of one account reach each other (relay-core Reach: owner == *)
+(* owner) and only they do. A name is a label: unique among an account's    *)
+(* live machines, resolved within the caller's account only, free again     *)
+(* once its machine is revoked. A reload swaps the lines and the (account,  *)
+(* name) index in one step and is refused when it would change a live       *)
+(* machine's account. Revoking the first machine leaves its account to the *)
+(* others. A certificate (signed by the data dir's machine CA) authenticates *)
+(* only while its machine's line is live and binds that same key. A reissue *)
+(* with a new key rebinds the line (Rotate); the old certificate is still   *)
+(* unexpired but authenticates nothing. The API key cut (lane L4S): no line *)
+(* holds a bearer key any more, so Generate and Join (`keys generate`) are  *)
+(* gone and every machine is a certificate machine.                         *)
 EXTENDS FiniteSets, Naturals
 
 CONSTANTS
@@ -34,10 +35,10 @@ VARIABLES
     used,   \* every id the file ever assigned (never reused)
     acct,   \* each assigned machine's account
     nm,     \* each assigned machine's name
-    fixed,  \* history: the account each machine got at generate
+    fixed,  \* history: the account each machine got at enrolment
     code,   \* each code's terms: None (not minted) or [name, acct] (acct None: its own)
     spent,  \* each code's redemptions (history: the machines it enrolled)
-    bound,  \* each machine's line: the key it binds (None: a key line)
+    bound,  \* each machine's line: the key it binds (None: not enrolled)
     certs   \* the certificates the CA signed: <<machine, key>> (none expire here)
 
 vars == <<live, used, acct, nm, fixed, code, spent, bound, certs>>
@@ -60,30 +61,10 @@ Init ==
     /\ code = [c \in Codes |-> None] /\ spent = [c \in Codes |-> {}]
     /\ bound = [m \in Ids |-> None] /\ certs = {}
 
-\* `keys generate --name n`: a fresh id, its own account.
-Generate(m, n) ==
-    /\ m \notin used
-    /\ NameFree(m, n)
-    /\ live' = live \cup {m} /\ used' = used \cup {m}
-    /\ acct' = [acct EXCEPT ![m] = m] /\ nm' = [nm EXCEPT ![m] = n] /\ fixed' = [fixed EXCEPT ![m] = m]
-    /\ UNCHANGED cvars
-
-\* `keys generate --name n --account j`: j must be a machine the file
-\* holds; the new machine joins j's account (j's id only when j is that
-\* account's first machine).
-Join(m, n, j) ==
-    LET a == IF j \in live THEN acct[j] ELSE j IN
-    /\ m \notin used /\ m # j
-    /\ j \in live \/ (Mutant = "join-outside" /\ j \notin used)
-    /\ NameFree(a, n) \/ Mutant = "dup-name"
-    /\ live' = live \cup {m} /\ used' = used \cup {m}
-    /\ acct' = [acct EXCEPT ![m] = a] /\ nm' = [nm EXCEPT ![m] = n] /\ fixed' = [fixed EXCEPT ![m] = a]
-    /\ UNCHANGED cvars
-
 \* `nfltr-relay machines code --name n [--account j]`: a single-use code
-\* for a machine named n, in j's account (resolved now, as Join does: j a
-\* machine the file holds) or its own (j = None). The relay's first start
-\* mints one for "admin" in place of admin-api-key.
+\* for a machine named n, in j's account (resolved now: j a machine the
+\* file holds) or its own (j = None). The relay's first start mints one
+\* for "admin" (admin-enrol-code).
 MintCode(c, n, j) ==
     /\ code[c] = None
     /\ j = None \/ j \in live \/ (Mutant = "code-join-outside" /\ j \notin used)
@@ -115,7 +96,7 @@ Reissue(m, k) ==
     /\ certs' = certs \cup {<<m, k>>}
     /\ UNCHANGED <<live, used, acct, nm, fixed, code, spent>>
 
-\* `keys revoke --machine m`: its line leaves the file; the other machines
+\* `machines revoke --machine m`: its line leaves the file; the other machines
 \* of its account keep the account (its id, when m was the first).
 Revoke(m) ==
     /\ m \in live
@@ -138,8 +119,6 @@ Reload(m, n, a) ==
     /\ UNCHANGED cvars
 
 Next ==
-    \/ \E m \in Ids, n \in Names : Generate(m, n)
-    \/ \E m, j \in Ids, n \in Names : Join(m, n, j)
     \/ \E c \in Codes, n \in Names, j \in Ids \cup {None} : MintCode(c, n, j)
     \/ \E c \in Codes, m \in Ids, k \in Keys : Enrol(c, m, k)
     \/ \E m \in Ids, k \in Keys : Reissue(m, k)
@@ -160,10 +139,10 @@ TypeOK ==
     /\ \A m \in Ids : bound[m] \in Keys \cup {None}
     /\ certs \subseteq used \X Keys
 
-\* A machine's account never changes after generate.
+\* A machine's account never changes after enrolment.
 AccountStable == \A m \in used : acct[m] = fixed[m]
 
-\* Every account is the id of a machine generated as its own account:
+\* Every account is the id of a machine enrolled as its own account:
 \* `--account` never names one outside the file.
 AccountRooted == \A m \in live : \E r \in used : fixed[r] = r /\ acct[m] = r
 

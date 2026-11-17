@@ -891,62 +891,61 @@ Lose and Reattach are the peers' (the relay sees a re-attach as a new open).
 `KeyAccount.tla` models the key file of a relay without a database
 (`keyfile`, lane KEYACCT, nfltr/nfltr
 `docs/decisions/tenants-reach-policy-2026-11-07.md`): each line is a
-machine (an id the file assigns, never reused), a name and an account. A
-machine generated alone is its own account, whose id is that first
-machine's; `keys generate --account X` joins the account of X, a machine
-the file holds. The provider's owner is the line's account, so relay-core
-Reach (owner == owner) lets the machines of one account, and only they,
-reach each other's agents; a name resolves within the caller's account.
-A reload swaps keys and names in one step and is refused when it would
-change a kept machine's account; revoking an account's first machine
-leaves the account to the others.
+machine (an id the file assigns, never reused), a name, an account and the
+key its certificates certify. A machine joins only with a single-use code
+(`MintCode`, `Enrol`; lane L5, nfltr/nfltr
+`docs/decisions/api-key-cut-2026-11-15.md` "L5 SELFHOST design"): a code
+minted without `--account` makes it its own account, whose id is that
+first machine's; `--account X` joins the account of X, a machine the file
+holds. The provider's owner is the line's account, so relay-core Reach
+(owner == owner) lets the machines of one account, and only they, reach
+each other's agents; a name resolves within the caller's account. A reload
+swaps lines and names in one step and is refused when it would change a
+kept machine's account; revoking an account's first machine leaves the
+account to the others. `Reissue` renews or rotates a machine's key, and
+`Authenticates(m, k)` is the provider's certificate check (the line is
+live and binds the leaf's key). The API key cut (lane L4S) removed the
+key lines and their actions `Generate` and `Join` (`keys generate`): no
+line holds a bearer secret, and the provider authenticates certificates
+only.
 
 | action | Go |
 |---|---|
-| `Generate(m, n)` | `KeyManager.Generate` / `GenerateForOwner` (`generate` with no member) |
-| `Join(m, n, j)` | `KeyManager.Join` (`accountOfMember`: j by id, or a name one machine holds) |
-| `Revoke(m)` | `KeyManager.Revoke` |
-| `Reload(m, n, a)` | `KeyManager.Reload` (the edited file: `readAPIKeys`; refused when a kept machine's account changed) |
-| `MintCode(c, n, j)` | `KeyManager.MintCode` (`nfltr-relay machines code`; the self-hosted relay's first start for `admin`) |
+| `Revoke(m)` | `KeyManager.Revoke` (`nfltr-relay machines revoke`) |
+| `Reload(m, n, a)` | `KeyManager.Reload` (the edited file: `read`; refused when a kept machine's account changed) |
+| `MintCode(c, n, j)` | `KeyManager.MintCode` (`nfltr-relay machines code`; the self-hosted relay's first start for `admin`: `admin-enrol-code`) |
 | `Enrol(c, m, k)` | `KeyManager.Enrol` (the relay's enrol route: the code's file removed, the machine's `spki:` line written, the CA signs) |
 | `Reissue(m, k)` | `KeyManager.Rebind` (the reissue route: renew, or rotate to a new key's `spki:`) |
 
 `Owner(m)` is `Provider.Authenticate`'s owner (`Machine.AccountOf`) and
-`Resolve(c, n)` is `Policy.ResolveMachine` (`APIKeyStore.resolve`).
-Invariants (`KeyAccount.cfg`, `make spec`, 4 ids, 2 names: 53,273 states
-(10,329 distinct), 1 s; `COVERAGE=1` takes every action): `AccountStable`
-(a machine's account never changes after generate), `AccountRooted` (every
-account is the id of a machine generated as its own), `NamesUnique` (per
-account, among live machines), `SameAccountReaches` (one owner exactly for
-one account), `ResolveOwnAccount` (a name resolves to at most one machine,
-of the caller's account). Mutants (`make spec-mutants`), each caught:
-`join-outside` (`--account` naming a machine the file does not hold),
-`dup-name`, `revoke-reassigns` (the first machine's revoke orphaning the
-others), `reload-account` (a reload changing an account), `owner-own-id`
-(every line its own account: the key file before KEYACCT),
-`resolve-global` (a name looked up across accounts). Witnesses, each
-violated: `WitnessOutlivesFirst` (two machines of an account whose first
-machine was revoked), `WitnessNameReused` (a revoked machine's name taken
-again in its account at once), `WitnessNameInTwoAccounts`. Tests:
-keyfile `TestKeyFileAccounts`, `TestLoadAPIKeysRefuses`; traces below.
-
-Lane L5 (nfltr/nfltr `docs/decisions/api-key-cut-2026-11-15.md` "L5
-SELFHOST design"): the self-hosted relay's data dir holds a machine CA. A
-single-use code (`MintCode`) enrols a machine (`Enrol`): a fresh line that
-binds the key the certificate certifies; `Reissue` renews or rotates it,
-and `Authenticates(m, k)` is the provider's certificate check (the line is
-live and binds the leaf's key). `KeyAccountCert.cfg` (`make spec`, 3 ids,
-2 names, 1 code, 2 keys: 87,275 states (18,279 distinct), `COVERAGE=1`
-takes every action; `KeyAccount.cfg` has no codes or keys, so its run takes neither `MintCode`, `Enrol` nor `Reissue`, its state count unchanged) adds
-`EnrolCodeSingleUse`, `CertBoundToLine` (a certificate authenticates only
-its live machine's current key: neither a revoked line nor a rotated-away
-key admits it) and `EnrolledAsCoded` (the code's account, or its own).
-Mutants, each caught: `code-reuse`, `cert-after-revoke`, `cert-any-key`,
-`code-join-outside`, `code-dup-name`. Witnesses, each violated:
-`WitnessCodeJoins`, `WitnessRotatedAway`, `WitnessCertOfRevoked`. Tests:
-keyfile `TestEnrolCodeSingleUse`, `TestCertBoundToLine`,
-`TestCodeJoinsAccount`, `TestKeyTokenIsNotACertificate` (a token equal to a
-certificate machine's public key never validates as a key).
+`Resolve(c, n)` is `Policy.ResolveMachine` (`Store.resolve`). Invariants
+(`make spec`): `AccountStable` (a machine's account never changes after
+enrolment), `AccountRooted` (every account is the id of a machine
+enrolled as its own), `NamesUnique` (per account, among live machines),
+`SameAccountReaches` (one owner exactly for one account),
+`ResolveOwnAccount` (a name resolves to at most one machine, of the
+caller's account), `EnrolCodeSingleUse`, `CertBoundToLine` (a certificate
+authenticates only its live machine's current key: neither a revoked line
+nor a rotated-away key admits it) and `EnrolledAsCoded` (the code's
+account, or its own). `KeyAccount.cfg` (3 ids, 2 names, 3 codes, 1 key:
+178,921 states (38,019 distinct), `COVERAGE=1` takes every action) checks
+the accounts; `KeyAccountCert.cfg` (3 ids, 2 names, 1 code, 2 keys: 255
+states (99 distinct), every action taken) the certificates. Mutants
+(`make spec-mutants`), each caught: on `KeyAccount.cfg` `revoke-reassigns`
+(the first machine's revoke orphaning the others), `reload-account` (a
+reload changing an account), `owner-own-id` (every line its own account:
+the key file before KEYACCT), `resolve-global` (a name looked up across
+accounts), `code-dup-name`; on `KeyAccountCert.cfg` `code-reuse`,
+`cert-after-revoke`, `cert-any-key`, `code-join-outside` (`--account`
+naming a machine the file does not hold). Witnesses, each violated:
+`WitnessOutlivesFirst` (two machines of an account whose first machine was
+revoked), `WitnessNameReused` (a revoked machine's name taken again in its
+account at once), `WitnessNameInTwoAccounts`, `WitnessCodeJoins`
+(`KeyAccount.cfg`); `WitnessRotatedAway`, `WitnessCertOfRevoked`
+(`KeyAccountCert.cfg`). Tests: keyfile `TestKeyFileAccounts`,
+`TestLoadRefuses`, `TestEnrolCodeSingleUse`, `TestCertBoundToLine`,
+`TestCodeJoinsAccount`, `TestTokenIsNotACredential` (no token
+authenticates, not even a machine's public key DER).
 
 ### KeyAccount traces
 
@@ -954,17 +953,17 @@ certificate machine's public key never validates as a key).
 TLC run per trace) runs the keyfile tests with `-tags relaytrace`
 (`KEYACCOUNT_TESTS`, default all): `keyfile` (`trace_on.go`) writes one
 store's steps to `keyaccount-<n>.ndjson`: Load (a line the file held at
-start, a certificate machine's with its key), Generate (its own account,
-else the model's Join), Revoke, MintCode, Enrol (with the account and
-name the machine got), Reissue, Auth (the provider's answer for a
-certificate that chains to the CA). A step that changes the store is
+start, with its key, or one an edit of the file added: a reload's new
+line), Revoke, MintCode, Enrol (with the account and name the machine
+got), Reissue, Auth (the provider's answer for a certificate that chains
+to the CA). A Generate line (a key line's, gone with the key cut) is an
+unknown step and refused. A step that changes the store is
 written under its write lock and an Auth under its read lock, inside the
 step. `TraceKeyAccount.tla` (`TraceKeyAccountLog.tla`) checks each with
 `TypeOK` and every invariant above; an Auth that admits needs a
 certificate the CA signed (Enrol, Reissue or a Load). Not modelled, so
-not traced: a key line rekeyed by a file edit (the model has no key of a
-key line) and a second key of one machine (the store API before
-machines). Rejected fixtures (`spec/testdata/reject-keyaccount-*`), one
+not traced: a line rekeyed by a file edit (outside the model). Rejected
+fixtures (`spec/testdata/reject-keyaccount-*`), one
 per invariant the new actions guard and one unknown step: a code used
 twice, a certificate after its revoke, a rotated-away key, an enrol
 outside the code's account, a name twice in an account.
@@ -973,7 +972,7 @@ outside the code's account, a name twice in an account.
 
 | what the spec models | file |
 |---|---|
-| `Generate`, `Join`, `Revoke`, the line's account | `keyfile/keymanager.go`, `keyfile/apikey.go` |
+| `Revoke`, the line's account | `keyfile/keymanager.go`, `keyfile/apikey.go` |
 | `Reload` | `keyfile/keyfile_reload.go` |
 | `Owner`, `Resolve` | `keyfile/provider.go` |
 | `MintCode`, `Enrol`, `Reissue`, `Authenticates` | `keyfile/machine_cert.go` |

@@ -1,3 +1,4 @@
-{"ev":"Generate","m":"m-a","n":"admin","a":"m-a","c":"","k":"","ok":false}
-{"ev":"MintCode","m":"","n":"node","a":"m-a","c":"c1","k":"","ok":false}
-{"ev":"Enrol","m":"m-b","n":"node","a":"m-b","c":"c1","k":"k1","ok":false}
+{"ev":"MintCode","m":"","n":"admin","a":"","c":"c1","k":"","ok":false}
+{"ev":"Enrol","m":"m-a","n":"admin","a":"m-a","c":"c1","k":"k1","ok":false}
+{"ev":"MintCode","m":"","n":"node","a":"m-a","c":"c2","k":"","ok":false}
+{"ev":"Enrol","m":"m-b","n":"node","a":"m-b","c":"c2","k":"k2","ok":false}
