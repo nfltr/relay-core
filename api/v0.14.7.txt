@@ -5,5 +5,7 @@ Compatible changes:
 - ./keyfile.(*KeyManager).Rebind: added
 - ./keyfile.ErrEnrolRefused: added
 - ./keyfile.Machine.Cert: added
+- ./keyfile.MachineIDOfCert: added
 - ./keyfile.MachineTrustDomain: added
+- ./keyfile.MachineURI: added
 - ./keyfile.Provider.CAs: added

@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -85,6 +86,10 @@ func (km *KeyManager) MintCode(name, member string, ttl time.Duration, now time.
 		_ = os.Remove(f.Name())
 		return "", err
 	}
+	if account == "-" {
+		account = ""
+	}
+	km.store.trace(event{Ev: "MintCode", C: codeID(code), N: name, A: account})
 	return code, nil
 }
 
@@ -132,7 +137,7 @@ func (km *KeyManager) Enrol(code string, pub crypto.PublicKey, now time.Time) (M
 		return Machine{}, ErrEnrolRefused
 	}
 	h := sha256.Sum256(spki)
-	km.store.addHash(m, h)
+	km.store.addHash(m, h, event{Ev: "Enrol", C: codeID(code), M: string(m.ID), K: keyID(h), N: m.Name, A: string(m.AccountOf())})
 	if err := km.appendLine(m, h); err != nil {
 		km.store.Remove(m.ID)
 		return Machine{}, fmt.Errorf("persist machine: %w", err)
@@ -167,6 +172,9 @@ func (km *KeyManager) Rebind(id identity.MachineID, pub crypto.PublicKey) error 
 		delete(km.store.keys, old)
 		km.store.keys[h] = m
 	}
+	if found {
+		km.store.trace(event{Ev: "Reissue", M: string(id), K: keyID(h)})
+	}
 	km.store.mu.Unlock()
 	if !found {
 		return identity.ErrUnknownCredential
@@ -195,23 +203,30 @@ func (s *APIKeyStore) MachineByCert(roots *x509.CertPool, chain []*x509.Certific
 	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
 		return Machine{}, identity.ErrUnknownCredential
 	}
-	id, ok := machineIDOfCert(leaf)
+	id, ok := MachineIDOfCert(leaf)
 	if !ok {
 		return Machine{}, identity.ErrUnknownCredential
 	}
 	h := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
 	s.mu.RLock()
 	m, found := s.keys[h]
+	ok = found && m.Cert && m.ID == id
+	s.trace(event{Ev: "Auth", M: string(id), K: keyID(h), OK: ok}) // under the read lock: the answer's state
 	s.mu.RUnlock()
-	if !found || !m.Cert || m.ID != id {
+	if !ok {
 		return Machine{}, identity.ErrUnknownCredential
 	}
 	return m, nil
 }
 
-// machineIDOfCert is the machine id c carries: its one URI SAN, of the
+// MachineURI is id's SPIFFE id: the one URI SAN of its certificate.
+func MachineURI(id identity.MachineID) *url.URL {
+	return &url.URL{Scheme: "spiffe", Host: MachineTrustDomain, Path: "/m/" + string(id)}
+}
+
+// MachineIDOfCert is the machine id c carries: its one URI SAN, of the
 // trust domain and the fixed path, and no other SAN.
-func machineIDOfCert(c *x509.Certificate) (identity.MachineID, bool) {
+func MachineIDOfCert(c *x509.Certificate) (identity.MachineID, bool) {
 	if len(c.URIs) != 1 || len(c.DNSNames) != 0 || len(c.EmailAddresses) != 0 || len(c.IPAddresses) != 0 {
 		return "", false
 	}
@@ -224,9 +239,11 @@ func machineIDOfCert(c *x509.Certificate) (identity.MachineID, bool) {
 	return id, err == nil
 }
 
-// addHash adds machine m under hash h (a key's, or a cert machine's SPKI).
-func (s *APIKeyStore) addHash(m Machine, h [32]byte) {
+// addHash adds machine m under hash h (a key's, or a cert machine's SPKI);
+// e is its trace step, in the same critical section.
+func (s *APIKeyStore) addHash(m Machine, h [32]byte, e event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keys[h] = m
+	s.trace(e)
 }

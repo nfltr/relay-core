@@ -18,6 +18,11 @@ changes listed (from the first tag on).
 
 ### Added
 
+- `keyfile.MachineIDOfCert` and `keyfile.MachineURI`: the one parser and
+  maker of a machine certificate's id (its URI SAN
+  `spiffe://nfltr.xyz/m/<id>`), which relay-server's hosted machine CA now
+  uses instead of its own copy; and a trace recorder of the key file's
+  steps (`-tags relaytrace`, `spec/TraceKeyAccount.tla`, lane L5B).
 - Certificate machines in a key file (lane L5, spec/KeyAccount.tla
   `MintCode`, `Enrol`, `Reissue`): `KeyManager.MintCode` writes a
   single-use code, `KeyManager.Enrol` spends it and adds a `spki:` line

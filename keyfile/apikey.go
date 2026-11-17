@@ -83,6 +83,7 @@ func validMachine(m Machine) error {
 type APIKeyStore struct {
 	mu   sync.RWMutex
 	keys map[[32]byte]Machine // sha256(key) → machine
+	tr   tracer               // spec/KeyAccount.tla steps (-tags relaytrace only)
 }
 
 // NewAPIKeyStore returns an empty key store.
@@ -103,6 +104,7 @@ func LoadAPIKeys(path string) (*APIKeyStore, error) {
 	if len(store.keys) == 0 {
 		return nil, fmt.Errorf("security: no API keys found in %s", path)
 	}
+	store.traceLoad()
 	slog.Info("security: loaded API keys", "count", len(store.keys), "file", path)
 	return store, nil
 }
@@ -171,6 +173,7 @@ func (s *APIKeyStore) Add(m Machine, key string) {
 	h := sha256.Sum256([]byte(key))
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.traceAdd(m)
 	s.keys[h] = m
 }
 
@@ -178,10 +181,15 @@ func (s *APIKeyStore) Add(m Machine, key string) {
 func (s *APIKeyStore) Remove(id identity.MachineID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	removed := false
 	for key, m := range s.keys {
 		if m.ID == id {
 			delete(s.keys, key)
+			removed = true
 		}
+	}
+	if removed {
+		s.trace(event{Ev: "Revoke", M: string(id)})
 	}
 }
 

@@ -41,6 +41,7 @@ func (km *KeyManager) Reload() ([]identity.MachineID, error) {
 	}
 	gone := map[identity.MachineID]bool{}
 	km.store.mu.RLock()
+	orig := km.store.keys
 	for h, m := range km.store.keys {
 		if a, kept := nextAccount[m.ID]; kept && a != m.AccountOf() {
 			km.store.mu.RUnlock()
@@ -61,14 +62,14 @@ func (km *KeyManager) Reload() ([]identity.MachineID, error) {
 				staged[h] = m
 			}
 		}
-		km.store.swap(staged)
+		km.store.swap(staged, nil)
 		if km.onRevoke != nil {
 			for _, id := range revoked {
 				km.onRevoke(string(id))
 			}
 		}
 	}
-	km.store.swap(next.keys)
+	km.store.swap(next.keys, orig)
 
 	records := make(map[identity.MachineID]KeyRecord, len(next.keys))
 	for h, m := range next.keys {
@@ -84,10 +85,14 @@ func (km *KeyManager) Reload() ([]identity.MachineID, error) {
 	return revoked, nil
 }
 
-// swap replaces the store's keys with keys.
-func (s *APIKeyStore) swap(keys map[[32]byte]Machine) {
+// swap replaces the store's keys with keys; from, when not nil, is the
+// map before the reload: its trace steps (the lines added and removed).
+func (s *APIKeyStore) swap(keys, from map[[32]byte]Machine) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if from != nil {
+		s.traceLines(from, keys)
+	}
 	s.keys = keys
 }
 
