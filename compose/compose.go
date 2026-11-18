@@ -215,9 +215,8 @@ var ErrNoProviders = errors.New("no identity provider")
 
 // ownRequests routes a share's visitor (<code>.<http.share_domain>,
 // visits: nil without shares) to the shared agent, and a key's own HTTP
-// request to its agent: the key (X-API-Key, Authorization: Bearer or
-// ApiKey) and X-Agent-Id name the agent as the gRPC wire does (a service
-// of the key's machine); the relay's credential never reaches the agent, and no
+// request to its agent: the token (Authorization: Bearer) and X-Agent-Id
+// name the agent as the gRPC wire does (a service of the token's machine); the relay's credential never reaches the agent, and no
 // client sets the identity headers the relay sets. Anything else is 401.
 func ownRequests(auth *identity.Authenticator, serve http.Handler, visits *httpingress.Shares) http.Handler {
 	domain := "." + strings.ToLower(strings.TrimSuffix(strings.TrimSpace(viper.GetString("http.share_domain")), "."))

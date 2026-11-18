@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package filewatch calls back when a file changes, for settings the relay
-// reloads without a restart (the API key file, the site hosts file).
+// reloads without a restart (the machines file, the site hosts file).
 package filewatch
 
 import (

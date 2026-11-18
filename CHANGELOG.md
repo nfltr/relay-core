@@ -10,6 +10,20 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Changed (the key vocabulary after the API key cut, lane L4S3)
+
+- The gRPC token carrier is `x-nfltr-token` (was `x-api-key`): a token a
+  provider authenticates (a custom provider's, OIDC, a per-start token);
+  relay client `agent.Config.Token`/`TokenFile` and `rpcclient.WithToken`
+  send it. On HTTP a token is `Authorization: Bearer` only:
+  `connect.RequestKey` is `connect.RequestToken` and no longer reads
+  `X-API-Key` or `Authorization: ApiKey`; the data connection upgrade
+  sends Bearer. `X-API-Key` is no longer stripped before an agent: it is
+  the app's own header now.
+- The setting `security.apikey.file` is `security.machines.file`
+  (env `SECURITY_MACHINES_FILE`, default `/etc/rpcserver/machines`).
+  `security.sql.import_file_keys` (no reader) is gone.
+
 ### Removed (the API key cut, lane L4S; nfltr/nfltr docs/decisions/api-key-cut-2026-11-15.md)
 
 - The key file holds no API keys: a line is `<machine id> <name>

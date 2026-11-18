@@ -33,7 +33,7 @@ func TestAgentSessionMovesBetweenReplicas(t *testing.T) {
 	t.Setenv("TEST_POD_IP", "10.0.0.1") // this replica; the other is 10.0.0.2
 	t0 := time.Date(2026, 10, 10, 1, 0, 0, 0, time.UTC)
 	key := directory.GetDispatcherCacheKey("agent-1")
-	owner := sessionCredential(hashAPIKey("the agent's key"))
+	owner := sessionCredential(sha256Hex("the agent's key"))
 
 	t.Run("admitted while the replica it left holds its record", func(t *testing.T) {
 		d, cancel := newTestDispatcher(t)
@@ -44,7 +44,7 @@ func TestAgentSessionMovesBetweenReplicas(t *testing.T) {
 		if _, err := d.validateAgentConnection(context.Background(), "agent-1", owner, inv); err != nil {
 			t.Fatalf("the agent's own reconnect was refused: %v", err)
 		}
-		for _, other := range []string{"", sessionCredential(hashAPIKey("another key"))} {
+		for _, other := range []string{"", sessionCredential(sha256Hex("another key"))} {
 			if _, err := d.validateAgentConnection(context.Background(), "agent-1", other, inv); status.Code(err) != codes.AlreadyExists {
 				t.Fatalf("owner %q took over another credential's agent: %v", other, err)
 			}
@@ -127,7 +127,7 @@ func TestAgentSessionOrderIgnoresClockSkew(t *testing.T) {
 	t0 := time.Date(2026, 10, 10, 1, 0, 0, 0, time.UTC)
 	skew := 5 * time.Minute
 	key := directory.GetDispatcherCacheKey("agent-1")
-	owner := sessionCredential(hashAPIKey("the agent's key"))
+	owner := sessionCredential(sha256Hex("the agent's key"))
 	watch := func(t *testing.T, record *directory.Value, mine directory.Session) (*directory.Value, error) {
 		t.Helper()
 		d, cancel := newTestDispatcher(t)

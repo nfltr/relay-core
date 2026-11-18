@@ -33,7 +33,7 @@ import (
 // ConnectHTTP implements the gRPC Dispatcher_ConnectHTTPServer handler, registering
 // an HTTP-based agent stream and relaying frames until the agent disconnects.
 func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
-	// Get AgentID from context — supports API key or mTLS auth.
+	// Get AgentID from context — supports a token or a machine certificate.
 	agentID, err := auth.GetAgentIDFromContext(stream.Context())
 	if err != nil {
 		d.Logger.Error("error determining agentID from context", "error", err)
@@ -47,7 +47,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	}
 
 	// The credential names the principal allowed to take this session over.
-	apiKeyHash := streamKeyHash(stream.Context())
+	credHash := streamCredHash(stream.Context())
 
 	sessionCtx, cancel := context.WithCancelCause(stream.Context()) // will cancel if `stream context` cancels
 	defer cancel(nil)
@@ -58,10 +58,10 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	if d.refusesAgents(registrationCtx, agentID) { // agent_move.go, agent_rebalance.go: its reconnect must reach another replica
 		return status.Error(codes.Unavailable, "this relay replica is leaving or holds more than its share of agents: connect again")
 	}
-	if err := d.takeOverSession(registrationCtx, agentID, apiKeyHash); err != nil {
+	if err := d.takeOverSession(registrationCtx, agentID, credHash); err != nil {
 		return err
 	}
-	credential := sessionCredential(apiKeyHash)
+	credential := sessionCredential(credHash)
 	release, err := d.validateAgentConnection(registrationCtx, agentID, credential, d.IPInventory)
 	if err != nil {
 		return err
@@ -225,7 +225,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	}()
 	consumer.Chan() // receiving from here
 
-	agentStream.takeover = &sessionTakeover{keyHash: apiKeyHash, replace: func() { cancel(errSessionReplaced) }, ended: ended}
+	agentStream.takeover = &sessionTakeover{credHash: credHash, replace: func() { cancel(errSessionReplaced) }, ended: ended}
 	d.AddHTTPSession(agentID, agentStream) // after the claim: a request meanwhile waits (RouteArriving)
 	d.Presence.up(agentID, agentStream.labels, agentStream.capabilities, d.presenceServices(agentID))
 	if d.OnAgentMetadata != nil {

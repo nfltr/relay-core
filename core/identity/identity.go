@@ -21,7 +21,7 @@ import (
 // client certificate chain (PeerCerts, leaf first; the TLS handshake proved
 // the client holds the leaf's key, a provider verifies the chain).
 type Credential struct {
-	Token     string              // x-api-key, or Authorization: Bearer|ApiKey
+	Token     string              // x-nfltr-token, or Authorization: Bearer
 	PeerCerts []*x509.Certificate // the TLS client chain, when no Token
 	Name      string              // x-agent-id: the service asked for ("" none: not an agent)
 	Labels    map[string]string   // the agent's connect labels (opaque to the core)

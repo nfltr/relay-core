@@ -459,7 +459,7 @@ func (d *Dispatcher) RelayTunnel(incomingStream relayTunnelStream) (retErr error
 
 // agent to grpc server
 func (d *Dispatcher) AgentTunnel(stream pb.Dispatcher_AgentTunnelServer) error {
-	// Get AgentID from context — supports API key or mTLS auth.
+	// Get AgentID from context — supports a token or a machine certificate.
 	// AgentID must be present for the agent to connect
 	// AgentID must not present for the cluster connections
 	agentID, err := auth.GetAgentIDFromContext(stream.Context())

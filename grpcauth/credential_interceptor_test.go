@@ -22,17 +22,17 @@ var testMachine = keyfile.Machine{ID: identity.NewMachineID(), Name: "agent-1"}
 var testRef = identity.AgentRef{Machine: testMachine.ID, Service: "svc"}.String()
 
 // ---------------------------------------------------------------------------
-// validateAPIKeyFromMetadata
+// validateTokenFromMetadata
 // ---------------------------------------------------------------------------
 
 func TestValidateAPIKeyFromMetadata_ValidKey(t *testing.T) {
 	store := tokens{}
 	store["rpc_secret123"] = testMachine
 
-	md := metadata.Pairs("x-api-key", "rpc_secret123")
+	md := metadata.Pairs("x-nfltr-token", "rpc_secret123")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
-	ctx, err := validateAPIKeyFromMetadata(ctx, store)
+	ctx, err := validateTokenFromMetadata(ctx, store)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,16 +58,16 @@ func TestValidateAPIKeyFromMetadata_ValidKey(t *testing.T) {
 func TestValidateAPIKeyFromMetadata_AgentIsMachineService(t *testing.T) {
 	store := tokens{}
 	store["rpc_secret123"] = testMachine
-	ctx, err := validateAPIKeyFromMetadata(metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs("x-api-key", "rpc_secret123", "x-agent-id", "svc")), store)
+	ctx, err := validateTokenFromMetadata(metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("x-nfltr-token", "rpc_secret123", "x-agent-id", "svc")), store)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if agentID, ok := AgentIDFromContext(ctx); !ok || agentID != testRef {
 		t.Fatalf("AgentID %q (ok=%v), want %q", agentID, ok, testRef)
 	}
-	if _, err := validateAPIKeyFromMetadata(metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs("x-api-key", "rpc_secret123", "x-agent-id", identity.AgentRef{Machine: identity.MachineIDOf("other"), Service: "svc"}.String())), store); err == nil {
+	if _, err := validateTokenFromMetadata(metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("x-nfltr-token", "rpc_secret123", "x-agent-id", identity.AgentRef{Machine: identity.MachineIDOf("other"), Service: "svc"}.String())), store); err == nil {
 		t.Fatal("another machine's ref was taken")
 	}
 }
@@ -78,10 +78,10 @@ func TestValidateAPIKeyFromMetadata_InvalidKey(t *testing.T) {
 	store := tokens{}
 	store["rpc_secret123"] = testMachine
 
-	md := metadata.Pairs("x-api-key", "rpc_wrong_key")
+	md := metadata.Pairs("x-nfltr-token", "rpc_wrong_key")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
-	if _, err := validateAPIKeyFromMetadata(ctx, store); status.Code(err) != codes.Unauthenticated {
+	if _, err := validateTokenFromMetadata(ctx, store); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("an unknown key: %v, want Unauthenticated", err)
 	}
 }
@@ -91,7 +91,7 @@ func TestValidateAPIKeyFromMetadata_NoKey(t *testing.T) {
 	store["rpc_secret123"] = testMachine
 
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(nil))
-	ctx, err := validateAPIKeyFromMetadata(ctx, store)
+	ctx, err := validateTokenFromMetadata(ctx, store)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,11 +103,11 @@ func TestValidateAPIKeyFromMetadata_NoKey(t *testing.T) {
 }
 
 func TestValidateAPIKeyFromMetadata_NilStore(t *testing.T) {
-	md := metadata.Pairs("x-api-key", "rpc_secret123")
+	md := metadata.Pairs("x-nfltr-token", "rpc_secret123")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	// No store: no provider accepts the key, refused (and no panic).
-	if _, err := validateAPIKeyFromMetadata(ctx, nil); status.Code(err) != codes.Unauthenticated {
+	if _, err := validateTokenFromMetadata(ctx, nil); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("a key with no store: %v, want Unauthenticated", err)
 	}
 }
@@ -117,7 +117,7 @@ func TestValidateAPIKeyFromMetadata_NoMetadata(t *testing.T) {
 	store["rpc_secret123"] = testMachine
 
 	ctx := context.Background() // no metadata at all
-	ctx, err := validateAPIKeyFromMetadata(ctx, store)
+	ctx, err := validateTokenFromMetadata(ctx, store)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,16 +129,16 @@ func TestValidateAPIKeyFromMetadata_NoMetadata(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// APIKeyUnaryInterceptor
+// TokenUnaryInterceptor
 // ---------------------------------------------------------------------------
 
-func TestAPIKeyUnaryInterceptor_ValidKey(t *testing.T) {
+func TestTokenUnaryInterceptor_ValidKey(t *testing.T) {
 	store := tokens{}
 	store["rpc_test_key"] = testMachine
 
-	interceptor := APIKeyUnaryInterceptor(store)
+	interceptor := TokenUnaryInterceptor(store)
 
-	md := metadata.Pairs("x-api-key", "rpc_test_key", "x-agent-id", "svc")
+	md := metadata.Pairs("x-nfltr-token", "rpc_test_key", "x-agent-id", "svc")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	var capturedCtx context.Context
@@ -161,8 +161,8 @@ func TestAPIKeyUnaryInterceptor_ValidKey(t *testing.T) {
 	}
 }
 
-func TestAPIKeyUnaryInterceptor_NilStore(t *testing.T) {
-	interceptor := APIKeyUnaryInterceptor(nil)
+func TestTokenUnaryInterceptor_NilStore(t *testing.T) {
+	interceptor := TokenUnaryInterceptor(nil)
 
 	ctx := context.Background()
 	handler := func(ctx context.Context, req any) (any, error) {
@@ -179,7 +179,7 @@ func TestAPIKeyUnaryInterceptor_NilStore(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// APIKeyStreamInterceptor
+// TokenStreamInterceptor
 // ---------------------------------------------------------------------------
 
 type fakeServerStream struct {
@@ -189,13 +189,13 @@ type fakeServerStream struct {
 
 func (f *fakeServerStream) Context() context.Context { return f.ctx }
 
-func TestAPIKeyStreamInterceptor_ValidKey(t *testing.T) {
+func TestTokenStreamInterceptor_ValidKey(t *testing.T) {
 	store := tokens{}
 	store["rpc_stream_key"] = testMachine
 
-	interceptor := APIKeyStreamInterceptor(store)
+	interceptor := TokenStreamInterceptor(store)
 
-	md := metadata.Pairs("x-api-key", "rpc_stream_key", "x-agent-id", "svc")
+	md := metadata.Pairs("x-nfltr-token", "rpc_stream_key", "x-agent-id", "svc")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	ss := &fakeServerStream{ctx: ctx}
 
@@ -216,8 +216,8 @@ func TestAPIKeyStreamInterceptor_ValidKey(t *testing.T) {
 	}
 }
 
-func TestAPIKeyStreamInterceptor_NilStore(t *testing.T) {
-	interceptor := APIKeyStreamInterceptor(nil)
+func TestTokenStreamInterceptor_NilStore(t *testing.T) {
+	interceptor := TokenStreamInterceptor(nil)
 
 	ctx := context.Background()
 	ss := &fakeServerStream{ctx: ctx}

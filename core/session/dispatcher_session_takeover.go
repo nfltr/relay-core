@@ -13,7 +13,7 @@ import (
 )
 
 // errSessionReplaced is the cancel cause of a tunnel session that a newer
-// connection with the same agent ID and the same API key took over.
+// connection with the same agent ID and the same credential took over.
 var errSessionReplaced = errors.New("session replaced by a newer connection of this agent")
 
 // sessionTakeoverWait bounds how long a reconnecting session waits for the
@@ -26,15 +26,15 @@ var sessionTakeoverWait = 10 * time.Second
 // that ends it with errSessionReplaced, and a channel closed once its
 // teardown is complete.
 type sessionTakeover struct {
-	keyHash string
-	replace func()
-	ended   chan struct{}
+	credHash string
+	replace  func()
+	ended    chan struct{}
 }
 
 // takeOverSession ends this pod's live session of agentID, if any, and
 // waits for its teardown, so a reconnect (after a network drop the relay has
 // not noticed yet) replaces its own previous session instead of being
-// refused. Only the same agent ID on the same API key (the same principal)
+// refused. Only the same agent ID on the same credential (the same principal)
 // may take over; anything else is refused. The replaced client receives
 // errReplacedSessionStatus, which clients treat as final, so two processes that
 // share a name cannot evict each other forever. Its TCP stream stays: the
@@ -45,13 +45,13 @@ type sessionTakeover struct {
 // connection reached another replica, this one's renewal is superseded and
 // the replaced stream leaves routing but stays for its open sessions
 // (TCPDispatcher.yield, TestTCPTakeoverOnAnotherReplicaLetsOpenSessionsFinish).
-func (d *Dispatcher) takeOverSession(ctx context.Context, agentID, apiKeyHash string) error {
+func (d *Dispatcher) takeOverSession(ctx context.Context, agentID, credHash string) error {
 	old, live := d.Agents.Load(agentID)
 	if !live {
 		return nil
 	}
 	t := old.takeover
-	if t == nil || t.keyHash != apiKeyHash {
+	if t == nil || t.credHash != credHash {
 		d.Logger.Info("agent already connected to this pod with another credential", "AgentID", agentID)
 		return status.Errorf(codes.AlreadyExists, "agent %s is already connected with another credential; stop that session or pick another --name", agentID)
 	}

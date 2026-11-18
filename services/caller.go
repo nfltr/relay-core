@@ -18,7 +18,7 @@ package services
 const CallerHeader = "X-Nfltr-Caller"
 
 // CallerPrincipalHeader and CallerMethodHeader carry, beside the owner, the
-// principal the relay authenticated and how (its X-Auth-Method: apikey,
+// principal the relay authenticated and how (its X-Auth-Method,
 // session, ...), for a service that records who sent what (the mailbox
 // service: an envelope's sender). Stripped from clients and set by the relay
 // as CallerHeader is.

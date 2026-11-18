@@ -85,7 +85,7 @@ func TestZeroConfigServe(t *testing.T) {
 		t.Fatalf("token file holds no generated token")
 	}
 	key := f[2]
-	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "web", APIKey: key, Retries: 1,
+	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "web", Token: key, Retries: 1,
 		Routes: []agent.Route{{Backend: "http://127.0.0.1:1"}}, Logger: slog.New(slog.DiscardHandler)})
 	if err := a.Connect(t.Context()); err != nil {
 		t.Fatalf("an agent with the generated token: %v", err)

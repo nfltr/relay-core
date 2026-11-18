@@ -88,7 +88,7 @@ func WithNF1Anon(r *nf1anon.Registry) GRPCServerOption {
 }
 
 // NewGRPCServer creates a gRPC server with logging, request-ID, validation,
-// optional API key auth, and keepalive configuration.
+// optional credential auth, and keepalive configuration.
 func NewGRPCServer(logger *slog.Logger, opts ...GRPCServerOption) *grpc.Server {
 	var cfg grpcServerConfig
 	for _, o := range opts {

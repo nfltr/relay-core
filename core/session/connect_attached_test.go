@@ -86,7 +86,7 @@ func TestConnectNamingThisRelayClaimsNothing(t *testing.T) {
 	for _, k := range []kind{
 		{name: "ConnectHTTP", live: httpAgent, connect: func(ctx context.Context, c pb.DispatcherClient) (grpc.ClientStream, error) { return c.ConnectHTTP(ctx) }},
 		{name: "AgentTunnel", live: func(t *testing.T, d *Dispatcher, addr string) (string, func() bool) {
-			ag, err := rpcclient.Dial(t.Context(), addr, rpcclient.WithAgentID(attachedAgent), rpcclient.WithAPIKey("k"))
+			ag, err := rpcclient.Dial(t.Context(), addr, rpcclient.WithAgentID(attachedAgent), rpcclient.WithToken("k"))
 			if err != nil {
 				t.Fatal(err)
 			}

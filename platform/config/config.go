@@ -211,8 +211,8 @@ func SetDefaultFlags() {
 	_ = flag.String("tls.acme_dns01_cloudflare_token_file", "", "file holding a Cloudflare API token with Zone DNS Edit on the zone of each \"*.<domain>\" in tls.web_domains, for the ACME DNS-01 challenge")
 	_ = flag.String("http.redirect_port", "", "when set with tls.web_domains, a plain HTTP port (e.g. 80) that answers ACME HTTP-01 challenges and redirects everything else to https")
 
-	// ── API Key Authentication ──────────────────────────────────────────
-	_ = flag.String("security.apikey.file", "/etc/rpcserver/api-keys", "the key file: the machines of a relay without a database, one \"<machine id> <name> spki:<hex> [account=<id>]\" per line (keyfile)")
+	// ── Machines file (a relay without a database) ─────────────────────
+	_ = flag.String("security.machines.file", "/etc/rpcserver/machines", "the machines file: the machines of a relay without a database, one \"<machine id> <name> spki:<hex> [account=<id>]\" per line (keyfile)")
 
 	// ── mTLS identity provider (client certificates; off without a CA file) ──
 	_ = flag.String("security.mtls.ca_file", "", "PEM bundle of the CAs whose client certificates authenticate (one or more; reloaded on change); turns the mTLS identity provider on (needs tls.enable)")
@@ -229,14 +229,13 @@ func SetDefaultFlags() {
 	_ = flag.String("security.oidc.scopes_claim", "scope", "claim holding a token's scopes (space-separated or a list; admin is never taken from an IdP)")
 	_ = flag.Duration("security.oidc.clock_skew", time.Minute, "clock skew allowed on exp, nbf and iat (at most 5m); a connection ends at exp plus this")
 
-	// ── SQL Key Store (database-backed API keys and machines) ─────────────
-	_ = flag.Bool("security.sql.enable", false, "enable SQL-backed API key and machine store")
+	// ── SQL store (database-backed machines) ─────────────────────────────
+	_ = flag.Bool("security.sql.enable", false, "enable the SQL-backed machine store")
 	_ = flag.String("security.sql.dsn", "/var/lib/rpcserver/keys.db", "database path (SQLite) or connection string (Postgres)")
 	_ = flag.String("security.sql.dialect", "sqlite", "SQL dialect: sqlite or postgres")
 	_ = flag.Bool("security.sql.migrate_on_startup", true, "run SQL schema migrations when the server starts")
 	_ = flag.Int("security.sql.max_conns", 16, "Postgres connections per pool: the open and idle cap of each pool the relay opens (the key store, and the accounts read store of accounts.read_dsn: at most twice this per replica), so busy connections are reused instead of reopened (SQLite keeps its own pools)")
 	_ = flag.Duration("security.sql.conn_max_idle_time", 5*time.Minute, "close a pooled Postgres connection idle this long (0 = never)")
-	_ = flag.Bool("security.sql.import_file_keys", true, "import existing file-based API keys into the SQL store on startup")
 
 	// ── IP Allowlist ────────────────────────────────────────────────────
 	_ = flag.StringSlice("security.ip_allowlist", nil, "CIDR ranges allowed to connect (empty = allow all)")
@@ -245,7 +244,7 @@ func SetDefaultFlags() {
 	_ = flag.Bool("security.audit.enable", false, "enable structured audit logging for security events")
 
 	// ── Browser Sessions ────────────────────────────────────────────────
-	_ = flag.Bool("security.session.enable", false, "enable cookie-based browser sessions (requires API key auth)")
+	_ = flag.Bool("security.session.enable", false, "enable cookie-based browser sessions (requires the SQL store)")
 	_ = flag.String("security.session.secret_env", "RPC_SESSION_SECRET", "environment variable containing the HMAC-SHA256 session signing secret")
 	_ = flag.Duration("security.session.ttl", 24*time.Hour, "session cookie TTL")
 	_ = flag.Bool("security.session.secure", true, "set Secure flag on session cookie (false for HTTP-only dev environments)")
@@ -294,9 +293,9 @@ func SetDefaultFlags() {
 	_ = flag.String("http.share_store_file", "", "SQLite file holding issued share codes (a relay that keeps them: nfltr-relay), mailboxes and webhooks when there is no SQL key store, so they survive a restart; empty: in memory")
 	_ = flag.Duration("http.share_reservation_ttl", 2*time.Hour, "how long to reserve a used share code for the same agent before it may be reassigned; 0 disables reservation")
 	// Gap 7: direct agent subdomain routing — <agentID>.share_domain reaches the
-	// live agent for its owner (API key); anyone else needs a share code.
-	_ = flag.Bool("http.direct_agent_subdomains", false, "route <agentID>.<share_domain> to the matching agent for its owner (API key); visitors use share codes")
-	_ = flag.String("mailbox.service", "", "the relay: mailbox service agents (cmd/nfltr-mailbox) the mailbox, webhook and web push routes go to, <owner>/<agent>[,<owner>/<agent>...] (each declares the tcp service mailbox; a key served from the API key file, not imported into the SQL store, is owner keys:<id>); empty: this process serves them when it links the service (nfltr-relay), else it refuses to start (cmd/server); env MAILBOX_SERVICE")
+	// live agent for its owner (its machine); anyone else needs a share code.
+	_ = flag.Bool("http.direct_agent_subdomains", false, "route <agentID>.<share_domain> to the matching agent for its owner (its machine); visitors use share codes")
+	_ = flag.String("mailbox.service", "", "the relay: mailbox service agents (cmd/nfltr-mailbox) the mailbox, webhook and web push routes go to, <owner>/<agent>[,<owner>/<agent>...] (each declares the tcp service mailbox); empty: this process serves them when it links the service (nfltr-relay), else it refuses to start (cmd/server); env MAILBOX_SERVICE")
 	_ = flag.String("accounts.service", "", "the relay: accounts service agents (cmd/nfltr-accounts) the dashboard host (dashboard.<http.share_domain>) goes to, <owner>/<agent>[,...] (each declares the tcp service accounts); needs accounts.read_dsn; empty: this process serves sign-in and the dashboard when it links the service; env ACCOUNTS_SERVICE")
 	_ = flag.String("accounts.read_dsn", "", "the accounts service's database, opened read-only (key, session and owner lookups; the revocation journal), dialect security.sql.dialect; env ACCOUNTS_READ_DSN")
 	_ = flag.StringSlice("http.site_hosts", nil, "hosts under http.share_domain served by one account's agent: <label>=<owner>/<agent>[/<service>], any DNS label (a product name such as orch, or another); a mapped label is reserved on this relay like the product names: no agent, share or direct subdomain takes it. e.g. orch=ops@example.com/site-key.site/orch; env HTTP_SITE_HOSTS")

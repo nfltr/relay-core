@@ -52,7 +52,7 @@ func main() {
 			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
 		}
 	}()
-	a := agent.New(agent.Config{ServerAddr: ls.GRPC.Addr().String(), AgentID: "echo", APIKey: key,
+	a := agent.New(agent.Config{ServerAddr: ls.GRPC.Addr().String(), AgentID: "echo", Token: key,
 		TCPTunnel: true, TCPForwardAddr: echo.Addr().String(), Logger: slog.New(slog.DiscardHandler)})
 	if err := a.Connect(ctx); err != nil {
 		log.Fatal(err)

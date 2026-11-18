@@ -36,7 +36,7 @@ func echoThrough(tb testing.TB, r *relaycoretest.Relay, msg string) string {
 			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
 		}
 	}()
-	a := agent.New(agent.Config{ServerAddr: r.GRPC, AgentID: "echo", APIKey: r.Key, TCPTunnel: true,
+	a := agent.New(agent.Config{ServerAddr: r.GRPC, AgentID: "echo", Token: r.Key, TCPTunnel: true,
 		TCPForwardAddr: echo.Addr().String(), Logger: slog.New(slog.DiscardHandler)})
 	if err := a.Connect(tb.Context()); err != nil {
 		tb.Fatalf("agent: %v", err)

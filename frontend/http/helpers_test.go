@@ -351,7 +351,7 @@ func (m *mockCache) SInter(_ context.Context, _ ...string) ([]string, error) {
 }
 
 // identityStream asserts agentID as the stream's authenticated principal,
-// as the API-key interceptor does in production.
+// as the credential interceptor does in production.
 type identityStream struct {
 	grpc.ServerStream
 	ctx context.Context

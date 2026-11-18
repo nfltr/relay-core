@@ -102,7 +102,7 @@ func TestCoreProcessTLSAndE2EE(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if err != nil || answer != "web saw /sealed key=" {
+	if err != nil || answer != "web saw /sealed auth=" {
 		t.Fatalf("end-to-end encrypted session: %q, %v", answer, err)
 	}
 

@@ -41,7 +41,7 @@ func authFor(keys tokens) *identity.Authenticator {
 	return identity.NewAuthenticator("accounts", provs...)
 }
 
-func validateAPIKeyFromMetadata(ctx context.Context, keys tokens) (context.Context, error) {
+func validateTokenFromMetadata(ctx context.Context, keys tokens) (context.Context, error) {
 	p, err := MetadataPrincipal(ctx, authFor(keys))
 	if err != nil || p.Subject == "" {
 		return ctx, err
@@ -49,10 +49,10 @@ func validateAPIKeyFromMetadata(ctx context.Context, keys tokens) (context.Conte
 	return identity.WithPrincipal(ctx, p), nil
 }
 
-func APIKeyUnaryInterceptor(keys tokens) grpc.UnaryServerInterceptor {
+func TokenUnaryInterceptor(keys tokens) grpc.UnaryServerInterceptor {
 	return AuthUnaryInterceptor(authFor(keys))
 }
 
-func APIKeyStreamInterceptor(keys tokens) grpc.StreamServerInterceptor {
+func TokenStreamInterceptor(keys tokens) grpc.StreamServerInterceptor {
 	return AuthStreamInterceptor(authFor(keys))
 }

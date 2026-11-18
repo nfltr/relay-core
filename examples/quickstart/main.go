@@ -51,7 +51,7 @@ func main() {
 			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
 		}
 	}()
-	a := agent.New(agent.Config{ServerAddr: *agents, AgentID: "web", APIKey: key,
+	a := agent.New(agent.Config{ServerAddr: *agents, AgentID: "web", Token: key,
 		TCPTunnel: true, TCPForwardAddr: echo.Addr().String(), Logger: slog.New(slog.DiscardHandler)})
 	if err := a.Connect(ctx); err != nil {
 		log.Fatal(err)

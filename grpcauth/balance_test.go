@@ -53,7 +53,7 @@ func wantBalanceStatus(t *testing.T, where string, err error) {
 func TestBalanceExhaustedTypedOnGRPC(t *testing.T) {
 	store := tokens{}
 	store["k"] = testMachine
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-api-key", "k"))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-nfltr-token", "k"))
 
 	refuse := identity.NewAuthenticator("accounts", refusing{store, identity.ErrBalanceExhausted})
 	_, err := MetadataPrincipal(ctx, refuse)
@@ -74,7 +74,7 @@ func TestBalanceExhaustedTypedOnGRPC(t *testing.T) {
 // never as an invalid key and never with a principal.
 func TestUnenrolledKeyRefusedOnGRPC(t *testing.T) {
 	auth := identity.NewAuthenticator("accounts", noMachine{})
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-api-key", "k", "x-agent-id", "svc"))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-nfltr-token", "k", "x-agent-id", "svc"))
 	p, err := MetadataPrincipal(ctx, auth)
 	s, _ := status.FromError(err)
 	if s.Code() != codes.Unauthenticated || !strings.Contains(s.Message(), "machine_not_enrolled") || p.Provider != "" || !hasReason(s, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED) {

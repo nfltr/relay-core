@@ -38,7 +38,7 @@ func newSDK(t *testing.T, grpc func(*relaycoretest.Relay) string) *sdk {
 	if grpc != nil {
 		agentRelay = grpc(r)
 	}
-	cfg := nfnet.Config{Relay: r.Proxy, AgentRelay: agentRelay, Agent: "chat", APIKey: r.Key, Plaintext: true}
+	cfg := nfnet.Config{Relay: r.Proxy, AgentRelay: agentRelay, Agent: "chat", Token: r.Key, Plaintext: true}
 	d, err := nfnet.NewDialer(cfg)
 	if err != nil {
 		t.Fatal(err)

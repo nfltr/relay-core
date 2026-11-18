@@ -89,7 +89,7 @@ func NewStore() *Store {
 
 // Load reads a key file: one "<machine id> <name> spki:<hex>
 // [account=<machine id>]" per non-empty, non-comment line; a name is
-// unique in its account. A line of another form (a sha256: API key line:
+// unique in its account. A line of another form (a sha256: line of the API keys before the cut:
 // keys are gone, docs/decisions/api-key-cut-2026-11-15.md) refuses the
 // file: enrol its machines with a code (nfltr-relay machines code). A file
 // without lines is an empty store.

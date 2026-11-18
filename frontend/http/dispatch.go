@@ -84,7 +84,7 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 			metrics.IncrEndpointRegistry404()
 			msg := "agent not found"
 			if podID != "" {
-				msg = fmt.Sprintf("agent %q is not registered with this relay (handled by pod %q — check the AgentID, generate an API key, and start nfltr mcp)", agentID, podID)
+				msg = fmt.Sprintf("agent %q is not registered with this relay (handled by pod %q — check the AgentID and that its machine is enrolled)", agentID, podID)
 			}
 			http.Error(w, msg, http.StatusNotFound)
 		}

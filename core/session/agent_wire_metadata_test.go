@@ -46,7 +46,7 @@ func TestAgentTunnelAgentWireMetadata(t *testing.T) {
 	defer cancel()
 	const id = "labels-a2a"
 	addr := serveDispatcherAs(t, d, id)
-	ag, err := rpcclient.Dial(context.Background(), addr, rpcclient.WithAgentID(id), rpcclient.WithAPIKey("k"), rpcclient.WithLabels(wireLabels))
+	ag, err := rpcclient.Dial(context.Background(), addr, rpcclient.WithAgentID(id), rpcclient.WithToken("k"), rpcclient.WithLabels(wireLabels))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestAgentTunnelAgentWireMetadata(t *testing.T) {
 }
 
 // identityStream asserts agentID as the stream's authenticated principal,
-// as the API-key interceptor does in production.
+// as the credential interceptor does in production.
 type identityStream struct {
 	grpc.ServerStream
 	ctx context.Context

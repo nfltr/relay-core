@@ -12,7 +12,7 @@ import (
 )
 
 // serverAssertedMetadataKeys are set by this package's interceptors from a
-// verified credential (API key, mTLS or machine certificate) and trusted
+// verified credential (a token or a machine certificate) and trusted
 // downstream by GetAgentIDFromContext and OPA. No interceptor sets the
 // x-fleet-* keys since fleet tokens were deleted (relay-server v0.49.21);
 // they stay here so a client-sent copy is still dropped. A client-sent copy is never

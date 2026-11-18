@@ -18,8 +18,6 @@ var SkipHeaders = map[string]util.SkipHeaderIf{
 	textproto.CanonicalMIMEHeaderKey(session.AgentIDKey):           util.SkipHeaderAlways,
 	textproto.CanonicalMIMEHeaderKey(session.TransactionIDHeader):  util.SkipHeaderAlways,
 	textproto.CanonicalMIMEHeaderKey(session.RequestAtProxyHeader): util.SkipHeaderAlways,
-	// The caller's relay credential is for the relay, never for the agent.
-	textproto.CanonicalMIMEHeaderKey("X-API-Key"): util.SkipHeaderAlways,
 	// Only the relay sends flow-control frames; a client cannot forge one.
 	textproto.CanonicalMIMEHeaderKey(chunking.HeaderCancel):     util.SkipHeaderAlways,
 	textproto.CanonicalMIMEHeaderKey(chunking.HeaderAck):        util.SkipHeaderAlways,

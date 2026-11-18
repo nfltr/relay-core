@@ -28,5 +28,5 @@ func RelayStatus(code codes.Code, reason relayv1.ErrorReason, msg string) *statu
 // auth rather than a reset.
 func errNoPrincipal() error {
 	return RelayStatus(codes.PermissionDenied, relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED,
-		"no credential: this relay serves no agent without an account (present an API key or a machine certificate)").Err()
+		"no credential: this relay serves no agent without an account (present a machine certificate or a token)").Err()
 }

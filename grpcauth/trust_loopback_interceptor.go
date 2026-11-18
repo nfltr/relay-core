@@ -60,7 +60,7 @@ func grpcPeerIsLoopback(ctx context.Context) bool {
 func withLoopbackAgentID(ctx context.Context) context.Context {
 	md, _ := metadata.FromIncomingContext(ctx)
 	// On loopback we trust the peer's self-declared identity (x-agent-id, the
-	// same header the real API-key interceptor honors) so each worker keeps its
+	// same header the credential interceptor honors) so each worker keeps its
 	// own distinct agent id; fall back to the fixed local principal only when no
 	// id is declared (e.g. the operator/planner client).
 	agentID := grpcLoopbackTrustPrincipal

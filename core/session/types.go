@@ -56,7 +56,7 @@ const (
 
 	// SharePathPrefix is the URL prefix for public share-token access.
 	// Requests to /share/<token>/... are routed to the agent encoded in
-	// the token without requiring the caller to have an API key or session.
+	// the token without requiring the caller to have a credential or session.
 	SharePathPrefix = "/share/"
 )
 

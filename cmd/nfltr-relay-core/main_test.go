@@ -92,7 +92,7 @@ func TestCoreServesAgents(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	client := pb.NewDispatcherClient(conn)
 	keyed := func(key string) context.Context {
-		return metadata.NewOutgoingContext(t.Context(), metadata.Pairs("x-api-key", key, "x-agent-id", "web"))
+		return metadata.NewOutgoingContext(t.Context(), metadata.Pairs("x-nfltr-token", key, "x-agent-id", "web"))
 	}
 
 	agent, err := client.ConnectTCP(keyed(testSecret))

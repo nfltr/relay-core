@@ -122,10 +122,10 @@ func serveAgent(t *testing.T, grpcAddr string, relayTLS *tls.Config, opts ...age
 		}
 	}()
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "web saw "+r.URL.Path+" key="+r.Header.Get("X-API-Key"))
+		_, _ = io.WriteString(w, "web saw "+r.URL.Path+" auth="+r.Header.Get("Authorization"))
 	}))
 	t.Cleanup(backend.Close)
-	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "web", APIKey: testSecret, Retries: 1,
+	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "web", Token: testSecret, Retries: 1,
 		Routes: []agent.Route{{Backend: backend.URL}}, TCPTunnel: true, TLSConfig: relayTLS, TCPForwardAddr: echo.Addr().String(),
 		Logger: slog.New(slog.DiscardHandler)}, opts...)
 	if err := a.Connect(t.Context()); err != nil {
@@ -221,17 +221,17 @@ func TestCoreProcessCarriesSessionsAndDrains(t *testing.T) {
 		_ = ghost.Close()
 	}
 
-	// A key's own HTTP request to its agent (HTTP ingress through
-	// frontend.CoreHost); the relay's key never reaches the agent.
+	// A token's own HTTP request to its agent (HTTP ingress through
+	// frontend.CoreHost); the relay's token never reaches the agent.
 	req, _ := http.NewRequest(http.MethodGet, "http://"+p.proxy+"/hello", nil)
-	req.Header.Set("X-API-Key", key)
+	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("X-Agent-Id", "web") // a service of the key's own machine
 	if res, err := http.DefaultClient.Do(req); err != nil {
 		t.Fatal(err)
 	} else {
 		body, _ := io.ReadAll(res.Body)
 		_ = res.Body.Close()
-		if res.StatusCode != http.StatusOK || string(body) != "web saw /hello key=" {
+		if res.StatusCode != http.StatusOK || string(body) != "web saw /hello auth=" {
 			t.Fatalf("own request: %d %q", res.StatusCode, body)
 		}
 	}
@@ -247,7 +247,7 @@ func TestCoreProcessCarriesSessionsAndDrains(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer nc.Close() //nolint:errcheck
-	_, _ = nc.Write([]byte("GET /connect/" + testAgent + "/22 HTTP/1.1\r\nHost: relay\r\nX-API-Key: " + key + "\r\n" + agentwire.GenerationKey + ": " + strconv.Itoa(agentwire.Generation) + "\r\n\r\n"))
+	_, _ = nc.Write([]byte("GET /connect/" + testAgent + "/22 HTTP/1.1\r\nHost: relay\r\nAuthorization: Bearer " + key + "\r\n" + agentwire.GenerationKey + ": " + strconv.Itoa(agentwire.Generation) + "\r\n\r\n"))
 	br := bufio.NewReader(nc)
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, " 200 ") {

@@ -3,13 +3,13 @@
 
 // Package security — the gRPC interceptors that authenticate a credential.
 //
-// A call or stream's credential is "x-api-key", else "authorization:
+// A call or stream's credential is "x-nfltr-token" (a token), else "authorization:
 // Bearer <token>", else the TLS client certificate of its connection
 // (TLSStateCredentials); the relay core's provider chain
 // (identity.Authenticator: the key file, the accounts store, the
 // configured providers such as mTLS and OIDC) authenticates it, and its
 // principal goes into the context (identity.WithPrincipal), typed, never
-// as strings in metadata. An x-api-key no provider accepts is refused
+// as strings in metadata. An x-nfltr-token no provider accepts is refused
 // (Unauthenticated); a bearer token no provider knows is as if absent (a
 // gateway call may carry another service's bearer: the certificate, if
 // any, is then the credential), one a provider refuses is refused. A
@@ -82,7 +82,7 @@ func MetadataPrincipal(ctx context.Context, auth *identity.Authenticator) (ident
 	if !ok || auth == nil {
 		return identity.Principal{}, nil
 	}
-	c := identity.Credential{Token: first(md, "x-api-key"), Name: first(md, "x-agent-id")}
+	c := identity.Credential{Token: first(md, "x-nfltr-token"), Name: first(md, "x-agent-id")}
 	if labels := first(md, agentwire.LabelsKey); labels != "" {
 		c.Labels = agentwire.ParseLabels(labels)
 	}

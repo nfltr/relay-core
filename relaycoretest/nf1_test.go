@@ -129,7 +129,7 @@ func connectNF1Agent(t *testing.T, grpcAddr, keyFile, agentID string, l *nf1.Lis
 	if reg != nil {
 		md = append(md, agentservices.RegHeader, agentservices.FormatReg(l.Address().RID, reg))
 	}
-	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: agentID, APIKeyFile: keyFile, Logger: slog.New(slog.DiscardHandler)},
+	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: agentID, TokenFile: keyFile, Logger: slog.New(slog.DiscardHandler)},
 		agent.WithMetadata(md...),
 		agent.WithConnected(func(agent.Connection) (*agent.Tunnel, error) { return &agent.Tunnel{Services: table}, nil }))
 	if err := a.Connect(t.Context()); err != nil {

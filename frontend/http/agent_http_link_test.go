@@ -82,14 +82,14 @@ func TestAgentHTTPLinkServesRequests(t *testing.T) {
 	}
 	req, _ := http.NewRequest(http.MethodPost, url+"/echo", strings.NewReader("hello"))
 	req.Header.Set("Cookie", "rpc_session=secret; app=1")
-	req.Header.Set("X-API-Key", "relay-key")
+	req.Header.Set("X-API-Key", "app-key") // the app's own: no relay credential
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != 200 || string(body) != "5" || resp.Header.Get("X-Cookie") != "app=1" || resp.Header.Get("X-Api-Key-Seen") != "" {
+	if resp.StatusCode != 200 || string(body) != "5" || resp.Header.Get("X-Cookie") != "app=1" || resp.Header.Get("X-Api-Key-Seen") != "app-key" {
 		t.Fatalf("%d %q cookie %q key %q", resp.StatusCode, body, resp.Header.Get("X-Cookie"), resp.Header.Get("X-Api-Key-Seen"))
 	}
 	if resp.Header.Get(session.MetadataHeader) == "" || resp.Header.Get("Location") != "/moved" {

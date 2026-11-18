@@ -4,7 +4,7 @@
 // Package nondumpable makes the importing process non-dumpable on Linux
 // from process start (package init, before any main code runs), so no other
 // process of the same uid without CAP_SYS_PTRACE can read the process's
-// /proc/<pid>/environ (which keeps an exec-time NFLTR_API_KEY after
+// /proc/<pid>/environ (which keeps an exec-time secret after
 // os.Unsetenv) or its memory. execve resets the flag, so children are
 // unaffected. Elsewhere importing it does nothing.
 //

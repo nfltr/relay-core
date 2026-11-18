@@ -21,7 +21,7 @@ import (
 // enrich or strip it (a copy the stream keeps) or read many keys.
 func TestReadsIncomingMetadataByKey(t *testing.T) {
 	wholeMap := []string{
-		"grpcauth/apikey_interceptor.go",            // enriches the metadata with the key's identity
+		"grpcauth/credential_interceptor.go",        // enriches the metadata with the credential's identity
 		"grpcauth/asserted_identity_interceptor.go", // strips client-asserted identity
 		"grpcauth/trust_loopback_interceptor.go",    // enriches with the loopback identity
 		"internal/platform/tcprig/tcprig.go",        // the test rig strips headers an older relay or agent lacks

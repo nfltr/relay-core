@@ -12,8 +12,9 @@ import (
 	"github.com/nfltr/relay/proto/wire/chunking"
 )
 
-// A shared or browsed agent must not receive the visitor's relay session or
-// X-API-Key; its own cookies still pass through, and so does Authorization:
+// A shared or browsed agent must not receive the visitor's relay session;
+// its own cookies and its own X-API-Key (no relay credential since the key
+// cut) still pass through, and so does Authorization:
 // the relay removes it before here when it authenticated the request with
 // it (withoutRelayAuthorization, frontend.SharePolicy.Enforce),
 // and leaves a header meant for the service alone.
@@ -32,8 +33,8 @@ func TestPrepareAgentRequestDropsRelayCredentials(t *testing.T) {
 	if c := got["Cookie"].GetHeaderValues(); len(c) != 1 || c[0] != "app=1" {
 		t.Fatalf("Cookie forwarded = %v, want only the agent's own cookie", c)
 	}
-	if v, ok := got["X-Api-Key"]; ok {
-		t.Fatalf("X-Api-Key forwarded to agent: %v", v.GetHeaderValues())
+	if v := got["X-Api-Key"].GetHeaderValues(); len(v) != 1 || v[0] != "secret-key" {
+		t.Fatalf("X-Api-Key forwarded = %v, want the app's own", v)
 	}
 	if a := got["Authorization"].GetHeaderValues(); len(a) != 1 || a[0] != "Bearer the-apps-own" {
 		t.Fatalf("Authorization forwarded = %v, want the app's own token", a)

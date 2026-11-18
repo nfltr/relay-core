@@ -36,7 +36,7 @@ func TestRelayTunnelIsNotClientCallable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close() //nolint:errcheck
-	ctx := metadata.AppendToOutgoingContext(t.Context(), "x-api-key", "rpc_key")
+	ctx := metadata.AppendToOutgoingContext(t.Context(), "x-nfltr-token", "rpc_key")
 	st, err := conn.NewStream(ctx, &grpc.StreamDesc{ClientStreams: true, ServerStreams: true}, "/rpcserver.Dispatcher/RelayTunnel")
 	if err == nil {
 		_ = st.SendMsg(&pb.TunnelFrame{Routing: &pb.RoutingInfo{AgentId: "bob.laptop"}})
