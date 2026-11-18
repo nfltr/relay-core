@@ -10,9 +10,11 @@
 // configured providers such as mTLS and OIDC) authenticates it, and its
 // principal goes into the context (identity.WithPrincipal), typed, never
 // as strings in metadata. An x-api-key no provider accepts is refused
-// (Unauthenticated); a bearer token or a certificate no provider knows is
-// as if absent (a gateway call may carry another service's bearer), one a
-// provider refuses is refused. A call without a credential passes on
+// (Unauthenticated); a bearer token no provider knows is as if absent (a
+// gateway call may carry another service's bearer: the certificate, if
+// any, is then the credential), one a provider refuses is refused. A
+// client certificate no provider knows (a revoked machine's, another CA's)
+// is refused, never taken as no credential. A call without a credential passes on
 // (trust-loopback); the handlers refuse it if nothing authenticated it. A
 // stream is held under its credential for as long as it runs: revoking the
 // credential, or its expiry, ends it.
@@ -81,20 +83,26 @@ func MetadataPrincipal(ctx context.Context, auth *identity.Authenticator) (ident
 		return identity.Principal{}, nil
 	}
 	c := identity.Credential{Token: first(md, "x-api-key"), Name: first(md, "x-agent-id")}
-	optional := c.Token == "" // a bearer token or a certificate
-	if optional {
-		if tok, ok := strings.CutPrefix(first(md, "authorization"), "Bearer "); ok {
-			c.Token = tok
-		} else if c.PeerCerts = PeerCertificates(ctx); c.PeerCerts == nil {
-			return identity.Principal{}, nil
-		}
-	}
 	if labels := first(md, agentwire.LabelsKey); labels != "" {
 		c.Labels = agentwire.ParseLabels(labels)
 	}
-	p, err := auth.Authenticate(ctx, c)
-	if optional && errors.Is(err, identity.ErrUnknownCredential) {
-		return identity.Principal{}, nil
+	var p identity.Principal
+	var err error
+	if c.Token != "" {
+		p, err = auth.Authenticate(ctx, c)
+	} else {
+		err = identity.ErrUnknownCredential
+		if tok, ok := strings.CutPrefix(first(md, "authorization"), "Bearer "); ok {
+			c.Token = tok
+			p, err = auth.Authenticate(ctx, c)
+			c.Token = ""
+		}
+		if errors.Is(err, identity.ErrUnknownCredential) { // no bearer, or not one of ours
+			if c.PeerCerts = PeerCertificates(ctx); c.PeerCerts == nil {
+				return identity.Principal{}, nil
+			}
+			p, err = auth.Authenticate(ctx, c)
+		}
 	}
 	if err != nil {
 		slog.Warn("security: credential refused on gRPC", "error", err)
@@ -110,7 +118,7 @@ func MetadataPrincipal(ctx context.Context, auth *identity.Authenticator) (ident
 		if errors.Is(err, identity.ErrMachineNotEnrolled) {
 			return p, relaystatus.New(codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED, err.Error()).Err() // says how to enrol
 		}
-		return p, status.Error(codes.Unauthenticated, "invalid API key")
+		return p, status.Error(codes.Unauthenticated, "invalid credential")
 	}
 	return p, nil
 }

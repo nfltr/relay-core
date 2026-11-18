@@ -362,18 +362,26 @@ func RequestKey(r *http.Request) (key, header string) {
 // ErrNoCredential: the request presents no key and no client certificate.
 var ErrNoCredential = errors.New("no credential")
 
-// RequestPrincipal authenticates the key r presents (RequestKey), else
-// its TLS client certificate, with a; err is ErrNoCredential when it
-// presents none, else the provider chain's refusal (identity.Authenticate:
-// e.g. identity.ErrBalanceExhausted, which a caller answers typed).
+// RequestPrincipal authenticates the token r presents (RequestKey), else
+// (none, or one no provider knows: a machine may send its own app's
+// bearer) its TLS client certificate, with a; err is ErrNoCredential when
+// it presents neither, else the provider chain's refusal
+// (identity.Authenticate: e.g. identity.ErrBalanceExhausted, which a
+// caller answers typed).
 func RequestPrincipal(a *identity.Authenticator, r *http.Request, c identity.Credential) (p identity.Principal, header string, err error) {
-	c.Token, header = RequestKey(r)
-	if c.Token == "" {
-		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+	err = identity.ErrUnknownCredential
+	if c.Token, header = RequestKey(r); c.Token != "" {
+		if p, err = a.Authenticate(r.Context(), c); !errors.Is(err, identity.ErrUnknownCredential) {
+			return p, header, err
+		}
+	}
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		if header == "" {
 			return identity.Principal{}, "", ErrNoCredential
 		}
-		c.PeerCerts = r.TLS.PeerCertificates
+		return p, header, err
 	}
+	c.Token, c.PeerCerts = "", r.TLS.PeerCertificates
 	p, err = a.Authenticate(r.Context(), c)
-	return p, header, err
+	return p, "", err
 }
