@@ -10,6 +10,28 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Removed (the API key cut, lane L4S; nfltr/nfltr docs/decisions/api-key-cut-2026-11-15.md)
+
+- The key file holds no API keys: a line is `<machine id> <name>
+  spki:<hex> [account=<id>]`, and a `sha256:` key line refuses the file
+  (enrol the machine with a code: `KeyManager.MintCode`, `Enrol`).
+  `keyfile.Provider` authenticates certificates only (with `CAs`); a token
+  is `identity.ErrUnknownCredential`. Gone: `KeyManager.Generate`,
+  `GenerateForOwner`, `Join`, `ListForOwner`, `IsOwnedBy`,
+  `KeyGenerateResponse`, `KeyRecord.Owner`, `LoadAPIKeysFromEnv`,
+  `APIKeyStore.Add`, `Validate`, `HasKeyHash`, `Machine.Cert` (every line
+  is a certificate machine's) and `Machine.Line`. Renamed: `APIKeyStore`
+  is `Store`, `NewAPIKeyStore` is `NewStore`, `LoadAPIKeys` is `Load` (a
+  file without lines is an empty store, not an error).
+- `compose.Serve` has no key-file fallback: without a provider it returns
+  `ErrNoProviders` (was `ErrNoKeys`); the settings `security.apikey.enable`
+  and `security.apikey.env` are gone (`security.apikey.file` names the key
+  file). `spec/KeyAccount.tla` lost `Generate` and `Join`.
+- `nfltr-relay-core` (the guard binary) authenticates one token of its own
+  provider (`RELAY_CORE_TOKEN`, `RELAY_CORE_TOKEN_FILE`, zero-config
+  `nfltr-relay-core.token`), as `examples/custom-auth` does; the examples
+  and `relaycoretest` use such a provider too.
+
 ### Fixed
 
 - `connlimit.Wrap` keys a source by `SourceKey` (an IPv4 address, an IPv6

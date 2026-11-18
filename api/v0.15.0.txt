@@ -1,0 +1,23 @@
+Incompatible changes:
+- ./compose.ErrNoKeys: removed
+- ./keyfile.(*APIKeyStore).Add: removed
+- ./keyfile.(*APIKeyStore).HasKeyHash: removed
+- ./keyfile.(*APIKeyStore).Validate: removed
+- ./keyfile.(*KeyManager).Generate: removed
+- ./keyfile.(*KeyManager).GenerateForOwner: removed
+- ./keyfile.(*KeyManager).IsOwnedBy: removed
+- ./keyfile.(*KeyManager).Join: removed
+- ./keyfile.(*KeyManager).ListForOwner: removed
+- ./keyfile.APIKeyStore: removed
+- ./keyfile.KeyGenerateResponse: removed
+- ./keyfile.KeyRecord.Owner: removed
+- ./keyfile.LoadAPIKeys: removed
+- ./keyfile.LoadAPIKeysFromEnv: removed
+- ./keyfile.Machine.Cert: removed
+- ./keyfile.Machine.Line: removed
+- ./keyfile.NewAPIKeyStore: removed
+Compatible changes:
+- ./compose.ErrNoProviders: added
+- ./keyfile.Load: added
+- ./keyfile.NewStore: added
+- ./keyfile.Store: added

@@ -118,7 +118,7 @@ func (km *KeyManager) Enrol(code string, pub crypto.PublicKey, now time.Time) (M
 	if err != nil {
 		return Machine{}, ErrEnrolRefused
 	}
-	m := Machine{ID: identity.NewMachineID(), Name: f[0], Cert: true}
+	m := Machine{ID: identity.NewMachineID(), Name: f[0]}
 	if f[1] != "-" {
 		m.Account = identity.MachineID(f[1])
 	}
@@ -164,7 +164,7 @@ func (km *KeyManager) Rebind(id identity.MachineID, pub crypto.PublicKey) error 
 	var old [32]byte
 	found := false
 	for k, x := range km.store.keys {
-		if x.ID == id && x.Cert {
+		if x.ID == id {
 			m, old, found = x, k, true
 		}
 	}
@@ -194,7 +194,7 @@ func (km *KeyManager) Rebind(id identity.MachineID, pub crypto.PublicKey) error 
 // chain verifies against roots at now for client auth, the leaf carries
 // one machine id, and that machine's line binds the leaf's key (spec
 // Authenticates). Anything else is identity.ErrUnknownCredential.
-func (s *APIKeyStore) MachineByCert(roots *x509.CertPool, chain []*x509.Certificate, now time.Time) (Machine, error) {
+func (s *Store) MachineByCert(roots *x509.CertPool, chain []*x509.Certificate, now time.Time) (Machine, error) {
 	leaf := chain[0]
 	inter := x509.NewCertPool()
 	for _, c := range chain[1:] {
@@ -210,7 +210,7 @@ func (s *APIKeyStore) MachineByCert(roots *x509.CertPool, chain []*x509.Certific
 	h := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
 	s.mu.RLock()
 	m, found := s.keys[h]
-	ok = found && m.Cert && m.ID == id
+	ok = found && m.ID == id
 	s.trace(event{Ev: "Auth", M: string(id), K: keyID(h), OK: ok}) // under the read lock: the answer's state
 	s.mu.RUnlock()
 	if !ok {
@@ -241,7 +241,7 @@ func MachineIDOfCert(c *x509.Certificate) (identity.MachineID, bool) {
 
 // addHash adds machine m under hash h (a key's, or a cert machine's SPKI);
 // e is its trace step, in the same critical section.
-func (s *APIKeyStore) addHash(m Machine, h [32]byte, e event) {
+func (s *Store) addHash(m Machine, h [32]byte, e event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keys[h] = m

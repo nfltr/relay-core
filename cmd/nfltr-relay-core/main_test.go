@@ -25,7 +25,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// testKey is NFLTR_API_KEY: machine "alice" (testMachine), its key
+// testKey is RELAY_CORE_TOKEN: machine "alice" (testMachine), its token
 // testSecret.
 const (
 	testMachine = "m-aaaaaaaaaaaaaaaaaaaaaaaaae"
@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 	}
 	args := os.Args
 	os.Args = os.Args[:1] // config parses the process argv; the test flags are testing's
-	_ = os.Setenv("NFLTR_API_KEY", testKey)
+	_ = os.Setenv(tokenEnv, testKey)
 	_ = os.Setenv("TCP_ENABLED", "true")
 	config.SetDefaultFlags()
 	os.Args = args
@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 }
 
 // TestCoreServesAgents: the core alone (no RPCServer, no database) answers
-// /ready, admits an agent with a key from the key file (its TCP data
+// /ready, admits an agent with the token (its TCP data
 // plane bound) and refuses an unknown key as Unauthenticated.
 func TestCoreServesAgents(t *testing.T) {
 	var ls compose.Ports
@@ -62,9 +62,13 @@ func TestCoreServesAgents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	tok, err := loadToken()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- compose.Serve(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), ls, frontends) }()
+	go func() { done <- compose.Serve(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), ls, frontends, tok) }()
 	t.Cleanup(func() {
 		cancel()
 		if err := <-done; err != nil {

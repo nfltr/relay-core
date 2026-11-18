@@ -26,8 +26,8 @@ var testRef = identity.AgentRef{Machine: testMachine.ID, Service: "svc"}.String(
 // ---------------------------------------------------------------------------
 
 func TestValidateAPIKeyFromMetadata_ValidKey(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testMachine, "rpc_secret123")
+	store := tokens{}
+	store["rpc_secret123"] = testMachine
 
 	md := metadata.Pairs("x-api-key", "rpc_secret123")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -56,8 +56,8 @@ func TestValidateAPIKeyFromMetadata_ValidKey(t *testing.T) {
 // a service and the agent is the key's machine's ref for it; a name that
 // is no valid service (another machine's ref) is refused.
 func TestValidateAPIKeyFromMetadata_AgentIsMachineService(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testMachine, "rpc_secret123")
+	store := tokens{}
+	store["rpc_secret123"] = testMachine
 	ctx, err := validateAPIKeyFromMetadata(metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs("x-api-key", "rpc_secret123", "x-agent-id", "svc")), store)
 	if err != nil {
@@ -75,8 +75,8 @@ func TestValidateAPIKeyFromMetadata_AgentIsMachineService(t *testing.T) {
 // TestValidateAPIKeyFromMetadata_InvalidKey: a key no provider accepts is
 // refused (fail closed), whatever stores the relay has.
 func TestValidateAPIKeyFromMetadata_InvalidKey(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testMachine, "rpc_secret123")
+	store := tokens{}
+	store["rpc_secret123"] = testMachine
 
 	md := metadata.Pairs("x-api-key", "rpc_wrong_key")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -87,8 +87,8 @@ func TestValidateAPIKeyFromMetadata_InvalidKey(t *testing.T) {
 }
 
 func TestValidateAPIKeyFromMetadata_NoKey(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testMachine, "rpc_secret123")
+	store := tokens{}
+	store["rpc_secret123"] = testMachine
 
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(nil))
 	ctx, err := validateAPIKeyFromMetadata(ctx, store)
@@ -113,8 +113,8 @@ func TestValidateAPIKeyFromMetadata_NilStore(t *testing.T) {
 }
 
 func TestValidateAPIKeyFromMetadata_NoMetadata(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testMachine, "rpc_secret123")
+	store := tokens{}
+	store["rpc_secret123"] = testMachine
 
 	ctx := context.Background() // no metadata at all
 	ctx, err := validateAPIKeyFromMetadata(ctx, store)
@@ -133,8 +133,8 @@ func TestValidateAPIKeyFromMetadata_NoMetadata(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAPIKeyUnaryInterceptor_ValidKey(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testMachine, "rpc_test_key")
+	store := tokens{}
+	store["rpc_test_key"] = testMachine
 
 	interceptor := APIKeyUnaryInterceptor(store)
 
@@ -190,8 +190,8 @@ type fakeServerStream struct {
 func (f *fakeServerStream) Context() context.Context { return f.ctx }
 
 func TestAPIKeyStreamInterceptor_ValidKey(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testMachine, "rpc_stream_key")
+	store := tokens{}
+	store["rpc_stream_key"] = testMachine
 
 	interceptor := APIKeyStreamInterceptor(store)
 

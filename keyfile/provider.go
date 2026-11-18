@@ -15,48 +15,41 @@ import (
 // live in (identity.Principal).
 const ProviderName = "keys"
 
-// CredentialCacheTTL is how long the core keeps a key's answer
+// CredentialCacheTTL is how long the core keeps a certificate's answer
 // (identity.Principal.CacheTTL); a revoke drops it at once.
 const CredentialCacheTTL = 30 * time.Second
 
-// Provider is the static key file as an identity provider (a relay with no
-// database): a machine's owner is its account (Machine.AccountOf: its own
-// id, or the account it joined at generate), so the machines of one
-// account reach each other's agents (spec/KeyAccount.tla
-// SameAccountReaches); it registers any valid service name (its own id's
-// refs) and lives until it is revoked (KeyManager.Revoke, which drops the
-// core's cached answers). It links no database.
-//
-// With CAs (the self-hosted relay's data-dir machine CA) it authenticates
-// a TLS client certificate too (machine_cert.go: spec/KeyAccount.tla
-// Authenticates).
+// Provider is the key file as an identity provider (a relay with no
+// database): it authenticates a TLS client certificate of the data dir's
+// machine CA (CAs; machine_cert.go: spec/KeyAccount.tla Authenticates),
+// never a bearer token. A machine's owner is its account
+// (Machine.AccountOf: its own id, or the account it joined at enrolment),
+// so the machines of one account reach each other's agents
+// (spec/KeyAccount.tla SameAccountReaches); it registers any valid service
+// name (its own id's refs) and lives until it is revoked
+// (KeyManager.Revoke, which drops the core's cached answers) or its
+// certificate ends. It links no database.
 type Provider struct {
-	Store *APIKeyStore
+	Store *Store
 	CAs   *x509.CertPool
 }
 
 // Name implements identity.Provider.
 func (Provider) Name() string { return ProviderName }
 
-// Authenticate implements identity.Provider: one map lookup.
+// Authenticate implements identity.Provider: a certificate chain's
+// verification and one map lookup; any other credential is unknown.
 func (k Provider) Authenticate(_ context.Context, c identity.Credential) (identity.Principal, error) {
-	if k.Store == nil {
+	if k.Store == nil || k.CAs == nil || c.Token != "" || len(c.PeerCerts) == 0 {
 		return identity.Principal{}, identity.ErrUnknownCredential
 	}
-	if c.Token == "" && k.CAs != nil && len(c.PeerCerts) > 0 {
-		m, err := k.Store.MachineByCert(k.CAs, c.PeerCerts, time.Now())
-		if err != nil {
-			return identity.Principal{}, err
-		}
-		p := principalOf(m)
-		p.NotAfter = c.PeerCerts[0].NotAfter
-		return p, nil
+	m, err := k.Store.MachineByCert(k.CAs, c.PeerCerts, time.Now())
+	if err != nil {
+		return identity.Principal{}, err
 	}
-	m, ok := k.Store.Validate(c.Token)
-	if !ok {
-		return identity.Principal{}, identity.ErrUnknownCredential
-	}
-	return principalOf(m), nil
+	p := principalOf(m)
+	p.NotAfter = c.PeerCerts[0].NotAfter
+	return p, nil
 }
 
 func principalOf(m Machine) identity.Principal {
@@ -68,7 +61,7 @@ func principalOf(m Machine) identity.Principal {
 // resolves within the caller's account only (session.NameResolver; spec
 // KeyAccount.tla ResolveOwnAccount), read from the live store, which a
 // reload swaps whole.
-type Policy struct{ Store *APIKeyStore }
+type Policy struct{ Store *Store }
 
 // Allowed implements session.Policy: every machine of an account reaches
 // every agent of it.
@@ -88,8 +81,8 @@ func (k Policy) ResolveMachine(caller identity.Principal, name string) (identity
 
 // resolve is the machine named name in the account of machine caller.
 // ponytail: one scan of the file's machines per name; an (account, name)
-// index swapped with the keys if key files grow to thousands of lines.
-func (s *APIKeyStore) resolve(caller identity.MachineID, name string) identity.MachineID {
+// index swapped with the lines if key files grow to thousands of lines.
+func (s *Store) resolve(caller identity.MachineID, name string) identity.MachineID {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var account identity.MachineID

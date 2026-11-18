@@ -23,7 +23,6 @@ import (
 	"github.com/nfltr/relay-core/core/frontend"
 	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/core/session"
-	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay/client/agent"
 	"github.com/spf13/viper"
@@ -35,10 +34,8 @@ func main() {
 	os.Args = os.Args[:1]
 	config.SetDefaultFlags() // the relay's settings: defaults, then the environment
 	viper.Set("tcp.enabled", true)
-	const key = "rpc_minimal-example-key-0123456789"
-	keys := keyfile.NewAPIKeyStore()
+	const key = "minimal-example-token-0123456789"
 	machine := identity.NewMachineID()
-	keys.Add(keyfile.Machine{ID: machine, Name: "demo"}, key)
 
 	var ls compose.Ports // the relay's ports: clients, agents, /ready
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {
@@ -46,7 +43,7 @@ func main() {
 	}
 	port := must(net.Listen("tcp", "127.0.0.1:0")) // the frontend's own port
 	go func() {
-		log.Fatal(compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, []frontend.Frontend{&tcpPort{l: port, machine: machine, agent: identity.AgentRef{Machine: machine, Service: "echo"}.String(), service: "22"}}, keyfile.Provider{Store: keys}))
+		log.Fatal(compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, []frontend.Frontend{&tcpPort{l: port, machine: machine, agent: identity.AgentRef{Machine: machine, Service: "echo"}.String(), service: "22"}}, tokens{key, machine}))
 	}()
 
 	echo := must(net.Listen("tcp", "127.0.0.1:0")) // the service behind the agent
@@ -94,7 +91,7 @@ func (*tcpPort) Settings() []frontend.Setting { return nil }
 
 // Attach serves l with the relay's run (h.Go): it ends with the relay.
 func (f *tcpPort) Attach(ctx context.Context, h frontend.Host) error {
-	owner := identity.Principal{Provider: keyfile.ProviderName, Owner: string(f.machine), Machine: f.machine, Subject: string(f.machine)}
+	owner := identity.Principal{Provider: "tokens", Owner: string(f.machine), Machine: f.machine, Subject: string(f.machine)}
 	h.Go(func() error {
 		go func() { <-ctx.Done(); _ = f.l.Close() }()
 		var backoff time.Duration
@@ -134,4 +131,21 @@ func must[T any](v T, err error) T {
 		log.Fatal(err)
 	}
 	return v
+}
+
+// tokens is an identity.Provider: its one token is machine m, its own
+// account; any other token is unknown (the key file authenticates machine
+// certificates, which this example's plain ports cannot ask for).
+type tokens struct {
+	secret string
+	m      identity.MachineID
+}
+
+func (tokens) Name() string { return "tokens" }
+
+func (t tokens) Authenticate(_ context.Context, c identity.Credential) (identity.Principal, error) {
+	if c.Token == "" || c.Token != t.secret {
+		return identity.Principal{}, identity.ErrUnknownCredential
+	}
+	return identity.Principal{Owner: string(t.m), Machine: t.m, Subject: string(t.m)}, nil
 }

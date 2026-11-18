@@ -3,10 +3,10 @@
 
 // Command quickstart is the README's agent and client against a running
 // nfltr-relay-core: it connects an agent "echo" in front of a TCP echo
-// server, then, as a client of the same key, sends bytes through the relay
+// server, then, as a client of the same token, sends bytes through the relay
 // to it and prints what came back.
 //
-//	quickstart -key-file nfltr-relay-core.keys -agents 127.0.0.1:9090 -clients 127.0.0.1:8080
+//	quickstart -token-file nfltr-relay-core.token -agents 127.0.0.1:9090 -clients 127.0.0.1:8080
 package main
 
 import (
@@ -29,7 +29,7 @@ import (
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	keyFile := flag.String("key-file", "nfltr-relay-core.keys", "the relay's key file: its machine's key in a \"# key: \" comment, the machine on its last line")
+	keyFile := flag.String("token-file", "nfltr-relay-core.token", "the relay's token file: \"<machine id> <name> <token>\" on its last line")
 	agents := flag.String("agents", "127.0.0.1:9090", "the relay's gRPC address (agents)")
 	clients := flag.String("clients", "127.0.0.1:8080", "the relay's proxy address (clients)")
 	flag.Parse()
@@ -38,10 +38,12 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 	}
 	text := strings.TrimSpace(string(must(data, err)))
-	_, rest, _ := strings.Cut(text, "# key: ")
-	key, _, _ := strings.Cut(rest, "\n")
 	lines := strings.Split(text, "\n")
-	ref := strings.Fields(lines[len(lines)-1])[0] + "-web" // the agent ref of the machine's service "web"
+	f := strings.Fields(lines[len(lines)-1])
+	if len(f) != 3 {
+		log.Fatalf("%s: no token line", *keyFile)
+	}
+	key, ref := f[2], f[0]+"-web" // the agent ref of the machine's service "web"
 
 	echo := must(net.Listen("tcp", "127.0.0.1:0")) // the service behind the agent
 	go func() {

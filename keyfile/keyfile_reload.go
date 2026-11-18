@@ -28,7 +28,7 @@ import (
 // AccountStable; revoke it and generate it again) changes nothing and
 // returns the error. It returns the revoked machines.
 func (km *KeyManager) Reload() ([]identity.MachineID, error) {
-	next, err := readAPIKeys(km.filePath)
+	next, err := read(km.filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -81,13 +81,13 @@ func (km *KeyManager) Reload() ([]identity.MachineID, error) {
 		records[m.ID] = fileRecord(m, h)
 	}
 	km.records = records
-	km.logger.Info("security: reloaded the API key file", "file", km.filePath, "keys", len(next.keys), "revoked", revoked)
+	km.logger.Info("security: reloaded the key file", "file", km.filePath, "keys", len(next.keys), "revoked", revoked)
 	return revoked, nil
 }
 
 // swap replaces the store's keys with keys; from, when not nil, is the
 // map before the reload: its trace steps (the lines added and removed).
-func (s *APIKeyStore) swap(keys, from map[[32]byte]Machine) {
+func (s *Store) swap(keys, from map[[32]byte]Machine) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if from != nil {
@@ -102,9 +102,9 @@ func (s *APIKeyStore) swap(keys, from map[[32]byte]Machine) {
 func (km *KeyManager) Watch(ctx context.Context) error {
 	return filewatch.Watch(ctx, km.filePath, func() {
 		if _, err := km.Reload(); err != nil {
-			km.logger.Warn("security: the API key file changed but does not load: the current keys stay", "file", km.filePath, "error", err)
+			km.logger.Warn("security: the key file changed but does not load: the current lines stay", "file", km.filePath, "error", err)
 		}
 	}, func(err error) {
-		km.logger.Warn("security: API key file watch", "file", km.filePath, "error", err)
+		km.logger.Warn("security: key file watch", "file", km.filePath, "error", err)
 	})
 }

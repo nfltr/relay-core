@@ -19,31 +19,30 @@ func writeFile(t *testing.T, lines ...string) string {
 	return f
 }
 
-func TestLoadAPIKeys(t *testing.T) {
-	store, err := LoadAPIKeys(writeFile(t, "# comment", "", kl("web", "secret-a"), kl("db", "secret-b")))
+func TestLoad(t *testing.T) {
+	store, err := Load(writeFile(t, "# comment", "", kl("web", "key-a"), kl("db", "key-b")))
 	if err != nil || store.Count() != 2 {
-		t.Fatalf("load: %v, %d keys", err, store.Count())
+		t.Fatalf("load: %v, %d machines", err, store.Count())
 	}
-	if m, ok := store.Validate("secret-a"); !ok || m.ID != tm("web") || m.Name != "web" {
-		t.Fatalf("Validate = %+v, %v", m, ok)
+	if m, ok := lookup(store, "key-a"); !ok || m.ID != tm("web") || m.Name != "web" {
+		t.Fatalf("line = %+v, %v", m, ok)
 	}
-	if _, ok := store.Validate("wrong-key"); ok {
-		t.Fatal("a wrong key validated")
-	}
-	if _, err := LoadAPIKeys(writeFile(t, "# only comments")); err == nil {
-		t.Fatal("a file without keys loaded")
+	if store, err := Load(writeFile(t, "# only comments")); err != nil || store.Count() != 0 {
+		t.Fatalf("a file without lines: %v, %d machines, want an empty store", err, store.Count())
 	}
 }
 
 // The file refuses what it cannot hold as a machine: a line from before
-// machines (agent-id:key, agent-id:sha256:<hex>), a machine twice, a name
-// twice in one account, a bad id, name or account, a line with a services
-// field (the form before any valid service name was allowed).
-func TestLoadAPIKeysRefuses(t *testing.T) {
+// machines (agent-id:key, agent-id:sha256:<hex>), an API key line (sha256:,
+// gone with the key cut), a machine twice, a name twice in one account, a
+// bad id, name or account, a line with a services field (the form before
+// any valid service name was allowed).
+func TestLoadRefuses(t *testing.T) {
 	ok := tmach("web")
 	for name, line := range map[string][]string{
 		"old plaintext":  {"agent-1:secret"},
 		"old hashed":     {"agent-1:sha256:" + strings.Repeat("ab", 32)},
+		"API key line":   {strings.Replace(kl("web", "a"), "spki:", "sha256:", 1)},
 		"machine twice":  {kl("web", "a"), strings.Replace(kl("db", "b"), string(tm("db")), string(ok.ID), 1)},
 		"name twice":     {kl("web", "a"), strings.Replace(kl("db", "b"), " db ", " web ", 1) + " account=" + string(ok.ID)},
 		"bad account":    {kl("web", "a") + " account=m-nope"},
@@ -51,92 +50,21 @@ func TestLoadAPIKeysRefuses(t *testing.T) {
 		"bad id":         {strings.Replace(kl("web", "a"), string(ok.ID), "m-nope", 1)},
 		"bad name":       {strings.Replace(kl("web", "a"), " web ", " Web ", 1)},
 		"services field": {strings.Replace(kl("web", "a"), " web ", " web svc ", 1)},
-		"malformed hash": {strings.Replace(kl("web", "a"), "sha256:", "sha256:zz", 1)},
+		"malformed hash": {strings.Replace(kl("web", "a"), "spki:", "spki:zz", 1)},
 	} {
-		if _, err := LoadAPIKeys(writeFile(t, line...)); err == nil {
+		if _, err := Load(writeFile(t, line...)); err == nil {
 			t.Errorf("%s: loaded", name)
 		}
 	}
 }
 
-func TestLoadAPIKeysFromEnv(t *testing.T) {
-	t.Setenv("KF_TEST", string(tm("web"))+" web secret")
-	store, err := LoadAPIKeysFromEnv("KF_TEST")
+func TestRemove(t *testing.T) {
+	store, err := Load(writeFile(t, kl("a", "key-a"), kl("b", "key-c")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m, ok := store.Validate("secret"); !ok || m.ID != tm("web") || m.Name != "web" {
-		t.Fatalf("Validate = %+v, %v", m, ok)
-	}
-	t.Setenv("KF_TEST", "web:secret")
-	if _, err := LoadAPIKeysFromEnv("KF_TEST"); err == nil {
-		t.Fatal("an agent-id:key value loaded")
-	}
-	t.Setenv("KF_TEST", string(tm("web"))+" web ssh,http secret")
-	if _, err := LoadAPIKeysFromEnv("KF_TEST"); err == nil {
-		t.Fatal("a value with a services field loaded")
-	}
-}
-
-func TestRemove(t *testing.T) {
-	store := NewAPIKeyStore()
-	store.Add(tmach("a"), "key-a")
-	store.Add(tmach("a"), "key-b")
-	store.Add(tmach("b"), "key-c")
 	store.Remove(tm("a"))
-	if _, ok := store.Validate("key-a"); ok || store.Count() != 1 {
-		t.Fatalf("%d keys after remove, key-a valid %v", store.Count(), ok)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// APIKeyStore hot-path benchmarks
-// ---------------------------------------------------------------------------
-
-func buildFileStore(b *testing.B, n int) (*APIKeyStore, []string) {
-	b.Helper()
-	store := NewAPIKeyStore()
-	keys := make([]string, n)
-	for i := range keys {
-		k := "testkey-" + strings.Repeat("x", 80) + string(rune('a'+i%26))
-		store.Add(tmach("agent-"+string(rune('a'+i%26))), k)
-		keys[i] = k
-	}
-	return store, keys
-}
-
-// BenchmarkAPIKeyStore_Validate_Hit measures O(1) map lookup on a hit (55 keys, middle key).
-func BenchmarkAPIKeyStore_Validate_Hit(b *testing.B) {
-	store, keys := buildFileStore(b, 55)
-	target := keys[27]
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if _, ok := store.Validate(target); !ok {
-			b.Fatal("expected hit")
-		}
-	}
-}
-
-// BenchmarkAPIKeyStore_Validate_Hit_Parallel measures concurrent O(1) lookup throughput.
-func BenchmarkAPIKeyStore_Validate_Hit_Parallel(b *testing.B) {
-	store, keys := buildFileStore(b, 55)
-	target := keys[27]
-	b.ResetTimer()
-	b.ReportAllocs()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			store.Validate(target)
-		}
-	})
-}
-
-// BenchmarkAPIKeyStore_Validate_Miss measures O(1) map lookup on a miss.
-func BenchmarkAPIKeyStore_Validate_Miss(b *testing.B) {
-	store, _ := buildFileStore(b, 55)
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		store.Validate("rpc_no_such_key_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+	if _, ok := lookup(store, "key-a"); ok || store.Count() != 1 {
+		t.Fatalf("%d machines after remove, a's line kept %v", store.Count(), ok)
 	}
 }

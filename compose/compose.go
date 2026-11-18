@@ -12,7 +12,6 @@ package compose
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -30,7 +29,6 @@ import (
 	"github.com/nfltr/relay-core/core/sharecode"
 	"github.com/nfltr/relay-core/frontend/connect"
 	httpingress "github.com/nfltr/relay-core/frontend/http"
-	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/clientgen"
 	"github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay-core/platform/ratelimit"
@@ -56,27 +54,19 @@ type Ports struct {
 // configuration (platform/config.SetDefaultFlags, then viper).
 //
 // Agents and clients authenticate with providers, asked in order, the
-// first one primary (identity.NewAuthenticator). Without providers the
-// key file (security.apikey.file) is the one provider, else the single key
-// in the environment variable security.apikey.env names; with neither,
-// Serve returns an error wrapping ErrNoKeys.
+// first one primary (identity.NewAuthenticator). Without providers Serve
+// returns ErrNoProviders: the core holds no credential of its own (the key
+// file, keyfile, authenticates machine certificates and needs the
+// composition's TLS and machine CA).
 func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []frontend.Frontend, providers ...identity.Provider) error {
 	if err := config.CheckNF1(); err != nil {
 		return err
 	}
-	keys := -1 // keys loaded from the key file or environment; -1: providers given
-	// The core has no groups; the key file's accounts also resolve names.
-	var policy session.Policy = session.AccountIsOneGroup{}
 	if len(providers) == 0 {
-		store, err := keyfile.LoadAPIKeys(viper.GetString("security.apikey.file"))
-		if err != nil { // as nfltr-relay: the key file, else the key in the environment
-			if store, err = keyfile.LoadAPIKeysFromEnv(viper.GetString("security.apikey.env")); err != nil {
-				return fmt.Errorf("%w: %w", ErrNoKeys, err)
-			}
-		}
-		keys, providers = store.Count(), []identity.Provider{keyfile.Provider{Store: store}}
-		policy = keyfile.Policy{Store: store}
+		return ErrNoProviders
 	}
+	// The core has no groups.
+	var policy session.Policy = session.AccountIsOneGroup{}
 	grace := time.Duration(viper.GetInt("termination.grace.periodseconds")) * time.Second
 	rules := session.TargetRules{TargetHost: viper.GetString("ssh.proxy.target_host"), E2EEPolicy: viper.GetString("tcp.e2ee_policy"), E2EEDefault: viper.GetBool("tcp.e2ee_default")}
 	if rules.E2EEPolicy == "" {
@@ -189,9 +179,6 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 			}
 			proxy.Handler = mux
 			attrs := []any{"proxy", ls.Proxy.Addr().String(), "grpc", ls.GRPC.Addr().String(), "internal", ls.Internal.Addr().String(), "shares", shares != nil, "relay_id", d.RelayID}
-			if keys >= 0 {
-				attrs = append(attrs, "keys", keys)
-			}
 			if l := ls.Ports[config.SNIRouterPort]; l != nil {
 				attrs = append(attrs, "sni", l.Addr().String())
 			}
@@ -223,9 +210,8 @@ func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []front
 	return comp.Run(ctx)
 }
 
-// ErrNoKeys is Serve's error when it has no provider and finds no API key
-// in the key file or the environment.
-var ErrNoKeys = errors.New("no API keys")
+// ErrNoProviders is Serve's error without an identity provider.
+var ErrNoProviders = errors.New("no identity provider")
 
 // ownRequests routes a share's visitor (<code>.<http.share_domain>,
 // visits: nil without shares) to the shared agent, and a key's own HTTP

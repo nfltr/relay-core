@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/nfltr/relay-core/compose"
-	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/config"
 	flag "github.com/spf13/pflag"
@@ -38,8 +37,7 @@ func TestProxyClosesAnIdleKeepAliveConnection(t *testing.T) {
 	prev := viper.Get("http.server.idle_timeout")
 	viper.Set("http.server.idle_timeout", idle)
 	t.Cleanup(func() { viper.Set("http.server.idle_timeout", prev) })
-	keys := keyfile.NewAPIKeyStore()
-	keys.Add(keyfile.Machine{ID: identity.NewMachineID(), Name: "demo"}, "rpc_example-key")
+	keys := keyfile.NewStore()
 	var ls compose.Ports
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {
 		var err error

@@ -212,9 +212,7 @@ func SetDefaultFlags() {
 	_ = flag.String("http.redirect_port", "", "when set with tls.web_domains, a plain HTTP port (e.g. 80) that answers ACME HTTP-01 challenges and redirects everything else to https")
 
 	// ── API Key Authentication ──────────────────────────────────────────
-	_ = flag.Bool("security.apikey.enable", false, "require API key for agent connections")
-	_ = flag.String("security.apikey.file", "/etc/rpcserver/api-keys", "path to file containing valid API keys (one per line, format: label:key)")
-	_ = flag.String("security.apikey.env", "NFLTR_API_KEY", "environment variable containing a single API key (fallback if file is missing)")
+	_ = flag.String("security.apikey.file", "/etc/rpcserver/api-keys", "the key file: the machines of a relay without a database, one \"<machine id> <name> spki:<hex> [account=<id>]\" per line (keyfile)")
 
 	// ── mTLS identity provider (client certificates; off without a CA file) ──
 	_ = flag.String("security.mtls.ca_file", "", "PEM bundle of the CAs whose client certificates authenticate (one or more; reloaded on change); turns the mTLS identity provider on (needs tls.enable)")

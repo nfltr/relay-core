@@ -6,7 +6,6 @@ package keyfile
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/nfltr/relay-core/core/identity"
@@ -30,16 +29,12 @@ func (r revokeAfterRead) Authenticate(ctx context.Context, c identity.Credential
 // -> OnRevoke -> Authenticator.Revoke) while its connection authenticates
 // is cut at Hold and not cached (relay-server spec/README.md finding 5).
 func TestKeyFileRevocationDuringAuthenticate(t *testing.T) {
-	store := NewAPIKeyStore()
-	km := NewKeyManager(filepath.Join(t.TempDir(), "api-keys"), store, testKeyManagerLogger())
-	resp, err := km.Generate("agent-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := identity.NewAuthenticator(ProviderName, revokeAfterRead{Provider{Store: store}, km, &resp.MachineID})
+	km, pr, ca := certManager(t)
+	m := enrol(t, km, ca, "agent-1", "")
+	a := identity.NewAuthenticator(ProviderName, revokeAfterRead{pr, km, &m.ID})
 	km.OnRevoke(func(id string) { a.Revoke(identity.Key(ProviderName, id)) })
 
-	p, err := a.Authenticate(t.Context(), identity.Credential{Token: resp.APIKey})
+	p, err := a.Authenticate(t.Context(), identity.Credential{PeerCerts: m.chain})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +43,7 @@ func TestKeyFileRevocationDuringAuthenticate(t *testing.T) {
 	if !errors.Is(context.Cause(held), identity.ErrRevoked) {
 		t.Errorf("held after the revocation: cause %v", context.Cause(held))
 	}
-	if p, err := a.Authenticate(t.Context(), identity.Credential{Token: resp.APIKey}); err == nil {
+	if p, err := a.Authenticate(t.Context(), identity.Credential{PeerCerts: m.chain}); err == nil {
 		t.Errorf("the revoked key authenticated again (a cached answer): %+v", p)
 	}
 }

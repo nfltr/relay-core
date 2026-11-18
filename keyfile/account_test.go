@@ -4,11 +4,10 @@
 package keyfile
 
 import (
-	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/core/session"
@@ -23,38 +22,26 @@ import (
 // (WitnessOutlivesFirst, WitnessNameReused); a reload that changes a kept
 // machine's account changes nothing (AccountStable); a line round-trips.
 func TestKeyFileAccounts(t *testing.T) {
-	keyFile := filepath.Join(t.TempDir(), "api-keys")
-	store := NewAPIKeyStore()
-	km := NewKeyManager(keyFile, store, testKeyManagerLogger())
-	gen := func(name, member string) *KeyGenerateResponse {
-		t.Helper()
-		join := km.Generate
-		if member != "" {
-			join = func(name string) (*KeyGenerateResponse, error) { return km.Join(name, member) }
-		}
-		r, err := join(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return r
-	}
+	km, p, ca := certManager(t)
+	keyFile, store := km.filePath, km.store
+	gen := func(name, member string) enrolled { t.Helper(); return enrol(t, km, ca, name, member) }
 	laptop := gen("laptop", "")
-	work := gen("work-laptop", "laptop")                // by name
-	ci := gen("ci", string(work.MachineID))             // by id: the account, not the member's id
-	other := gen("other", "")                           // its own account
-	twin := gen("work-laptop", string(other.MachineID)) // a name per account
-	if work.Account != laptop.MachineID || ci.Account != laptop.MachineID || other.Account != other.MachineID {
-		t.Fatalf("accounts: work %s ci %s other %s, want %s %s %s", work.Account, ci.Account, other.Account, laptop.MachineID, laptop.MachineID, other.MachineID)
+	work := gen("work-laptop", "laptop")         // by name
+	ci := gen("ci", string(work.ID))             // by id: the account, not the member's id
+	other := gen("other", "")                    // its own account
+	twin := gen("work-laptop", string(other.ID)) // a name per account
+	if work.AccountOf() != laptop.ID || ci.AccountOf() != laptop.ID || other.AccountOf() != other.ID {
+		t.Fatalf("accounts: work %s ci %s other %s, want %s %s %s", work.AccountOf(), ci.AccountOf(), other.AccountOf(), laptop.ID, laptop.ID, other.ID)
 	}
-	owner := func(key string) string {
+	owner := func(e enrolled) string {
 		t.Helper()
-		p, err := Provider{Store: store}.Authenticate(context.Background(), identity.Credential{Token: key})
+		pr, err := certPrincipal(p, e.chain)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return p.Owner
+		return pr.Owner
 	}
-	if owner(work.APIKey) != owner(laptop.APIKey) || owner(ci.APIKey) != owner(laptop.APIKey) || owner(other.APIKey) == owner(laptop.APIKey) {
+	if owner(work) != owner(laptop) || owner(ci) != owner(laptop) || owner(other) == owner(laptop) {
 		t.Fatal("one account, one owner; another account, another")
 	}
 	resolve := func(caller identity.MachineID, name string) identity.MachineID {
@@ -65,38 +52,38 @@ func TestKeyFileAccounts(t *testing.T) {
 		}
 		return m
 	}
-	if resolve(laptop.MachineID, "work-laptop") != work.MachineID || resolve(other.MachineID, "work-laptop") != twin.MachineID || resolve(other.MachineID, "ci") != "" {
+	if resolve(laptop.ID, "work-laptop") != work.ID || resolve(other.ID, "work-laptop") != twin.ID || resolve(other.ID, "ci") != "" {
 		t.Fatal("a name resolves within the caller's account only")
 	}
 	for _, bad := range []string{"desk", string(identity.NewMachineID())} {
-		if _, err := km.Join("x", bad); err == nil {
-			t.Fatalf("joined %q, a machine the file does not hold", bad)
+		if _, err := km.MintCode("x", bad, time.Hour, time.Now()); err == nil {
+			t.Fatalf("a code joins %q, a machine the file does not hold", bad)
 		}
 	}
-	if _, err := km.Join("y", "work-laptop"); err == nil || !strings.Contains(err.Error(), "machine id") {
+	if _, err := km.MintCode("y", "work-laptop", time.Hour, time.Now()); err == nil || !strings.Contains(err.Error(), "machine id") {
 		t.Fatalf("a name two machines hold: %v, want refused for its id", err)
 	}
 
-	if err := km.Revoke(laptop.MachineID); err != nil {
+	if err := km.Revoke(laptop.ID); err != nil {
 		t.Fatal(err)
 	}
-	back, err := LoadAPIKeys(keyFile)
+	back, err := Load(keyFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m, ok := back.Validate(ci.APIKey); !ok || m.AccountOf() != laptop.MachineID || owner(work.APIKey) != owner(ci.APIKey) {
-		t.Fatalf("after the first machine's revoke: %+v %v, want account %s kept", m, ok, laptop.MachineID)
+	if m, ok := byID(back, ci.ID); !ok || m.AccountOf() != laptop.ID || owner(work) != owner(ci) {
+		t.Fatalf("after the first machine's revoke: %+v %v, want account %s kept", m, ok, laptop.ID)
 	}
 	again := gen("laptop", "ci")
-	if again.Account != laptop.MachineID || resolve(work.MachineID, "laptop") != again.MachineID {
+	if again.AccountOf() != laptop.ID || resolve(work.ID, "laptop") != again.ID {
 		t.Fatalf("a revoked machine's name is free at once in its account: %+v", again)
 	}
 
 	data, _ := os.ReadFile(keyFile)
 	var lines []string
 	for _, l := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(l, string(ci.MachineID)+" ") {
-			l = strings.Replace(l, " account="+string(laptop.MachineID), " account="+string(other.MachineID), 1)
+		if strings.HasPrefix(l, string(ci.ID)+" ") {
+			l = strings.Replace(l, " account="+string(laptop.ID), " account="+string(other.ID), 1)
 		}
 		lines = append(lines, l)
 	}
@@ -110,7 +97,7 @@ func TestKeyFileAccounts(t *testing.T) {
 	if _, err := km.Reload(); err == nil || !strings.Contains(err.Error(), "account changed") {
 		t.Fatalf("a reload moving a machine to another account: %v, want refused", err)
 	}
-	if owner(work.APIKey) != owner(ci.APIKey) {
+	if owner(work) != owner(ci) {
 		t.Fatal("a refused reload changed an account")
 	}
 }

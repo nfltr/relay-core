@@ -75,6 +75,28 @@ func certManager(t *testing.T) (*KeyManager, Provider, *testCA) {
 	return km, Provider{Store: km.store, CAs: ca.pool}, ca
 }
 
+// enrolled is a machine a code enrolled, with its certificate.
+type enrolled struct {
+	Machine
+	chain []*x509.Certificate
+}
+
+// enrol mints a code for name (in member's account, or its own) and
+// enrols a fresh key with it; ca signs the certificate.
+func enrol(t *testing.T, km *KeyManager, ca *testCA, name, member string) enrolled {
+	t.Helper()
+	code, err := km.MintCode(name, member, time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := newKey(t)
+	m, err := km.Enrol(code, &k.PublicKey, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enrolled{m, ca.sign(t, m.ID, &k.PublicKey)}
+}
+
 func certPrincipal(p Provider, chain []*x509.Certificate) (identity.Principal, error) {
 	return p.Authenticate(context.Background(), identity.Credential{PeerCerts: chain})
 }
@@ -169,19 +191,24 @@ func TestCertBoundToLine(t *testing.T) {
 	}
 }
 
-// TestKeyTokenIsNotACertificate: a certificate machine's line never
-// validates as an API key, even for a token that is its public key's DER
-// (the SPKI is public).
-func TestKeyTokenIsNotACertificate(t *testing.T) {
-	km, p, _ := certManager(t)
+// TestTokenIsNotACredential: the key file authenticates certificates
+// only; a bearer token never authenticates, even one that is a machine's
+// public key DER (the SPKI is public) or arrives beside its certificate
+// (the API key cut: no key branch is left).
+func TestTokenIsNotACredential(t *testing.T) {
+	km, p, ca := certManager(t)
 	code, _ := km.MintCode("box", "", time.Hour, time.Now())
 	k := newKey(t)
-	if _, err := km.Enrol(code, &k.PublicKey, time.Now()); err != nil {
+	m, err := km.Enrol(code, &k.PublicKey, time.Now())
+	if err != nil {
 		t.Fatal(err)
 	}
 	der, _ := x509.MarshalPKIXPublicKey(&k.PublicKey)
 	if _, err := p.Authenticate(t.Context(), identity.Credential{Token: string(der)}); !errors.Is(err, identity.ErrUnknownCredential) {
-		t.Fatalf("SPKI as a key: %v", err)
+		t.Fatalf("SPKI as a token: %v", err)
+	}
+	if _, err := p.Authenticate(t.Context(), identity.Credential{Token: "rpc_x", PeerCerts: ca.sign(t, m.ID, &k.PublicKey)}); !errors.Is(err, identity.ErrUnknownCredential) {
+		t.Fatalf("a token beside a certificate: %v", err)
 	}
 }
 
@@ -191,10 +218,7 @@ func TestKeyTokenIsNotACertificate(t *testing.T) {
 func TestCodeJoinsAccount(t *testing.T) {
 	km, p, ca := certManager(t)
 	now := time.Now()
-	first, err := km.Generate("admin")
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := enrol(t, km, ca, "admin", "")
 	if _, err := km.MintCode("node", "nobody", time.Hour, now); err == nil {
 		t.Fatal("a code for an account the file does not hold was minted")
 	}
@@ -208,8 +232,8 @@ func TestCodeJoinsAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	pr, err := certPrincipal(p, ca.sign(t, m.ID, &k.PublicKey))
-	if err != nil || pr.Owner != string(first.MachineID) {
-		t.Fatalf("joined machine: %+v %v, want owner %s", pr, err, first.MachineID)
+	if err != nil || pr.Owner != string(first.ID) {
+		t.Fatalf("joined machine: %+v %v, want owner %s", pr, err, first.ID)
 	}
 	dup, _ := km.MintCode("node", "admin", time.Hour, now)
 	if _, err := km.Enrol(dup, &newKey(t).PublicKey, now); err == nil {

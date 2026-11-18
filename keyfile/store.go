@@ -1,17 +1,20 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-// Package keyfile is the static API key file: the machine store of a relay
-// without a database. Each line is one machine (an id the file assigns,
-// never a client's, its name and, when it joined another machine's
-// account, that account) and the SHA-256 of its key (APIKeyStore, LoadAPIKeys); KeyManager adds, reloads and revokes
-// machines, and Provider authenticates them (nfltr
-// docs/decisions/tenants-reach-policy-2026-11-07.md, Decided 7).
+// Package keyfile is the key file: the machine store of a relay without a
+// database. Each line is one machine (an id the file assigns, never a
+// client's, its name and, when it joined another machine's account, that
+// account) and the SHA-256 of the public key its certificates certify
+// (Store, Load). A machine joins only with a single-use code (KeyManager
+// MintCode, Enrol: the data dir's machine CA signs its certificate); the
+// file holds no bearer secret. KeyManager enrols, reloads and revokes
+// machines, and Provider authenticates their certificates (nfltr
+// docs/decisions/tenants-reach-policy-2026-11-07.md, Decided 7;
+// docs/decisions/api-key-cut-2026-11-15.md).
 package keyfile
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -25,24 +28,18 @@ import (
 	"github.com/nfltr/relay-core/core/identity"
 )
 
-const (
-	hashPrefix = "sha256:"
-	spkiPrefix = "spki:"
-)
+// spkiPrefix marks a line's key: the SHA-256 of the machine key's
+// SubjectPublicKeyInfo.
+const spkiPrefix = "spki:"
 
 // Machine is one machine of the key file: its id, its name and its
 // account (spec/KeyAccount.tla): "" is its own (its id), else the id of
-// the first machine of the account it joined, fixed at generate. It may
+// the first machine of the account it joined, fixed at enrolment. It may
 // register any valid service name (its agents are its own id's refs).
 type Machine struct {
 	ID      identity.MachineID
 	Name    string
 	Account identity.MachineID
-	// Cert: the line binds a machine key (spki:, the SHA-256 of its
-	// SubjectPublicKeyInfo) that certificates of the data dir's machine CA
-	// certify, not an API key (sha256:). A key token never validates
-	// against it: the SPKI is public.
-	Cert bool
 }
 
 // AccountOf is m's account: the principal's owner (Provider), the scope of
@@ -61,7 +58,7 @@ const accountField = "account="
 // [a-z0-9-], not starting or ending with '-').
 var ErrMachineName = errors.New("keyfile: a machine name is 1 to 63 of [a-z0-9-], not starting or ending with '-'")
 
-// validMachine checks what a line or a Generate states about a machine.
+// validMachine checks what a line or an enrolment states about a machine.
 func validMachine(m Machine) error {
 	if _, err := identity.ParseMachineID(string(m.ID)); err != nil {
 		return err
@@ -77,48 +74,44 @@ func validMachine(m Machine) error {
 	return nil
 }
 
-// APIKeyStore holds the machines of a key file by their keys' SHA-256:
-// plaintext and hex keys are never retained, so Validate pays one SHA-256
-// and one map lookup. It is safe for concurrent use.
-type APIKeyStore struct {
+// Store holds the machines of a key file by their keys' SHA-256 (the
+// SubjectPublicKeyInfo's). It is safe for concurrent use.
+type Store struct {
 	mu   sync.RWMutex
-	keys map[[32]byte]Machine // sha256(key) → machine
+	keys map[[32]byte]Machine // sha256(SPKI) → machine
 	tr   tracer               // spec/KeyAccount.tla steps (-tags relaytrace only)
 }
 
-// NewAPIKeyStore returns an empty key store.
-func NewAPIKeyStore() *APIKeyStore {
-	return &APIKeyStore{keys: make(map[[32]byte]Machine)}
+// NewStore returns an empty store.
+func NewStore() *Store {
+	return &Store{keys: make(map[[32]byte]Machine)}
 }
 
-// LoadAPIKeys reads a key file: one "<machine id> <name> sha256:<hex>
+// Load reads a key file: one "<machine id> <name> spki:<hex>
 // [account=<machine id>]" per non-empty, non-comment line; a name is
-// unique in its account. A line of another form
-// (the agent-id files before machines) refuses the file: re-add its
-// machines with `nfltr-relay keys add`.
-func LoadAPIKeys(path string) (*APIKeyStore, error) {
-	store, err := readAPIKeys(path)
+// unique in its account. A line of another form (a sha256: API key line:
+// keys are gone, docs/decisions/api-key-cut-2026-11-15.md) refuses the
+// file: enrol its machines with a code (nfltr-relay machines code). A file
+// without lines is an empty store.
+func Load(path string) (*Store, error) {
+	store, err := read(path)
 	if err != nil {
 		return nil, err
 	}
-	if len(store.keys) == 0 {
-		return nil, fmt.Errorf("security: no API keys found in %s", path)
-	}
 	store.traceLoad()
-	slog.Info("security: loaded API keys", "count", len(store.keys), "file", path)
+	slog.Info("security: loaded the key file", "machines", len(store.keys), "file", path)
 	return store, nil
 }
 
-// readAPIKeys parses the key file as LoadAPIKeys does; a file without keys
-// (empty, or comments only) is an empty store.
-func readAPIKeys(path string) (*APIKeyStore, error) {
-	f, err := os.Open(path) // #nosec G304 -- operator-configured API key file
+// read parses the key file as Load does.
+func read(path string) (*Store, error) {
+	f, err := os.Open(path) // #nosec G304 -- operator-configured key file
 	if err != nil {
-		return nil, fmt.Errorf("security: open API key file: %w", err)
+		return nil, fmt.Errorf("security: open key file: %w", err)
 	}
 	defer f.Close() //nolint:errcheck
 
-	store := NewAPIKeyStore()
+	store := NewStore()
 	type accountName struct {
 		account identity.MachineID
 		name    string
@@ -142,43 +135,13 @@ func readAPIKeys(path string) (*APIKeyStore, error) {
 		store.keys[h] = m
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("security: read API key file: %w", err)
+		return nil, fmt.Errorf("security: read key file: %w", err)
 	}
 	return store, nil
 }
 
-// LoadAPIKeysFromEnv loads one machine from an environment variable:
-// "<machine id> <name> <key>". The key is hashed before it is stored.
-func LoadAPIKeysFromEnv(envVar string) (*APIKeyStore, error) {
-	val := os.Getenv(envVar)
-	if val == "" {
-		return nil, fmt.Errorf("security: env var %s is empty", envVar)
-	}
-	f := strings.Fields(val)
-	if len(f) != 3 {
-		return nil, fmt.Errorf("security: env var %s: want \"<machine id> <name> <key>\"", envVar)
-	}
-	m := Machine{ID: identity.MachineID(f[0]), Name: f[1]}
-	if err := validMachine(m); err != nil {
-		return nil, fmt.Errorf("security: env var %s: %w", envVar, err)
-	}
-	store := NewAPIKeyStore()
-	store.keys[sha256.Sum256([]byte(f[2]))] = m
-	return store, nil
-}
-
-// Add hashes the key and adds it to the store for machine m. The plaintext
-// key is never stored in memory.
-func (s *APIKeyStore) Add(m Machine, key string) {
-	h := sha256.Sum256([]byte(key))
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.traceAdd(m)
-	s.keys[h] = m
-}
-
-// Remove removes the keys of machine id.
-func (s *APIKeyStore) Remove(id identity.MachineID) {
+// Remove removes the line of machine id.
+func (s *Store) Remove(id identity.MachineID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	removed := false
@@ -193,56 +156,21 @@ func (s *APIKeyStore) Remove(id identity.MachineID) {
 	}
 }
 
-// Validate checks whether the given key is in the store and returns its
-// machine.
-//
-// The candidate is hashed with SHA-256 before the lock is acquired;
-// the map is then looked up directly in O(1).  Comparing SHA-256 digests via
-// a map lookup does not leak information about the underlying key — a timing
-// side-channel on hash comparison cannot be reversed through SHA-256
-// pre-image resistance, so a constant-time loop is unnecessary here.
-func (s *APIKeyStore) Validate(candidate string) (m Machine, ok bool) {
-	h := sha256.Sum256([]byte(candidate))
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	m, ok = s.keys[h]
-	if m.Cert {
-		return Machine{}, false
-	}
-	return
-}
-
-// HasKeyHash reports whether the key with hex SHA-256 keyHash is in the
-// store (a session minted from it is still backed by a live key).
-func (s *APIKeyStore) HasKeyHash(keyHash string) bool {
-	var h [32]byte
-	if len(keyHash) != 2*len(h) {
-		return false
-	}
-	if _, err := hex.Decode(h[:], []byte(keyHash)); err != nil {
-		return false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	m, ok := s.keys[h]
-	return ok && !m.Cert
-}
-
-// Count returns the number of keys in the store.
-func (s *APIKeyStore) Count() int {
+// Count returns the number of machines in the store.
+func (s *Store) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.keys)
 }
 
-// parseLine reads one machine line: "<machine id> <name> sha256:<hex>
-// [account=<machine id>]", or spki:<hex> for a certificate machine.
+// parseLine reads one machine line: "<machine id> <name> spki:<hex>
+// [account=<machine id>]".
 func parseLine(line string) (Machine, [32]byte, error) {
 	f := strings.Fields(line)
-	if (len(f) != 3 && (len(f) != 4 || !strings.HasPrefix(f[3], accountField))) || (!strings.HasPrefix(f[2], hashPrefix) && !strings.HasPrefix(f[2], spkiPrefix)) {
-		return Machine{}, [32]byte{}, errors.New(`want "<machine id> <name> sha256:<hex> [account=<machine id>]" (a line with a services field, or a key file from before machines: re-add each machine with nfltr-relay keys add)`)
+	if (len(f) != 3 && (len(f) != 4 || !strings.HasPrefix(f[3], accountField))) || !strings.HasPrefix(f[2], spkiPrefix) {
+		return Machine{}, [32]byte{}, errors.New(`want "<machine id> <name> spki:<hex> [account=<machine id>]" (an API key line: keys are gone; enrol the machine with a code, nfltr-relay machines code)`)
 	}
-	m := Machine{ID: identity.MachineID(f[0]), Name: f[1], Cert: strings.HasPrefix(f[2], spkiPrefix)}
+	m := Machine{ID: identity.MachineID(f[0]), Name: f[1]}
 	if len(f) == 4 {
 		m.Account = identity.MachineID(strings.TrimPrefix(f[3], accountField))
 		if m.Account == m.ID {
@@ -257,25 +185,17 @@ func parseLine(line string) (Machine, [32]byte, error) {
 	return m, h, err
 }
 
-// Line is m's key file line for key (its hash; the key itself is never
-// stored).
-func (m Machine) Line(key string) string { return m.line(sha256.Sum256([]byte(key))) }
-
 // line is m's key file line for the key hash h.
 func (m Machine) line(h [32]byte) string {
-	prefix := hashPrefix
-	if m.Cert {
-		prefix = spkiPrefix
-	}
-	l := fmt.Sprintf("%s %s %s%s", m.ID, m.Name, prefix, hex.EncodeToString(h[:]))
+	l := fmt.Sprintf("%s %s %s%s", m.ID, m.Name, spkiPrefix, hex.EncodeToString(h[:]))
 	if m.Account != "" && m.Account != m.ID {
 		l += " " + accountField + string(m.Account)
 	}
 	return l
 }
 
-// decodeHashPrefix decodes a 64-char hex string (the portion after "sha256:")
-// into a [32]byte for storage in APIKeyStore.keys.
+// decodeHashPrefix decodes a 64-char hex string (the portion after "spki:")
+// into a [32]byte for storage in Store.keys.
 func decodeHashPrefix(hexStr string) ([32]byte, error) {
 	b, err := hex.DecodeString(hexStr)
 	if err != nil || len(b) != 32 {
@@ -287,7 +207,7 @@ func decodeHashPrefix(hexStr string) ([32]byte, error) {
 }
 
 // Hashes is a copy of the store's keys: each key's SHA-256 and its machine.
-func (s *APIKeyStore) Hashes() map[[32]byte]Machine {
+func (s *Store) Hashes() map[[32]byte]Machine {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return maps.Clone(s.keys)

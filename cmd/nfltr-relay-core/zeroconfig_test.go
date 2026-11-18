@@ -18,9 +18,9 @@ import (
 )
 
 // TestZeroConfigServe: `serve` without --from-env needs no environment:
-// it listens on loopback, writes a key file 0600 holding one generated key
-// in its working directory, and admits an agent with that key; a second
-// start reuses the file.
+// it listens on loopback, writes a token file 0600 holding one generated
+// token in its working directory, and admits an agent with that token; a
+// second start reuses the file.
 func TestZeroConfigServe(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -67,32 +67,33 @@ func TestZeroConfigServe(t *testing.T) {
 		return ""
 	}
 	grpcAddr := start()
-	path := filepath.Join(dir, zeroKeyFile)
+	path := filepath.Join(dir, zeroTokenFile)
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("key file mode %v, want 0600", fi.Mode().Perm())
+		t.Fatalf("token file mode %v, want 0600", fi.Mode().Perm())
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, rest, ok := strings.Cut(string(data), "# key: ")
-	key, _, _ := strings.Cut(rest, "\n")
-	if !ok || !strings.HasPrefix(key, "rpc_") || strings.Count(string(data), key) != 1 {
-		t.Fatalf("key file holds no generated key")
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	f := strings.Fields(lines[len(lines)-1])
+	if len(f) != 3 || !strings.HasPrefix(f[2], "tok_") {
+		t.Fatalf("token file holds no generated token")
 	}
+	key := f[2]
 	a := agent.New(agent.Config{ServerAddr: grpcAddr, AgentID: "web", APIKey: key, Retries: 1,
 		Routes: []agent.Route{{Backend: "http://127.0.0.1:1"}}, Logger: slog.New(slog.DiscardHandler)})
 	if err := a.Connect(t.Context()); err != nil {
-		t.Fatalf("an agent with the generated key: %v", err)
+		t.Fatalf("an agent with the generated token: %v", err)
 	}
 	a.Close()
 
 	start()
 	if again, _ := os.ReadFile(path); string(again) != string(data) {
-		t.Fatal("a second zero-config start rewrote the key file")
+		t.Fatal("a second zero-config start rewrote the token file")
 	}
 }

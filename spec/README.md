@@ -972,7 +972,7 @@ outside the code's account, a name twice in an account.
 
 | what the spec models | file |
 |---|---|
-| `Revoke`, the line's account | `keyfile/keymanager.go`, `keyfile/apikey.go` |
+| `Revoke`, the line's account | `keyfile/keymanager.go`, `keyfile/store.go` |
 | `Reload` | `keyfile/keyfile_reload.go` |
 | `Owner`, `Resolve` | `keyfile/provider.go` |
 | `MintCode`, `Enrol`, `Reissue`, `Authenticates` | `keyfile/machine_cert.go` |

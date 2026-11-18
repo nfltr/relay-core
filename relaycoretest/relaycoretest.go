@@ -3,12 +3,14 @@
 
 // Package relaycoretest starts a relay core in the test's own process, on
 // loopback ports the kernel picks, as net/http/httptest starts an HTTP
-// server: one call, addresses and an API key back, stopped when the test
+// server: one call, addresses and a token back, stopped when the test
 // ends.
 //
 // The relay is compose.Serve with the frontends nfltr-relay-core links
 // (HTTP ingress and SNI passthrough), TCP sessions on, no TLS, no metrics
-// port and one generated key. Agents (github.com/nfltr/relay/client/agent)
+// port and one generated token of its own provider (a test credential: the
+// key file takes machine certificates only, nfltr/nfltr
+// docs/decisions/api-key-cut-2026-11-15.md). Agents (github.com/nfltr/relay/client/agent)
 // connect to GRPC with Key; the key's clients reach those agents on Proxy
 // (data connections, /connect/, HTTP ingress).
 //
@@ -51,9 +53,9 @@ type Relay struct {
 	Proxy string
 	// Internal serves /ready and /health.
 	Internal string
-	// Key is the API key agents and clients authenticate with: the key of
-	// one machine (Machine); its agents register any service, and its
-	// clients reach them by Ref.
+	// Key is the token agents and clients authenticate with (sent as the
+	// SDK's key): one machine's (Machine); its agents register any
+	// service, and its clients reach them by Ref.
 	Key string
 	// Machine is the key's machine.
 	Machine identity.MachineID
@@ -87,8 +89,6 @@ func New(tb testing.TB) *Relay {
 		tb.Fatalf("relaycoretest: %v", err)
 	}
 	r := &Relay{Key: "rpc_" + hex.EncodeToString(secret), Machine: identity.NewMachineID()}
-	keys := keyfile.NewAPIKeyStore()
-	keys.Add(keyfile.Machine{ID: r.Machine, Name: "test"}, r.Key)
 
 	var ls compose.Ports
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {
@@ -103,7 +103,7 @@ func New(tb testing.TB) *Relay {
 	done := make(chan error, 1)
 	frontends := []frontend.Frontend{httpingress.Frontend{}, sni.Frontend{}}
 	go func() {
-		done <- compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, frontends, keyfile.Provider{Store: keys})
+		done <- compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, frontends, token{r.Key, r.Machine})
 	}()
 	ready := make(chan error, 1)
 	go func() {
@@ -135,4 +135,20 @@ func New(tb testing.TB) *Relay {
 		}
 	})
 	return r
+}
+
+// token is the test relay's provider: its one token is machine m, its own
+// account; any other token is unknown.
+type token struct {
+	key string
+	m   identity.MachineID
+}
+
+func (token) Name() string { return keyfile.ProviderName }
+
+func (t token) Authenticate(_ context.Context, c identity.Credential) (identity.Principal, error) {
+	if c.Token == "" || c.Token != t.key {
+		return identity.Principal{}, identity.ErrUnknownCredential
+	}
+	return identity.Principal{Owner: string(t.m), Machine: t.m, Subject: string(t.m), CacheTTL: keyfile.CredentialCacheTTL}, nil
 }

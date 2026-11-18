@@ -33,7 +33,7 @@ type tracer struct {
 
 var traceN atomic.Int64
 
-func (s *APIKeyStore) trace(e event) {
+func (s *Store) trace(e event) {
 	dir := os.Getenv("RELAYTRACE")
 	if dir == "" {
 		return
@@ -56,29 +56,15 @@ func (s *APIKeyStore) trace(e event) {
 	}
 }
 
-// traceAdd writes m's Generate unless the store holds m already (a second
-// key of one machine is no step of the model); s.mu held.
-func (s *APIKeyStore) traceAdd(m Machine) {
-	for _, x := range s.keys {
-		if x.ID == m.ID {
-			return
-		}
-	}
-	s.trace(event{Ev: "Generate", M: string(m.ID), N: m.Name, A: string(m.AccountOf())})
-}
-
 // traceLoad writes the lines a key file loaded at start holds (Load: the
-// state a restart finds; a certificate machine's with its key), each
-// account's first machine first.
-func (s *APIKeyStore) traceLoad() {
+// state a restart finds, each with its key), each account's first machine
+// first.
+func (s *Store) traceLoad() {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, h := range sortedLines(s.keys) {
-		m, k := s.keys[h], ""
-		if m.Cert {
-			k = keyID(h)
-		}
-		s.trace(event{Ev: "Load", M: string(m.ID), N: m.Name, A: string(m.AccountOf()), K: k})
+		m := s.keys[h]
+		s.trace(event{Ev: "Load", M: string(m.ID), N: m.Name, A: string(m.AccountOf()), K: keyID(h)})
 	}
 }
 
@@ -100,11 +86,12 @@ func sortedLines(keys map[[32]byte]Machine) [][32]byte {
 	return hs
 }
 
-// traceLines writes the lines next has and old lacks (Generate: each
-// account's first machine before the machines that joined it) and the
-// machines old has and next lacks (Revoke). A line whose key changed in
-// the file is neither: the model has no key of a key line.
-func (s *APIKeyStore) traceLines(old, next map[[32]byte]Machine) {
+// traceLines writes the lines next has and old lacks (Load: a line an
+// edit of the file added, as a restart would find it; each account's first
+// machine before the machines that joined it) and the machines old has and
+// next lacks (Revoke). A line whose key changed in the file is neither (a
+// rekey by edit, outside the model).
+func (s *Store) traceLines(old, next map[[32]byte]Machine) {
 	ids := func(keys map[[32]byte]Machine) map[string]Machine {
 		out := map[string]Machine{}
 		for _, m := range keys {
@@ -115,7 +102,7 @@ func (s *APIKeyStore) traceLines(old, next map[[32]byte]Machine) {
 	o, n := ids(old), ids(next)
 	for _, h := range sortedLines(next) {
 		if m := next[h]; o[string(m.ID)].ID == "" {
-			s.trace(event{Ev: "Generate", M: string(m.ID), N: m.Name, A: string(m.AccountOf())})
+			s.trace(event{Ev: "Load", M: string(m.ID), N: m.Name, A: string(m.AccountOf()), K: keyID(h)})
 		}
 	}
 	for _, id := range slices.Sorted(func(yield func(string) bool) {
@@ -129,7 +116,7 @@ func (s *APIKeyStore) traceLines(old, next map[[32]byte]Machine) {
 	}
 }
 
-// keyID names a key (its SPKI's or token's SHA-256) in the trace.
+// keyID names a key (its SPKI's SHA-256) in the trace.
 func keyID(h [32]byte) string { return hex.EncodeToString(h[:6]) }
 
 // codeID names a code in the trace.

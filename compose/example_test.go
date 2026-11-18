@@ -12,14 +12,14 @@ import (
 	"os"
 
 	"github.com/nfltr/relay-core/compose"
-	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/config"
 	flag "github.com/spf13/pflag"
 )
 
-// ExampleServe runs a relay core on loopback listeners with one API key
-// until its context ends; examples/minimal adds an agent and a client.
+// ExampleServe runs a relay core on loopback listeners with a key file's
+// provider (machine certificates) until its context ends; examples/minimal
+// adds an agent and a client.
 func ExampleServe() {
 	if flag.CommandLine.Lookup(config.GrpcServerPort) == nil { // the relay's settings, once per process
 		args := os.Args
@@ -27,8 +27,7 @@ func ExampleServe() {
 		config.SetDefaultFlags()
 		os.Args = args
 	}
-	keys := keyfile.NewAPIKeyStore()
-	keys.Add(keyfile.Machine{ID: identity.NewMachineID(), Name: "demo"}, "rpc_example-key")
+	keys := keyfile.NewStore()
 
 	var ls compose.Ports
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {

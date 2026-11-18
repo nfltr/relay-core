@@ -9,9 +9,8 @@ package keyfile
 
 type tracer struct{}
 
-func (*APIKeyStore) trace(event)                          {}
-func (*APIKeyStore) traceAdd(Machine)                     {}
-func (*APIKeyStore) traceLoad()                           {}
-func (*APIKeyStore) traceLines(_, _ map[[32]byte]Machine) {}
-func keyID([32]byte) string                               { return "" }
-func codeID(string) string                                { return "" }
+func (*Store) trace(event)                          {}
+func (*Store) traceLoad()                           {}
+func (*Store) traceLines(_, _ map[[32]byte]Machine) {}
+func keyID([32]byte) string                         { return "" }
+func codeID(string) string                          { return "" }

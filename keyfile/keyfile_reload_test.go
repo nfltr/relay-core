@@ -34,11 +34,11 @@ func writeKeys(t *testing.T, path string, lines ...string) {
 
 // reloadingManager is a key manager over a key file holding lines, with
 // the subjects OnRevoke was called with.
-func reloadingManager(t *testing.T, lines ...string) (km *KeyManager, store *APIKeyStore, path string, revoked func() []string) {
+func reloadingManager(t *testing.T, lines ...string) (km *KeyManager, store *Store, path string, revoked func() []string) {
 	t.Helper()
 	path = filepath.Join(t.TempDir(), "api-keys")
 	writeKeys(t, path, lines...)
-	store, err := LoadAPIKeys(path)
+	store, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestKeyManagerReload(t *testing.T) {
 		t.Fatalf("revoked %v, OnRevoke %v, want %v", got, revoked(), want)
 	}
 	for key, want := range map[string]string{"key-a": "a", "key-c2": "c", "key-d": "d", "key-b": "", "key-c": ""} {
-		if m, _ := store.Validate(key); m.Name != want {
+		if m, _ := lookup(store, key); m.Name != want {
 			t.Errorf("Validate(%s) = %q, want %q", key, m.Name, want)
 		}
 	}
@@ -120,7 +120,7 @@ func TestKeyManagerReloadKeepsKeysOnBadFile(t *testing.T) {
 			if len(revoked()) != 0 || store.Count() != 2 || len(km.List()) != 2 {
 				t.Fatalf("revoked %v, %d keys, %d records; want none revoked, 2 kept", revoked(), store.Count(), len(km.List()))
 			}
-			if m, ok := store.Validate("key-b"); !ok || m.Name != "b" {
+			if m, ok := lookup(store, "key-b"); !ok || m.Name != "b" {
 				t.Fatal("key-b no longer validates")
 			}
 		})
@@ -133,8 +133,8 @@ func TestKeyManagerReloadRekeyCutsBeforeNewKey(t *testing.T) {
 	km, store, path, _ := reloadingManager(t, "a:key-a")
 	var during []bool
 	km.OnRevoke(func(string) {
-		_, oldOK := store.Validate("key-a")
-		_, newOK := store.Validate("key-a2")
+		_, oldOK := lookup(store, "key-a")
+		_, newOK := lookup(store, "key-a2")
 		during = []bool{oldOK, newOK}
 	})
 	writeKeys(t, path, "a:key-a2")
@@ -144,7 +144,7 @@ func TestKeyManagerReloadRekeyCutsBeforeNewKey(t *testing.T) {
 	if !slices.Equal(during, []bool{false, false}) {
 		t.Fatalf("during OnRevoke old/new key valid = %v, want neither", during)
 	}
-	if m, _ := store.Validate("key-a2"); m.Name != "a" {
+	if m, _ := lookup(store, "key-a2"); m.Name != "a" {
 		t.Fatal("the new key does not validate after the reload")
 	}
 }
@@ -244,28 +244,32 @@ func TestKeyManagerWritesKeyFileAtomically(t *testing.T) {
 	}
 	km := NewKeyManager(path, nil, testKeyManagerLogger())
 	before, _ := os.Stat(path)
-	resp, err := km.Generate("a")
+	code, err := km.MintCode("a", "", time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := km.Enrol(code, &newKey(t).PublicKey, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.Stat(path)
 	if os.SameFile(before, after) {
-		t.Fatal("Generate appended in place, want the file replaced")
+		t.Fatal("Enrol appended in place, want the file replaced")
 	}
 	if after.Mode().Perm() != 0o640 {
 		t.Fatalf("mode %v, want 0640 kept", after.Mode().Perm())
 	}
 	data, _ := os.ReadFile(path)
-	if !strings.HasPrefix(string(data), "# header\n"+string(resp.MachineID)+" a sha256:") {
-		t.Fatalf("file %q, want the header then the new key", data)
+	if !strings.HasPrefix(string(data), "# header\n"+string(m.ID)+" a spki:") {
+		t.Fatalf("file %q, want the header then the new line", data)
 	}
-	if err := km.Revoke(resp.MachineID); err != nil {
+	if err := km.Revoke(m.ID); err != nil {
 		t.Fatal(err)
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
-		t.Fatalf("%d entries in the directory, want only the key file", len(entries))
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 { // the key file and enrol-codes/
+		t.Fatalf("%d entries in the directory, want only the key file and the codes", len(entries))
 	}
-	if store, err := readAPIKeys(path); err != nil || store.Count() != 0 {
+	if store, err := read(path); err != nil || store.Count() != 0 {
 		t.Fatalf("after revoking the last key: %v keys, %v", store, err)
 	}
 }
@@ -281,7 +285,7 @@ func TestKeyManagerReloadRenameCutsNothing(t *testing.T) {
 	if got := revoked(); len(got) != 0 {
 		t.Fatalf("revoked %v, want none (a rename)", got)
 	}
-	if m, ok := store.Validate("key-a"); !ok || m.ID != tm("a") || m.Name != "a2" {
+	if m, ok := lookup(store, "key-a"); !ok || m.ID != tm("a") || m.Name != "a2" {
 		t.Fatalf("renamed machine: %+v %v", m, ok)
 	}
 }

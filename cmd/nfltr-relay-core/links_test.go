@@ -70,8 +70,8 @@ func TestModuleLinksOnlyItsDependencies(t *testing.T) {
 	}
 }
 
-// TestCoreBinaryLinksTheCore: the guard binary links the core, the key
-// file and the frontends it attaches.
+// TestCoreBinaryLinksTheCore: the guard binary links the core and the
+// frontends it attaches.
 func TestCoreBinaryLinksTheCore(t *testing.T) {
 	out, err := exec.Command("go", "list", "-deps", ".").CombinedOutput()
 	if err != nil {
@@ -79,7 +79,7 @@ func TestCoreBinaryLinksTheCore(t *testing.T) {
 	}
 	deps := strings.Fields(string(out))
 	const m = "github.com/nfltr/relay-core/"
-	for _, want := range []string{m + "core/session", m + "core/directory", m + "keyfile", m + "compose", m + "frontend/connect", m + "frontend/http", m + "frontend/sni"} {
+	for _, want := range []string{m + "core/session", m + "core/directory", m + "compose", m + "frontend/connect", m + "frontend/http", m + "frontend/sni"} {
 		if !slices.Contains(deps, want) {
 			t.Errorf("does not link %s", want)
 		}

@@ -18,7 +18,6 @@ import (
 
 	"github.com/nfltr/relay-core/compose"
 	"github.com/nfltr/relay-core/core/identity"
-	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/config"
 	"github.com/nfltr/relay/client/agent"
 	pb "github.com/nfltr/relay/proto/pb"
@@ -32,17 +31,15 @@ func main() {
 	os.Args = os.Args[:1]
 	config.SetDefaultFlags() // the relay's settings: defaults, then the environment
 	viper.Set("tcp.enabled", true)
-	const key = "rpc_minimal-example-key-0123456789"
-	keys := keyfile.NewAPIKeyStore()
+	const key = "minimal-example-token-0123456789"
 	machine := identity.NewMachineID()
-	keys.Add(keyfile.Machine{ID: machine, Name: "demo"}, key)
 
 	var ls compose.Ports // the relay's ports: clients, agents, /ready
 	for _, l := range []*net.Listener{&ls.Proxy, &ls.GRPC, &ls.Internal} {
 		*l = must(net.Listen("tcp", "127.0.0.1:0"))
 	}
 	go func() {
-		log.Fatal(compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, nil, keyfile.Provider{Store: keys}))
+		log.Fatal(compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, nil, tokens{key, machine}))
 	}()
 
 	echo := must(net.Listen("tcp", "127.0.0.1:0")) // the service behind the agent
@@ -85,3 +82,20 @@ func must[T any](v T, err error) T {
 }
 
 func must2[T, U any](v T, u U, err error) (T, U) { return must(v, err), u }
+
+// tokens is an identity.Provider: its one token is machine m, its own
+// account; any other token is unknown (the key file authenticates machine
+// certificates, which this example's plain ports cannot ask for).
+type tokens struct {
+	secret string
+	m      identity.MachineID
+}
+
+func (tokens) Name() string { return "tokens" }
+
+func (t tokens) Authenticate(_ context.Context, c identity.Credential) (identity.Principal, error) {
+	if c.Token == "" || c.Token != t.secret {
+		return identity.Principal{}, identity.ErrUnknownCredential
+	}
+	return identity.Principal{Owner: string(t.m), Machine: t.m, Subject: string(t.m)}, nil
+}

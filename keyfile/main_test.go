@@ -38,3 +38,23 @@ func ids(names ...string) []string {
 
 // sortedIDs is ids sorted, as Reload returns its revoked machines.
 func sortedIDs(names ...string) []string { return slices.Sorted(slices.Values(ids(names...))) }
+
+// lookup is the machine whose line binds the key named key (kl's hash).
+func lookup(s *Store, key string) (Machine, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m, ok := s.keys[sha256.Sum256([]byte(key))]
+	return m, ok
+}
+
+// byID is machine id's line in s.
+func byID(s *Store, id identity.MachineID) (Machine, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, m := range s.keys {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return Machine{}, false
+}

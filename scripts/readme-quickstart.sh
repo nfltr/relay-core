@@ -26,7 +26,7 @@ trap 'rm -rf "$work"' EXIT
 # clone builds from source), with none of the relay's or nfltr's settings
 # from this environment.
 (
-	cd "$work" && exec env -u NFLTR_API_KEY -u SECURITY_APIKEY_FILE -u LISTEN_ADDRESS -u TLS_ENABLE GOWORK=off \
+	cd "$work" && exec env -u RELAY_CORE_TOKEN -u RELAY_CORE_TOKEN_FILE -u LISTEN_ADDRESS -u TLS_ENABLE GOWORK=off \
 		PROXY_PORT="$proxy" GRPC_PORT="$grpc" INTERNAL_PORT=0 METRICS_PORT=0 bash -euo pipefail -c "$block"
 ) >"$work.out" 2>&1 &
 pid=$!

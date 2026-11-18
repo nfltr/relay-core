@@ -4,21 +4,20 @@
 package keyfile_test
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/keyfile"
 )
 
 // A key file holds one machine per line: "<machine id> <name>
-// sha256:<hex of the key's SHA-256>". The store keeps only the keys'
-// hashes, and the provider authenticates a credential as its machine,
-// whose agents are its own id's refs.
+// spki:<hex of its public key's SHA-256>". A machine joins with a
+// single-use code (KeyManager.MintCode, Enrol); the provider authenticates
+// its certificate, signed by the data dir's machine CA, as that machine,
+// whose agents are its own id's refs. The file holds no secret.
 func Example() {
 	dir, err := os.MkdirTemp("", "keyfile")
 	if err != nil {
@@ -26,25 +25,17 @@ func Example() {
 	}
 	defer os.RemoveAll(dir) //nolint:errcheck
 	path := filepath.Join(dir, "api-keys")
-	sum := sha256.Sum256([]byte("rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa"))
-	line := "m-aaaaaaaaaaaaaaaaaaaaaaaaaa web sha256:" + hex.EncodeToString(sum[:]) + "\n"
+	sum := sha256.Sum256([]byte("the machine key's SubjectPublicKeyInfo"))
+	line := "m-aaaaaaaaaaaaaaaaaaaaaaaaaa web spki:" + hex.EncodeToString(sum[:]) + "\n"
 	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
 		panic(err)
 	}
 
-	store, err := keyfile.LoadAPIKeys(path)
+	store, err := keyfile.Load(path)
 	if err != nil {
 		panic(err)
 	}
-	m, ok := store.Validate("rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa")
-	fmt.Println(m.ID, m.Name, ok)
-	_, ok = store.Validate("rpc_wrong")
-	fmt.Println(ok)
-
-	p, err := keyfile.Provider{Store: store}.Authenticate(context.Background(), identity.Credential{Token: "rpc_examplekeyaaaaaaaaaaaaaaaaaaaaaaaaa"})
-	fmt.Println(p.Machine, err)
+	fmt.Println(store.Count())
 	// Output:
-	// m-aaaaaaaaaaaaaaaaaaaaaaaaaa web true
-	// false
-	// m-aaaaaaaaaaaaaaaaaaaaaaaaaa <nil>
+	// 1
 }

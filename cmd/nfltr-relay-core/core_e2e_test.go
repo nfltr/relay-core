@@ -41,7 +41,7 @@ type coreProc struct {
 }
 
 // startCoreProcess runs nfltr-relay-core serve --from-env (this test binary
-// as it) on loopback ports the kernel picks, the key file identity holding
+// as it) on loopback ports the kernel picks, the token provider holding
 // testKey, TCP on, and env on top; the addresses come from its "relay core
 // serving" line.
 func startCoreProcess(t *testing.T, env ...string) *coreProc {
@@ -93,13 +93,13 @@ func startCoreProcess(t *testing.T, env ...string) *coreProc {
 }
 
 // coreEnv is the environment of an nfltr-relay-core child (TestMain):
-// loopback ports the kernel picks, the key file identity holding testKey,
+// loopback ports the kernel picks, the token provider holding testKey,
 // TCP on, and env on top.
 func coreEnv(t *testing.T, env ...string) []string {
-	return append(append(os.Environ(), childEnv+"=1", "NFLTR_API_KEY="+testKey, "TCP_ENABLED=true",
+	return append(append(os.Environ(), childEnv+"=1", tokenEnv+"="+testKey, "TCP_ENABLED=true",
 		"PROXY_PORT=0", "GRPC_PORT=0", "INTERNAL_PORT=0", "METRICS_PORT=0",
 		"LISTEN_ADDRESS=127.0.0.1", "INTERNAL_ADDRESS=127.0.0.1", "TERMINATION_GRACE_PERIODSECONDS=20",
-		"SECURITY_APIKEY_FILE="+t.TempDir()+"/none"), env...)
+		tokenFileEnv+"="+t.TempDir()+"/none"), env...)
 }
 
 // serveAgent connects agent "web" with testKey's key (the relay SDK's

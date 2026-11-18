@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/nfltr/relay-core/core/identity"
-	"github.com/nfltr/relay-core/keyfile"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
@@ -21,12 +20,12 @@ import (
 // refusing is a provider that knows its credentials and refuses them for
 // err (a prepaid account whose balance is exhausted).
 type refusing struct {
-	keyfile.Provider
+	tokens
 	err error
 }
 
 func (r refusing) Authenticate(ctx context.Context, c identity.Credential) (identity.Principal, error) {
-	p, err := r.Provider.Authenticate(ctx, c)
+	p, err := r.tokens.Authenticate(ctx, c)
 	if err == nil && r.err != nil {
 		return identity.Principal{}, r.err
 	}
@@ -52,15 +51,15 @@ func wantBalanceStatus(t *testing.T, where string, err error) {
 // and a stream its cut ended (RevokeCause) ends with the same: a client
 // that stops on Unauthenticated keeps retrying instead.
 func TestBalanceExhaustedTypedOnGRPC(t *testing.T) {
-	store := keyfile.NewAPIKeyStore()
-	store.Add(testMachine, "k")
+	store := tokens{}
+	store["k"] = testMachine
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-api-key", "k"))
 
-	refuse := identity.NewAuthenticator("accounts", refusing{keyfile.Provider{Store: store}, identity.ErrBalanceExhausted})
+	refuse := identity.NewAuthenticator("accounts", refusing{store, identity.ErrBalanceExhausted})
 	_, err := MetadataPrincipal(ctx, refuse)
 	wantBalanceStatus(t, "admission", err)
 
-	auth := identity.NewAuthenticator("accounts", keyfile.Provider{Store: store})
+	auth := identity.NewAuthenticator("accounts", store)
 	err = AuthStreamInterceptor(auth)(nil, &fakeServerStream{ctx: ctx}, &grpc.StreamServerInfo{}, func(_ any, ss grpc.ServerStream) error {
 		p, _ := identity.FromContext(ss.Context())
 		auth.RevokeCause(p.Key(), identity.ErrBalanceExhausted)

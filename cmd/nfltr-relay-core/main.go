@@ -3,12 +3,12 @@
 
 // Command nfltr-relay-core runs the relay core (compose.Serve) on its own:
 // one replica's sessions (core/session) and in-process directory, its gRPC
-// agent port authenticated by the key file (keyfile, grpcauth), the proxy
-// port where key holders reach their agents (frontend/connect, HTTP
+// agent port authenticated by its one token (token.go, grpcauth), the
+// proxy port where the token's holders reach their agents (frontend/connect, HTTP
 // ingress), and the internal (/ready, /health) and metrics ports. It links
 // no database and no hosted service.
 //
-// Agents connect and register; with tcp.enabled, the key's clients open
+// Agents connect and register; with tcp.enabled, the token's clients open
 // sessions to their agents' ports and services on the proxy port's
 // /connect/ (data connections, HTTP/2 streams, WebSocket). On SIGTERM it
 // drains: no new client, open sessions run to the grace period's end. The
@@ -17,12 +17,12 @@
 // and a non-loopback listen.address is refused.
 //
 //	nfltr-relay-core serve              zero-config: loopback only, TCP sessions on,
-//	                                    the key file ./nfltr-relay-core.keys
-//	                                    (created 0600 with a generated key when absent)
+//	                                    the token file ./nfltr-relay-core.token
+//	                                    (created 0600 with a generated token when absent)
 //	nfltr-relay-core serve --from-env   every setting from the environment
 //	                                    (PROXY_PORT, GRPC_PORT, INTERNAL_PORT,
 //	                                    METRICS_PORT, LISTEN_ADDRESS,
-//	                                    SECURITY_APIKEY_FILE, NFLTR_API_KEY,
+//	                                    RELAY_CORE_TOKEN, RELAY_CORE_TOKEN_FILE,
 //	                                    TCP_ENABLED, TLS_ENABLE, ...)
 //	nfltr-relay-core version
 //
@@ -31,13 +31,10 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -45,9 +42,7 @@ import (
 	"syscall"
 
 	"github.com/nfltr/relay-core/compose"
-	"github.com/nfltr/relay-core/core/identity"
 	"github.com/nfltr/relay-core/internal/platform/logging"
-	"github.com/nfltr/relay-core/keyfile"
 	"github.com/nfltr/relay-core/platform/buildinfo"
 	"github.com/nfltr/relay-core/platform/config"
 	_ "github.com/nfltr/relay-core/platform/nondumpable"
@@ -83,8 +78,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		ls, err = listen(tlsCfg)
 	}
+	var tok token
 	if err == nil {
-		err = compose.Serve(ctx, logger, ls, frontends)
+		tok, err = loadToken()
+	}
+	if err == nil {
+		err = compose.Serve(ctx, logger, ls, frontends, tok)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "nfltr-relay-core: %v\n", err)
@@ -93,43 +92,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// zeroKeyFile is the key file of a zero-config start, in the working
-// directory.
-const zeroKeyFile = "nfltr-relay-core.keys"
-
 // zeroConfig makes the defaults of `serve` without --from-env: loopback
-// ports, TCP sessions on, and the key file zeroKeyFile, created 0600 with
-// one generated machine "quickstart" (its key also in a
-// comment, so a local agent and client can read it) when it does not
-// exist. The environment still overrides each default;
-// the key file then is the one security.apikey.file names.
+// ports, TCP sessions on, and the token file (writeZeroToken). The
+// environment still overrides each default.
 func zeroConfig(logger *slog.Logger) error {
 	viper.SetDefault("listen.address", "127.0.0.1")
 	viper.SetDefault("internal.address", "127.0.0.1")
 	viper.SetDefault("tcp.enabled", true)
-	viper.SetDefault("security.apikey.file", zeroKeyFile)
-	path := viper.GetString("security.apikey.file")
-	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-		return err // it exists (nil), or it cannot be read
-	}
-	secret := make([]byte, 24)
-	if _, err := rand.Read(secret); err != nil {
-		return err
-	}
-	key := "rpc_" + hex.EncodeToString(secret)
-	m := keyfile.Machine{ID: identity.NewMachineID(), Name: "quickstart"}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- the operator's key file path
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(f, "# nfltr-relay-core zero-config machine %s (%s): agents and clients send its key\n# key: %s\n%s\n", m.Name, m.ID, key, m.Line(key))
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		logger.Info("generated an API key", "file", path)
-	}
-	return err
+	return writeZeroToken(logger)
 }
 
 // serverTLS is the TLS of the proxy and gRPC ports (and the SNI router's

@@ -22,8 +22,8 @@ Licensed Apache-2.0 ([LICENSE](LICENSE), [NOTICE](NOTICE)). Security reports:
 
 Go (the version `go.mod` names), git and a POSIX shell. This clones the
 module, builds the relay and the quickstart program, starts the relay with
-no configuration (loopback only; clients on 8080, agents on 9090; a key
-written to `nfltr-relay-core.keys`, mode 0600), connects an agent in front of
+no configuration (loopback only; clients on 8080, agents on 9090; a token
+written to `nfltr-relay-core.token`, mode 0600), connects an agent in front of
 a TCP echo server, and sends bytes from a client through the relay to it:
 
 <!-- quickstart -->
@@ -32,7 +32,7 @@ git clone https://github.com/nfltr/relay-core && cd relay-core
 go build -o bin/ ./cmd/nfltr-relay-core ./examples/quickstart
 bin/nfltr-relay-core serve 2>relay.log &
 trap "kill $!" EXIT
-bin/quickstart -key-file nfltr-relay-core.keys -agents 127.0.0.1:9090 -clients 127.0.0.1:8080
+bin/quickstart -token-file nfltr-relay-core.token -agents 127.0.0.1:9090 -clients 127.0.0.1:8080
 ```
 
 It prints `echoed: hello through nfltr-relay-core`. `make readme-quickstart`
@@ -51,19 +51,22 @@ plaintext and says what to set. Bring your own certificate and key file:
 
 ```sh
 LISTEN_ADDRESS=0.0.0.0 TLS_ENABLE=true TLS_CERT_FILE=relay.crt TLS_KEY_FILE=relay.key \
-SECURITY_APIKEY_FILE=nfltr-relay-core.keys TCP_ENABLED=true bin/nfltr-relay-core serve --from-env
+RELAY_CORE_TOKEN_FILE=nfltr-relay-core.token TCP_ENABLED=true bin/nfltr-relay-core serve --from-env
 ```
 
-The key file is the relay's machine store: each line is `<machine id>
-<name> sha256:<hex>` (a machine and its key's hash; a start on loopback
-writes one, machine `quickstart`, with its key in a comment). An agent
+The guard binary authenticates one token (`<machine id> <name> <token>`,
+the last line of `RELAY_CORE_TOKEN_FILE`, or `RELAY_CORE_TOKEN`; a start on
+loopback writes one, machine `quickstart`): its own identity provider, as
+[examples/custom-auth](examples/custom-auth/main.go)'s. A composition
+brings its providers (`compose.Serve` without one returns
+`ErrNoProviders`); the key file (`keyfile`) is the machine store of a relay
+without a database whose machines enrol with single-use codes and present
+certificates of its machine CA (nfltr-relay serve --data-dir). An agent
 connects as any service of its machine (a valid service name) and is
-reached as its agent ref
-`<machine id>-<service>`; agents and clients send the key, and a key whose
-machine is not in the file is refused (`machine_not_enrolled`). `serve --from-env` reads every
-setting from the environment (`PROXY_PORT`, `GRPC_PORT`, `INTERNAL_PORT`,
-`METRICS_PORT`, `LISTEN_ADDRESS`, `SECURITY_APIKEY_FILE`, `NFLTR_API_KEY`,
-`TCP_ENABLED`, `TLS_*`, ...; `platform/config` lists them, a key's
+reached as its agent ref `<machine id>-<service>`. `serve --from-env` reads
+every setting from the environment (`PROXY_PORT`, `GRPC_PORT`,
+`INTERNAL_PORT`, `METRICS_PORT`, `LISTEN_ADDRESS`, `RELAY_CORE_TOKEN`,
+`RELAY_CORE_TOKEN_FILE`, `TCP_ENABLED`, `TLS_*`, ...; `platform/config` lists them, a key's
 environment variable is its name upper-cased with `.` and `-` as `_`).
 `/ready` and `/health` are on the internal port, Prometheus metrics on the
 metrics port; on SIGTERM it drains (no new clients, open sessions run to the
