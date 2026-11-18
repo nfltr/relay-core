@@ -51,6 +51,7 @@ jar=$(echo "$tools" | sed -n 2p)
 work=$(mktemp -d)
 # TLC runs go through scripts/cicache.sh: kept only when this script passes.
 cicache=$PWD/scripts/cicache.sh
+[ -x "$cicache" ] || { echo "spec.sh: $cicache missing or not executable" >&2; exit 2; }
 CICACHE_STAGE=$("$cicache" begin || true)
 export CICACHE_STAGE
 trap 'st=$?; "$cicache" end "$CICACHE_STAGE" $st || st=1; rm -rf "$work"; exit $st' EXIT
@@ -163,11 +164,11 @@ relayspec() {
 	*-0.*-*) rev=${v##*-} ;; # a pseudo-version: its commit
 	*) rev=client/$v ;;
 	esac
-	for f in scripts/spec.sh scripts/fetch-tla.sh spec/CallCredit.tla spec/TraceCallCredit.tla spec/CallLifecycle.tla spec/TraceCallLifecycle.tla; do
+	for f in scripts/spec.sh scripts/fetch-tla.sh scripts/cicache.sh spec/CallCredit.tla spec/TraceCallCredit.tla spec/CallLifecycle.tla spec/TraceCallLifecycle.tla; do
 		mkdir -p "$work/relay/$(dirname "$f")"
 		curl -fsSL --retry 3 -o "$work/relay/$f" "https://raw.githubusercontent.com/nfltr/relay/$rev/$f"
 	done
-	chmod +x "$work/relay/scripts/spec.sh" "$work/relay/scripts/fetch-tla.sh"
+	chmod +x "$work/relay/scripts/spec.sh" "$work/relay/scripts/fetch-tla.sh" "$work/relay/scripts/cicache.sh"
 	echo "$work/relay"
 }
 
