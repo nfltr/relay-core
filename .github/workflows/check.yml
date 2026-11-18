@@ -3,7 +3,7 @@
 
 # make check (build, vet, -race tests, fuzz-short, gosec, semgrep,
 # govulncheck, check-publish, the binary size, the examples and the
-# README's quickstart), the TLA+ models' invariants and mutants
+# README's quickstart; its three parts as jobs), the TLA+ models' invariants and mutants
 # (spec/README.md) and the API check against the latest release, on every
 # push and pull request; weekly, every fuzz target for 5 minutes each and
 # the models' liveness, random walks and trace validation. Go is the
@@ -20,6 +20,44 @@ on:
 permissions:
   contents: read
 jobs:
+  # make check's three parts (Makefile), longest first: make ci
+  # (scripts/ci.sh) starts the jobs in this order, at once, in one checkout.
+  race:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make test-race
+  check-static:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make check-static
+  fuzz:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make fuzz-short
   api:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
@@ -37,8 +75,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make ${{ matrix.target }}
-  # Fail fast: the cheap checks (each under a minute) run first (make ci
-  # runs the jobs in order), before make check's tests and the TLC models.
+  # The cheap checks (each under a minute) fail the run while the others
+  # still run.
   static:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
@@ -59,18 +97,6 @@ jobs:
       # the model's bindings against the code (spec/proverif/README.md "Bindings")
       - run: make spec-bindings
       - run: make check-spec-drift
-  check:
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - run: make check
   spec:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
