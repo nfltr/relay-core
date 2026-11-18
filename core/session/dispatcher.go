@@ -507,14 +507,22 @@ func sessionCredential(apiKeyHash string) string {
 	return hashAPIKey("nfltr-session-owner:" + apiKeyHash)[:32]
 }
 
-// streamCredential is sessionCredential for the API key a stream connected
-// with.
-func streamCredential(ctx context.Context) string {
+// streamKeyHash names what a stream connected with, the principal allowed
+// to take its session over: its token's hash, else its principal's
+// provider and machine (a machine certificate: one machine, whichever key
+// it holds now), "" neither.
+func streamKeyHash(ctx context.Context) string {
 	if key := firstIncoming(ctx, "x-api-key"); key != "" {
-		return sessionCredential(hashAPIKey(key))
+		return hashAPIKey(key)
+	}
+	if p, ok := identity.FromContext(ctx); ok && p.Machine != "" {
+		return hashAPIKey("principal:" + p.Provider + "/" + string(p.Machine))
 	}
 	return ""
 }
+
+// streamCredential is sessionCredential of streamKeyHash.
+func streamCredential(ctx context.Context) string { return sessionCredential(streamKeyHash(ctx)) }
 
 // ---------------------------------------------------------------------------
 // Shared agent-lifecycle helpers

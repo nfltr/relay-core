@@ -46,11 +46,8 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 		return err
 	}
 
-	// The API key identifies the principal allowed to take this session over.
-	var apiKeyHash string
-	if key := firstIncoming(stream.Context(), "x-api-key"); key != "" {
-		apiKeyHash = hashAPIKey(key)
-	}
+	// The credential names the principal allowed to take this session over.
+	apiKeyHash := streamKeyHash(stream.Context())
 
 	sessionCtx, cancel := context.WithCancelCause(stream.Context()) // will cancel if `stream context` cancels
 	defer cancel(nil)
