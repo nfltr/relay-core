@@ -240,3 +240,31 @@ func TestCodeJoinsAccount(t *testing.T) {
 		t.Fatal("a second machine named node in the account")
 	}
 }
+
+// TestWritersOfOneFileKeepEachOthersLines: two managers of one key file
+// (the running relay and `nfltr-relay machines` in another process, each
+// with the file as it loaded it) never drop a line the other wrote, nor
+// bring back one the other removed (editFile: locked read-modify-write).
+func TestWritersOfOneFileKeepEachOthersLines(t *testing.T) {
+	relay, _, ca := certManager(t)
+	cli := NewKeyManager(relay.filePath, nil, slog.New(slog.DiscardHandler)) // loaded the empty file
+	x := enrol(t, relay, ca, "x", "")
+	y := enrol(t, cli, ca, "y", "") // cli's memory holds no x
+	if err := cli.Revoke(y.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.Rebind(x.ID, &newKey(t).PublicKey); err != nil { // relay's memory never saw y go
+		t.Fatal(err)
+	}
+	got, err := Load(relay.filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[identity.MachineID]bool{}
+	for _, m := range got.Hashes() {
+		ids[m.ID] = true
+	}
+	if !ids[x.ID] || ids[y.ID] || len(ids) != 1 {
+		t.Fatalf("key file holds %v: want only x %s (y %s revoked)", ids, x.ID, y.ID)
+	}
+}

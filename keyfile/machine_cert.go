@@ -187,7 +187,7 @@ func (km *KeyManager) Rebind(id identity.MachineID, pub crypto.PublicKey) error 
 	if km.onRevoke != nil {
 		km.onRevoke(string(id))
 	}
-	return km.rewriteFile()
+	return km.setLine(id, m.line(h))
 }
 
 // MachineByCert is the certificate machine chain (leaf first) names: the

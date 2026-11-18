@@ -266,8 +266,8 @@ func TestKeyManagerWritesKeyFileAtomically(t *testing.T) {
 	if err := km.Revoke(m.ID); err != nil {
 		t.Fatal(err)
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 2 { // the key file and enrol-codes/
-		t.Fatalf("%d entries in the directory, want only the key file and the codes", len(entries))
+	if entries, _ := os.ReadDir(dir); len(entries) != 3 { // the key file, its writers' .lock and enrol-codes/: no temporary file left
+		t.Fatalf("%d entries in the directory, want only the key file, its lock and the codes", len(entries))
 	}
 	if store, err := read(path); err != nil || store.Count() != 0 {
 		t.Fatalf("after revoking the last key: %v keys, %v", store, err)

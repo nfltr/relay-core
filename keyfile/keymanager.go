@@ -7,9 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"os"
 
-	"strings"
 	"sync"
 	"time"
 
@@ -112,7 +110,7 @@ func (km *KeyManager) Revoke(id identity.MachineID) error {
 		km.onRevoke(string(id))
 	}
 	delete(km.records, id)
-	if err := km.rewriteFile(); err != nil {
+	if err := km.setLine(id, ""); err != nil {
 		return fmt.Errorf("persist revocation: %w", err)
 	}
 	km.logger.Info("security: revoked machine", "machine_id", id)
@@ -136,32 +134,19 @@ func (km *KeyManager) appendLine(m Machine, h [32]byte) error {
 	if km.filePath == "" {
 		return nil // no file persistence (a test's store)
 	}
-	data, err := os.ReadFile(km.filePath) // #nosec G304 -- operator-configured key file
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		data = append(data, '\n')
-	}
-	data = append(append(data, m.line(h)...), '\n')
-	return writeFileAtomic(km.filePath, data)
+	return editFile(km.filePath, func(lines []string) []string { return append(lines, m.line(h)) })
 }
 
-// rewriteFile rebuilds the key file from the current store contents:
-// "<machine id> <name> spki:<hex> [account=<machine id>]".
-func (km *KeyManager) rewriteFile() error {
+// setLine makes machine id's line in the key file line ("" removes it).
+func (km *KeyManager) setLine(id identity.MachineID, line string) error {
 	if km.filePath == "" {
 		return nil
 	}
-
-	km.store.mu.RLock()
-	var lines []string
-	lines = append(lines, "# Machines managed by the relay (do not edit manually)")
-	lines = append(lines, "# Format: <machine id> <name> spki:<hex_hash> [account=<machine id>]")
-	for hash, m := range km.store.keys {
-		lines = append(lines, m.line(hash))
-	}
-	km.store.mu.RUnlock()
-
-	return writeFileAtomic(km.filePath, []byte(strings.Join(lines, "\n")+"\n"))
+	return editFile(km.filePath, func(lines []string) []string {
+		lines = dropMachine(lines, id)
+		if line != "" {
+			lines = append(lines, line)
+		}
+		return lines
+	})
 }
