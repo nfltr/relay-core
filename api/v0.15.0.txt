@@ -1,5 +1,4 @@
 Incompatible changes:
-- ./compose.ErrNoKeys: removed
 - ./keyfile.(*APIKeyStore).Add: removed
 - ./keyfile.(*APIKeyStore).HasKeyHash: removed
 - ./keyfile.(*APIKeyStore).Validate: removed
@@ -16,8 +15,11 @@ Incompatible changes:
 - ./keyfile.Machine.Cert: removed
 - ./keyfile.Machine.Line: removed
 - ./keyfile.NewAPIKeyStore: removed
+- ./frontend/connect.RequestKey: removed
+- ./compose.ErrNoKeys: removed
 Compatible changes:
-- ./compose.ErrNoProviders: added
 - ./keyfile.Load: added
 - ./keyfile.NewStore: added
 - ./keyfile.Store: added
+- ./frontend/connect.RequestToken: added
+- ./compose.ErrNoProviders: added
