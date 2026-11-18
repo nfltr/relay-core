@@ -34,7 +34,7 @@ test:
 	go test -count=1 -tags relaytrace -run TestRevocationTrace ./core/identity/
 
 test-race:
-	go test -count=1 -race -timeout 30m ./...
+	./scripts/test-sharded.sh -race -timeout 30m -- ./...
 	go test -count=1 -race -tags relayfault -run TestFault ./frontend/connect/
 
 # test-under-load: PKGS with -count LOAD_COUNT (5) on a starved machine
