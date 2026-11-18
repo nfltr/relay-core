@@ -26,9 +26,9 @@ import (
 // <token>") names it, else the last line of RELAY_CORE_TOKEN_FILE
 // (default zeroTokenFile).
 const (
-	tokenEnv      = "RELAY_CORE_TOKEN"
-	tokenFileEnv  = "RELAY_CORE_TOKEN_FILE"
-	zeroTokenFile = "nfltr-relay-core.token"
+	tokenEnv      = "RELAY_CORE_TOKEN"       // #nosec G101 -- a variable's name, not a credential
+	tokenFileEnv  = "RELAY_CORE_TOKEN_FILE"  // #nosec G101 -- a variable's name, not a credential
+	zeroTokenFile = "nfltr-relay-core.token" // #nosec G101 -- a file name, not a credential
 )
 
 // token authenticates its one secret as machine m (its own account).
