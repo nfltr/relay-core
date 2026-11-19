@@ -900,8 +900,11 @@ first machine's; `--account X` joins the account of X, a machine the file
 holds. The provider's owner is the line's account, so relay-core Reach
 (owner == owner) lets the machines of one account, and only they, reach
 each other's agents; a name resolves within the caller's account. A reload
-swaps lines and names in one step and is refused when it would change a
-kept machine's account; revoking an account's first machine leaves the
+reads the file (`ReadFile`) and then applies it (`Apply`: lines another
+process removed leave, an edited line's name and account change) or is
+refused (`Refuse`) when it would change a kept machine's account; both
+steps run under the key manager's lock, which every `Enrol` holds, so no
+enrolment lands between a reload's read and its apply; revoking an account's first machine leaves the
 account to the others. `Reissue` renews or rotates a machine's key, and
 `Authenticates(m, k)` is the provider's certificate check (the line is
 live and binds the leaf's key). The API key cut (lane L4S) removed the
@@ -912,7 +915,9 @@ only.
 | action | Go |
 |---|---|
 | `Revoke(m)` | `KeyManager.Revoke` (`nfltr-relay machines revoke`) |
-| `Reload(m, n, a)` | `KeyManager.Reload` (the edited file: `read`; refused when a kept machine's account changed) |
+| `ReadFile` | `KeyManager.Reload`: `read` of the file, under `km.mu` (relay-core ddeb3b0; before it, the read came first: mutant `reload-outside-lock`) |
+| `Apply(m, n, a)` | `KeyManager.Reload`: the store swapped to what was read (machines not read revoked, `OnRevoke`), records renamed |
+| `Refuse` | `KeyManager.Reload`: a read that does not load, or changes a kept machine's account, changes nothing |
 | `MintCode(c, n, j)` | `KeyManager.MintCode` (`nfltr-relay machines code`; the self-hosted relay's first start for `admin`: `admin-enrol-code`) |
 | `Enrol(c, m, k)` | `KeyManager.Enrol` (the relay's enrol route: the code's file removed, the machine's `spki:` line written, the CA signs) |
 | `Reissue(m, k)` | `KeyManager.Rebind` (the reissue route: renew, or rotate to a new key's `spki:`) |
@@ -935,12 +940,17 @@ states (99 distinct), every action taken) the certificates. Mutants
 (the first machine's revoke orphaning the others), `reload-account` (a
 reload changing an account), `owner-own-id` (every line its own account:
 the key file before KEYACCT), `resolve-global` (a name looked up across
-accounts), `code-dup-name`; on `KeyAccountCert.cfg` `code-reuse`,
+accounts), `code-dup-name`, `reload-outside-lock` (a reload's read before
+the key manager's lock: an `Enrol` between its read and its apply, and the
+apply revoked the machine just enrolled; nfltr
+`TestOrgNameIsTheAccountMachineName` on the build box, guard
+`TestReloadDuringEnrolRevokesNothing`, caught by
+`ReloadRevokesNoEnrolled`: a machine leaves the file only by a revoke); on `KeyAccountCert.cfg` `code-reuse`,
 `cert-after-revoke`, `cert-any-key`, `code-join-outside` (`--account`
 naming a machine the file does not hold). Witnesses, each violated:
 `WitnessOutlivesFirst` (two machines of an account whose first machine was
 revoked), `WitnessNameReused` (a revoked machine's name taken again in its
-account at once), `WitnessNameInTwoAccounts`, `WitnessCodeJoins`
+account at once), `WitnessNameInTwoAccounts`, `WitnessCodeJoins`, `WitnessRevokedDuringReload`
 (`KeyAccount.cfg`); `WitnessRotatedAway`, `WitnessCertOfRevoked`
 (`KeyAccountCert.cfg`). Tests: keyfile `TestKeyFileAccounts`,
 `TestLoadRefuses`, `TestEnrolCodeSingleUse`, `TestCertBoundToLine`,
@@ -956,7 +966,9 @@ store's steps to `keyaccount-<n>.ndjson`: Load (a line the file held at
 start, with its key, or one an edit of the file added: a reload's new
 line), Revoke, MintCode, Enrol (with the account and name the machine
 got), Reissue, Auth (the provider's answer for a certificate that chains
-to the CA). A Generate line (a key line's, gone with the key cut) is an
+to the CA). A reload's `ReadFile` and `Apply` are not traced: under the
+lock they are one step of the store, recorded as its effects (a Load per
+new line, a Revoke per line gone). A Generate line (a key line's, gone with the key cut) is an
 unknown step and refused. A step that changes the store is
 written under its write lock and an Auth under its read lock, inside the
 step. `TraceKeyAccount.tla` (`TraceKeyAccountLog.tla`) checks each with
@@ -973,7 +985,7 @@ outside the code's account, a name twice in an account.
 | what the spec models | file |
 |---|---|
 | `Revoke`, the line's account | `keyfile/keymanager.go`, `keyfile/store.go` |
-| `Reload` | `keyfile/keyfile_reload.go` |
+| `ReadFile`, `Apply`, `Refuse` | `keyfile/keyfile_reload.go` |
 | `Owner`, `Resolve` | `keyfile/provider.go` |
 | `MintCode`, `Enrol`, `Reissue`, `Authenticates` | `keyfile/machine_cert.go` |
 | the recorder | `keyfile/trace_on.go`, `keyfile/trace.go` |

@@ -29,7 +29,8 @@ Load(m, n, a, k) ==
     /\ fixed' = [x \in Ids |-> IF x = m \/ x \in r THEN a ELSE fixed[x]]
     /\ bound' = [bound EXCEPT ![m] = k]
     /\ certs' = certs \cup {<<m, k>>}
-    /\ UNCHANGED <<code, spent>>
+    /\ revoked' = revoked \cup r
+    /\ UNCHANGED <<code, spent, snap>>
 
 Step ==
     CASE E.ev = "Load" -> Load(E.m, E.n, E.a, E.k)

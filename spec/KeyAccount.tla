@@ -11,9 +11,10 @@
 (* the machines of one account reach each other (relay-core Reach: owner == *)
 (* owner) and only they do. A name is a label: unique among an account's    *)
 (* live machines, resolved within the caller's account only, free again     *)
-(* once its machine is revoked. A reload swaps the lines and the (account,  *)
-(* name) index in one step and is refused when it would change a live       *)
-(* machine's account. Revoking the first machine leaves its account to the *)
+(* once its machine is revoked. A reload reads the file and then applies   *)
+(* it, both under the key manager's lock (no enrolment between), and is     *)
+(* refused when it would change a live machine's account. Revoking the    *)
+(* first machine leaves its account to the                                 *)
 (* others. A certificate (signed by the data dir's machine CA) authenticates *)
 (* only while its machine's line is live and binds that same key. A reissue *)
 (* with a new key rebinds the line (Rotate); the old certificate is still   *)
@@ -39,10 +40,13 @@ VARIABLES
     code,   \* each code's terms: None (not minted) or [name, acct] (acct None: its own)
     spent,  \* each code's redemptions (history: the machines it enrolled)
     bound,  \* each machine's line: the key it binds (None: not enrolled)
-    certs   \* the certificates the CA signed: <<machine, key>> (none expire here)
+    certs,  \* the certificates the CA signed: <<machine, key>> (none expire here)
+    snap,   \* a reload's read of the file (the machines its lines hold), None between reloads
+    revoked \* history: the machines a revoke took out of the file
 
-vars == <<live, used, acct, nm, fixed, code, spent, bound, certs>>
+vars == <<live, used, acct, nm, fixed, code, spent, bound, certs, snap, revoked>>
 cvars == <<code, spent, bound, certs>>
+rvars == <<snap, revoked>>
 
 \* The name n is free in account a (live machines only: a revoked machine's
 \* name is free at once).
@@ -60,6 +64,7 @@ Init ==
     /\ acct = [m \in Ids |-> None] /\ nm = [m \in Ids |-> None] /\ fixed = [m \in Ids |-> None]
     /\ code = [c \in Codes |-> None] /\ spent = [c \in Codes |-> {}]
     /\ bound = [m \in Ids |-> None] /\ certs = {}
+    /\ snap = None /\ revoked = {}
 
 \* `nfltr-relay machines code --name n [--account j]`: a single-use code
 \* for a machine named n, in j's account (resolved now: j a machine the
@@ -70,12 +75,17 @@ MintCode(c, n, j) ==
     /\ j = None \/ j \in live \/ (Mutant = "code-join-outside" /\ j \notin used)
     /\ code' = [code EXCEPT ![c] = [name |-> n, acct |-> IF j \in live THEN acct[j] ELSE j]]
     /\ UNCHANGED <<live, used, acct, nm, fixed, spent, bound, certs>>
+    /\ UNCHANGED rvars
 
 \* A machine POSTs the enrol route {code, csr for k}: the code is spent, a
 \* fresh id m gets a line binding k (its own account, or the code's) and
-\* the CA signs <<m, k>>, in one step under the key manager's lock.
+\* the CA signs <<m, k>>, in one step under the key manager's lock, which
+\* a reload holds from its read of the file to its apply (mutant
+\* reload-outside-lock: the read before the lock, as keyfile before
+\* relay-core ddeb3b0).
 Enrol(c, m, k) ==
     LET a == IF code[c].acct = None THEN m ELSE code[c].acct IN
+    /\ snap = None \/ Mutant = "reload-outside-lock"
     /\ code[c] # None
     /\ spent[c] = {} \/ Mutant = "code-reuse"
     /\ m \notin used
@@ -86,6 +96,7 @@ Enrol(c, m, k) ==
     /\ bound' = [bound EXCEPT ![m] = k]
     /\ certs' = certs \cup {<<m, k>>}
     /\ UNCHANGED code
+    /\ UNCHANGED rvars
 
 \* The reissue route: a certificate that authenticates, a CSR for k and
 \* the proof signed by the old key. The same key renews; a new key
@@ -95,6 +106,7 @@ Reissue(m, k) ==
     /\ bound' = [bound EXCEPT ![m] = k]
     /\ certs' = certs \cup {<<m, k>>}
     /\ UNCHANGED <<live, used, acct, nm, fixed, code, spent>>
+    /\ UNCHANGED rvars
 
 \* `machines revoke --machine m`: its line leaves the file; the other machines
 \* of its account keep the account (its id, when m was the first).
@@ -104,18 +116,41 @@ Revoke(m) ==
     /\ IF Mutant = "revoke-reassigns"
          THEN acct' = [x \in Ids |-> IF x \in live /\ acct[x] = m /\ x # m THEN x ELSE acct[x]]
          ELSE UNCHANGED acct
-    /\ UNCHANGED <<used, nm, fixed>>
+    /\ revoked' = revoked \cup {m}
+    /\ UNCHANGED <<used, nm, fixed, snap>>
     /\ UNCHANGED cvars
 
-\* An edit of line m reloaded (Watch): a new name n and account a. The
-\* file loads only with every live machine's account as it was and the
-\* names unique per account; otherwise nothing changes.
-Reload(m, n, a) ==
-    /\ m \in live
-    /\ a = acct[m] \/ Mutant = "reload-account"
-    /\ \A x \in live \ {m} : acct[x] = a => nm[x] # n
-    /\ acct' = [acct EXCEPT ![m] = a] /\ nm' = [nm EXCEPT ![m] = n]
-    /\ UNCHANGED <<live, used, fixed>>
+\* A reload (Watch, after any write of the file) in two steps, as
+\* keyfile.KeyManager.Reload takes them: ReadFile reads the file's lines,
+\* then Apply makes the store what was read: a machine the read did not
+\* hold leaves it (a line another process removed), and an edit of line m
+\* (m None: none) gives it name n and account a. The file loads only with
+\* every kept machine's account as it was and the names unique per
+\* account; otherwise (Refuse) nothing changes but the read ends.
+ReadFile ==
+    /\ snap = None
+    /\ snap' = live
+    /\ UNCHANGED <<live, used, acct, nm, fixed, revoked>>
+    /\ UNCHANGED cvars
+
+Apply(m, n, a) ==
+    LET kept == live \cap snap IN
+    /\ snap # None
+    /\ snap' = None
+    /\ IF m = None
+         THEN UNCHANGED <<acct, nm>>
+         ELSE /\ m \in kept
+              /\ a = acct[m] \/ Mutant = "reload-account"
+              /\ \A x \in kept \ {m} : acct[x] = a => nm[x] # n
+              /\ acct' = [acct EXCEPT ![m] = a] /\ nm' = [nm EXCEPT ![m] = n]
+    /\ live' = kept
+    /\ UNCHANGED <<used, fixed, revoked>>
+    /\ UNCHANGED cvars
+
+Refuse ==
+    /\ snap # None
+    /\ snap' = None
+    /\ UNCHANGED <<live, used, acct, nm, fixed, revoked>>
     /\ UNCHANGED cvars
 
 Next ==
@@ -123,7 +158,10 @@ Next ==
     \/ \E c \in Codes, m \in Ids, k \in Keys : Enrol(c, m, k)
     \/ \E m \in Ids, k \in Keys : Reissue(m, k)
     \/ \E m \in Ids : Revoke(m)
-    \/ \E m, a \in Ids, n \in Names : Reload(m, n, a)
+    \/ ReadFile
+    \/ Apply(None, CHOOSE n \in Names : TRUE, CHOOSE a \in Ids : TRUE)
+    \/ \E m, a \in Ids, n \in Names : Apply(m, n, a)
+    \/ Refuse
 
 Spec == Init /\ [][Next]_vars
 
@@ -138,6 +176,8 @@ TypeOK ==
     /\ \A m \in used : acct[m] \in Ids /\ nm[m] \in Names
     /\ \A m \in Ids : bound[m] \in Keys \cup {None}
     /\ certs \subseteq used \X Keys
+    /\ snap = None \/ snap \subseteq used
+    /\ revoked \subseteq used
 
 \* A machine's account never changes after enrolment.
 AccountStable == \A m \in used : acct[m] = fixed[m]
@@ -170,6 +210,10 @@ CertBoundToLine == \A <<m, k>> \in certs :
 EnrolledAsCoded == \A c \in Codes, m \in Ids : m \in spent[c] =>
     acct[m] = IF code[c].acct = None THEN m ELSE code[c].acct
 
+\* A machine leaves the file only by a revoke: no reload takes out a
+\* machine enrolled after its read (mutant reload-outside-lock).
+ReloadRevokesNoEnrolled == used \ live \subseteq revoked
+
 \* Witnesses (checked violated: the states the invariants guard are reached).
 \* Two machines of one account whose first machine was revoked.
 WitnessOutlivesFirst == ~\E x, y \in live : x # y /\ acct[x] = acct[y] /\ acct[x] \notin live
@@ -181,6 +225,8 @@ WitnessNameInTwoAccounts == ~\E x, y \in live : acct[x] # acct[y] /\ nm[x] = nm[
 WitnessCodeJoins == ~\E c \in Codes, m \in Ids : m \in spent[c] /\ acct[m] # m
 \* A signed certificate whose key a rotation replaced, its line live.
 WitnessRotatedAway == ~\E m \in live, k \in Keys : <<m, k>> \in certs /\ bound[m] # k
+\* A machine revoked while a reload's read still holds it.
+WitnessRevokedDuringReload == ~\E m \in revoked : snap # None /\ m \in snap
 \* A signed certificate of a revoked machine.
 WitnessCertOfRevoked == ~\E m \in used \ live, k \in Keys : <<m, k>> \in certs
 =============================================================================

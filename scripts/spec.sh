@@ -321,6 +321,7 @@ INVARIANTS
     EnrolCodeSingleUse
     CertBoundToLine
     EnrolledAsCoded
+    ReloadRevokesNoEnrolled
     TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TraceKeyAccount.tla >"$1.out" 2>&1 || true
@@ -482,10 +483,10 @@ mutants)
 	m='s/Mutant = "none"/Mutant = "'
 	# A bug put back per invariant.
 	# KeyAccount.tla: the key file's accounts (KEYACCT).
-	for b in revoke-reassigns reload-account owner-own-id resolve-global code-dup-name; do
+	for b in revoke-reassigns reload-account owner-own-id resolve-global code-dup-name reload-outside-lock; do
 		expect KeyAccount.cfg KeyAccount.tla "$b" -e "$m$b\"/"
 	done
-	for w in OutlivesFirst NameReused NameInTwoAccounts CodeJoins; do
+	for w in OutlivesFirst NameReused NameInTwoAccounts CodeJoins RevokedDuringReload; do
 		expect KeyAccount.cfg KeyAccount.tla "witness:$w" -e "s/^    ResolveOwnAccount$/    Witness$w/"
 	done
 	# The data dir's machine CA: code enrolment and certificates (lane L5).
