@@ -114,7 +114,7 @@ spec-mutants:
 # The ProVerif model of the E2EE share gate (spec/proverif/README.md):
 # every line of spec/proverif/expect.txt, mutants included (in make ci, seconds).
 .PHONY: spec-proverif
-spec-proverif: test-cicache
+spec-proverif: test-cicache test-fetch-tla
 	./spec/proverif/run.sh
 # The model's bindings against the code (spec/proverif/README.md
 # "Bindings"): each BIND id of e2ee_share.pv has a test row that sends a
@@ -170,3 +170,9 @@ check-spec-drift:
 .PHONY: test-cicache
 test-cicache:
 	./scripts/cicache_test.sh
+
+# scripts/fetch-tla.sh: concurrent fetchers sharing one cache never see
+# another's partial download; a good cache is used with no fetch.
+.PHONY: test-fetch-tla
+test-fetch-tla:
+	./scripts/fetch-tla_test.sh
