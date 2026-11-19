@@ -158,7 +158,7 @@ type Stream[S, R proto.Message] struct {
 // (feedback_nfltr_is_pure_communication_layer): when a worker pushes
 // MessageTypeWorkerLabelsUpdate the dispatcher's MergeAgentLabels
 // builds the new map and calls SetLabels. Concurrency: a single
-// goroutine drives this per agent (the orchestrator's recv loop), so
+// goroutine drives this per agent (its receive loop), so
 // no internal lock is needed here.
 func (s *Stream[S, R]) SetLabels(labels map[string]string) {
 	if s == nil {

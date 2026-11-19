@@ -3,11 +3,11 @@
 
 // Package relay — internal_agent_loopback.go
 //
-// In-process AgentTunnel + Streamer adapter for a relay-owned orchestrator
-// (option A of the inner-LLM drawer fix, docs/architecture/relay-owned-orchestrator.md).
+// In-process AgentTunnel + Streamer adapter for the relay's own agent
+// nfltr-relay.
 //
-// The relay-internal orchestrator needs an rpcclient.Agent that can issue
-// A2A calls to workers connected to the same relay. A real network dial
+// The relay's own agent needs an rpcclient.Agent that can issue A2A calls
+// to agents connected to the same relay. A real network dial
 // would require auth + TLS setup just to talk to the same process; instead
 // this adapter wires a paired-channel duplex between:
 //   - dispatcher side: implements relay.Streamer

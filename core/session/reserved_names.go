@@ -19,7 +19,7 @@ import (
 // it through Reserved.
 var reservedLabels = map[string]bool{
 	"www": true, "api": true, "api-origin": true, "grpc": true,
-	"relay": true, "orch": true, "docs": true, "app": true, "admin": true, "dashboard": true,
+	"relay": true, "docs": true, "app": true, "admin": true, "dashboard": true,
 	"status": true, "mail": true, "smtp": true, "mx": true, "ns": true,
 	"blog": true, "help": true, "support": true, "s": true,
 }

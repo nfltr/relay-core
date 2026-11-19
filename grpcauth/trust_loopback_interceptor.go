@@ -8,8 +8,8 @@
 // credential: the interceptor puts a principal (provider "loopback", one local
 // owner) into the context as the key interceptor would, so downstream
 // handlers (and GetAgentIDFromContext) resolve an identity without a key. This is the gRPC
-// counterpart to the relay's HTTP loopback-trust path; together they let workers
-// and the operator run `nfltr orch` locally with zero auth setup.
+// counterpart to the relay's HTTP loopback-trust path; together they let local
+// agents and the operator use a relay on this host with zero auth setup.
 //
 // Loopback-only (the peer address is the kernel-reported TCP peer, not a
 // spoofable header), so production (non-loopback ingress) is unaffected; a

@@ -5,10 +5,10 @@
 //
 // Phase 2 of option (A) refactor: a public Dispatcher method that registers
 // an in-process agent (one half of an InternalAgentLoopback) as if it had
-// connected over gRPC. Used by cmd/server to make the relay-internal
-// orchestrator agent visible to the dispatcher's routing layer so A2A
-// calls between connected workers and the relay-owned orchestrator work
-// like any other agent-to-agent call.
+// connected over gRPC. Used by the relay server to make the relay's own
+// agent nfltr-relay visible to the dispatcher's routing layer so A2A
+// calls between connected agents and nfltr-relay work like any other
+// agent-to-agent call.
 package session
 
 import (
