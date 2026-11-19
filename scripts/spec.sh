@@ -565,6 +565,7 @@ mutants)
 	for b in fin-overtakes grant-early lose-as-eof abort-as-eof inproc-closewrite; do
 		expect AgentLink.cfg MCAgentLink.tla "interface:$b" -e "$m$b\"/" -e '/^INVARIANTS/,$d'
 	done
+	expect AgentLinkIface.cfg MCAgentLink.tla interface:abort-unended -e "$m"'abort-unended"/' -e '/^INVARIANTS/,$d'
 	expect AgentLink.cfg MCAgentLink.tla witness:abort -e 's/    AbortTyped/    WitnessAbort/'
 	expect AgentLink.cfg MCAgentLink.tla witness:held-eof -e 's/    NoSilentLoss/    WitnessHeldEof/'
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'

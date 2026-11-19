@@ -39,7 +39,7 @@ VARIABLES
     wfin,   \* [P -> [Sess -> {"", "half", "whole"}]]: this side's close
     rfin,   \* [P -> [Sess -> {"", "half", "whole"}]]: the peer's close, received
     finAt,  \* [P -> [Sess -> Nat]]: wr at this side's close
-    why,    \* [P -> [Sess -> {"", "eof", "lost", "reset"}]]: how the reader's side ended
+    why,    \* [P -> [Sess -> {"", "eof", "lost", "reset", "here"}]]: how the reader's side ended ("here": this side's own abort)
     clean,  \* [P -> [Sess -> BOOLEAN]]: ended with both halves closed (FIN both ways)
     acked,  \* [P -> [Sess -> BOOLEAN]]: the peer acknowledged this side's half close (EndAck)
     apend,  \* [P -> [Sess -> BOOLEAN]]: an ack of the peer's half close decided, not yet queued
@@ -131,19 +131,26 @@ CloseWrite(p, s) ==
 \* stall reset) is an abort (TCPData.abort, finding 15); an inProcConn's
 \* Close is a close.
 WholeT(p, s) == IF p = "r" /\ s \notin InProc /\ RelayAbort THEN "abort" ELSE "whole"
+\* p's whole close of s is an abort, not an inProcConn's Close: the agent's,
+\* or the relay's of a client's session (RelayAbort).
+OwnAbort(p, s) == p = "a" \/ WholeT(p, s) = "abort"
 
 \* A whole close: a write error, a read error, sessionConn.Close. Its
 \* queue takes nothing more (markClosed); Finish forgets the session. A
 \* send already holding credit still goes. An inProcConn's Close
 \* (StartClose, then this) sends its frame under wmu; inproc-enqueue-blocks:
-\* a Write waiting for outbox room holds wmu, and Close waits for it.
+\* a Write waiting for outbox room holds wmu, and Close waits for it. An
+\* abort ends this side's reader with it ("here"), unless it had learned
+\* an end: a session this side aborted never reads as complete (link's
+\* LinkSession.tla, lane LINKABORT).
 Abort(p, s) ==
     /\ st[p][s] = "open" /\ wfin[p][s] # "whole"
     /\ p = "r" /\ s \in InProc => closing[s] /\ (Mutant # "inproc-enqueue-blocks" \/ pend[p][s] = 0)
     /\ wfin' = [wfin EXCEPT ![p][s] = "whole"]
     /\ finAt' = [finAt EXCEPT ![p][s] = IF wfin[p][s] = "" THEN wr[p][s] ELSE @]  \* the first close's
+    /\ why' = [why EXCEPT ![p][s] = IF @ = "" /\ OwnAbort(p, s) /\ Mutant # "abort-unended" THEN "here" ELSE @]
     /\ Put(p, Frame(WholeT(p, s), s, 0, wr[p][s]))
-    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, why, clean, acked, apend, waits, closing, err>>
+    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, clean, acked, apend, waits, closing, err>>
 
 \* inProcConn.Close is called (it marks the session closed first).
 StartClose(s) ==

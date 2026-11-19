@@ -38,7 +38,7 @@ LS == INSTANCE LinkSession WITH
     c <- [p \in P |-> [s \in Sess |-> rcv[p][s] - q[p][s]]],
     wend <- [p \in P |-> [s \in Sess |-> WEnd(p, s)]],
     fin <- [p \in P |-> [s \in Sess |-> Fin(p, s)]],
-    shut <- [p \in P |-> [s \in Sess |-> wfin[p][s] = "whole"]],
+    shut <- [p \in P |-> [s \in Sess |-> IF wfin[p][s] = "whole" THEN WEnd(p, s) ELSE ""]],
     rend <- why,
     ga <- [p \in P |-> FALSE],
     up <- [p \in P |-> ~down[p]],

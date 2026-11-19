@@ -55,7 +55,7 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `q`, `rcv`, `wr` | `tcpSession.recvQ` / the agent's `bytequeue.Queue`; counts | bytes queued unread, received, written by the app |
 | `wfin`, `rfin` | relay `selfHalf`/`peerHalf`, agent `peerHalf`; whole closes | this side's close (`half`, `whole`), the peer's |
 | `finAt[p][s]` | the bytes written before this side's close | what the peer must have received at its EOF |
-| `why[p][s]` | `tcpSession.endErr`, agent `lost` | the reader's end: `eof` (the peer's half close released to the app: relay `recvQ` closed, agent hold released), `lost` (`errTCPSessionLost`, an RST), `reset` (`errTCPSessionStalled`; relay side: `errTCPSessionAborted`, the agent's abort, finding 15) |
+| `why[p][s]` | `tcpSession.endErr`, agent `lost` | the reader's end: `eof` (the peer's half close released to the app: relay `recvQ` closed, agent hold released), `lost` (`errTCPSessionLost`, an RST), `reset` (`errTCPSessionStalled`; relay side: `errTCPSessionAborted`, the agent's abort, finding 15), `here` (this side's own abort: the agent's whole close, the relay's of a client's session) |
 | `clean[p][s]` | both halves closed, queue drained; or an EOF released after this side's half close | the app's connection ended cleanly (FIN both ways) |
 | `waits[p][s]` | relay `selfHalf` before `peerClosedWrite`/`recvAck` closed `recvQ` | the app half-closed before the peer's half close was released to it: the EOF it then gets is a clean end |
 | `acked[p][s]` | relay `tcpSession.acked`, agent `halfEnd.acked` | the peer acknowledged this side's half close (`EndAck`, finding 2) |
@@ -191,6 +191,10 @@ whole close in a config whose property needs the apps to finish.
 - `relay-abort-as-eof`: the relay's abort of a client's session reaches
   the agent's target as a FIN (`AbortTyped` on `AgentLinkAbort.cfg`, and
   link's interface alone; finding 15).
+- `abort-unended`: a side's own abort leaves its reader without an end,
+  so it may later read the peer's FIN or the stream's loss (link's
+  interface alone on `AgentLinkIface.cfg`: an own Reset or Abort reads
+  `here`, lane LINKABORT).
 - `no-credit` runs with 3 bytes (one past the window).
 - a stream without the end acknowledgement (finding 2: an older agent or
   relay): `race:clean-tail-lost` (`EndAck = FALSE`, `NoSilentLoss`).
@@ -222,14 +226,16 @@ The mapping: `w` the bytes written before this side's close (`finAt`
 once it closed: a send that held credit before a whole close queues its
 frame after it, and the peer, which takes the close first, drops it),
 `d` the bytes received (`rcv`), `c` those read (`rcv - q`), `rend` the
-reader's end (`why`), `shut` this side's whole close; the relay's whole
+reader's end (`why`: `here` after this side's own abort, as link's own
+Reset or Abort reads, lane LINKABORT), `shut` this side's whole close
+(`close` or `reset` as `wend`); the relay's whole
 close is a Close for an inProcConn (the agent's target reads EOF) and an
 abort for a client's session (`RelayAbort`: the target is reset, finding
 15), and the agent's an abort (the relay's reader reads a reset); a
 stream has no
 GOAWAY (`ga` FALSE: its end is `Break`). `make spec-mutants` checks that
 `fin-overtakes`, `grant-early`, `lose-as-eof`, `abort-as-eof`,
-`relay-abort-as-eof` and `inproc-closewrite` each fail the interface alone (`interface:<mutant>`,
+`relay-abort-as-eof`, `inproc-closewrite` and `abort-unended` each fail the interface alone (`interface:<mutant>`,
 every AgentLink invariant left out).
 
 Frame streams give one guarantee link's interface does not: a session
