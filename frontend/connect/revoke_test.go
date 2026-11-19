@@ -37,6 +37,7 @@ func TestRevokedSessionsEndTyped(t *testing.T) {
 		var open sessionSet
 		accepted := make(chan struct{})
 		served := make(chan struct{})
+		relayEnd := make(chan error, 1) // what the relay's own side of the session reads: what its join passes on to the agent
 		go func() {
 			defer close(served)
 			nc, err := ln.Accept()
@@ -55,7 +56,8 @@ func TestRevokedSessionsEndTyped(t *testing.T) {
 			_ = m.Serve(func(_ *pb.TCPData, s *dataplane.Session) {
 				open.add(s)
 				accepted <- struct{}{}
-				_, _ = io.Copy(io.Discard, s)
+				_, err := io.Copy(io.Discard, s)
+				relayEnd <- err
 			})
 		}()
 		nc, err := net.Dial("tcp", ln.Addr().String())
@@ -83,17 +85,30 @@ func TestRevokedSessionsEndTyped(t *testing.T) {
 		}
 		_ = s.SetReadDeadline(time.Now().Add(wait))
 		_, err = s.Read(make([]byte, 1))
-		a, isAbort := errors.AsType[*link.Abort](err)
-		reason, _ := dataplane.AbortReason(a)
 		switch {
-		case tc.typed && (!isAbort || reason != relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED):
+		case tc.typed && !unauthenticated(err):
 			t.Errorf("%v: the session ended with %v, want an abort of reason ERROR_REASON_UNAUTHENTICATED", tc.cause, err)
 		case !tc.typed && !errors.Is(err, context.DeadlineExceeded) && !isTimeout(err):
 			t.Errorf("%v: the session ended with %v, want it left open", tc.cause, err)
 		}
+		if tc.typed {
+			// the join reads the relay's side: a clean end there closed the
+			// agent's leg cleanly (link before lane LINKABORT)
+			if err := <-relayEnd; !unauthenticated(err) {
+				t.Errorf("%v: the relay's side of the session read %v, want the abort it sent", tc.cause, err)
+			}
+		}
 		_ = m.Close()
 		<-served
 	}
+}
+
+// unauthenticated reports whether err is an abort of reason
+// ERROR_REASON_UNAUTHENTICATED.
+func unauthenticated(err error) bool {
+	a, ok := errors.AsType[*link.Abort](err)
+	reason, _ := dataplane.AbortReason(a)
+	return ok && reason == relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED
 }
 
 func isTimeout(err error) bool {
