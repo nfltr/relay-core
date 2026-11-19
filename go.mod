@@ -13,7 +13,7 @@ require (
 	github.com/nfltr/link v0.12.16
 	github.com/nfltr/link/peerlink/quiclink v0.5.23
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52
-	github.com/nfltr/relay/client v0.23.5
+	github.com/nfltr/relay/client v0.23.6
 	github.com/nfltr/relay/proto v0.21.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
@@ -40,7 +40,6 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.0.0-rc.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/jackpal/gateway v1.2.0 // indirect
-	github.com/jackpal/go-nat-pmp v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
