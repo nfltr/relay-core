@@ -812,7 +812,7 @@ proof, unchanged).
 Invariants (`NF1Anon.cfg`: one session, to the anonymous server or an
 account's, four units per transfer against a leg budget of two and an
 address budget of two, the smallest size that catches every mutant; `make
-spec`, 4,189 states (2,172 distinct), about a second; `COVERAGE=1` takes
+spec`, 4,581 states (2,359 distinct), about a second; `COVERAGE=1` takes
 every action; `NF1AnonLarge.cfg`, two sessions, three units, address
 budget three, nightly: 600,167 states (207,443 distinct), depth 25, 23 s
 on 4 workers under load):
@@ -829,13 +829,13 @@ fairness of the relay's time limit only.
 Mutants (`make spec-mutants`), each caught: `no-budget` (the relay counts
 nothing: `LegBounded`, 6 states deep), `reattach-unbudgeted` (a relayed
 fallback carried as an account's: `AddrBounded`, 9), `cut-account` (every
-nf1 session budgeted, an account's too: `NoCutOnAccount`, 3), `untyped-cut`
+nf1 session budgeted, an account's too: `NoCutOnAccount`, 4), `untyped-cut`
 (the cut is a plain reset: `TypedFailure`, 5), `no-expiry` (the connection
 runs past `NotAfter`: `RegBounded`, 4), `keyed-route` (another route names
 the anonymous agent and carries no budget: `LegBounded`, 6), `no-time-limit`
-(`LeavesRelay`, 7), `join-clean-end` (the join passes the aborted agent
+(`LeavesRelay`, 10), `join-clean-end` (the join passes the aborted agent
 leg's local clean end to the client ahead of the cut's abort, which reads
-it as a cut in transit: `TypedFailure`; relay-core v0.16.5,
+it as a cut in transit: `TypedFailure`, 5; relay-core v0.16.5,
 `TestNF1AnonLegTime` on a loaded runner, lane ANONLEG). Witnesses, each reached: `WitnessDirectDone` (an
 anonymous transfer done with its bulk direct), `WitnessCut`,
 `WitnessAccountRelayed` (an account's session carries more than the leg
