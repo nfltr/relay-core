@@ -28,12 +28,16 @@ import (
 // AccountStable; revoke it and generate it again) changes nothing and
 // returns the error. It returns the revoked machines.
 func (km *KeyManager) Reload() ([]identity.MachineID, error) {
+	// Read under the manager's lock, which every write of this process
+	// holds from its store change through its file write: a file read
+	// before an Enrol's line landed and compared after it revoked the
+	// machine just enrolled (TestReloadDuringEnrolRevokesNothing).
+	km.mu.Lock()
+	defer km.mu.Unlock()
 	next, err := read(km.filePath)
 	if err != nil {
 		return nil, err
 	}
-	km.mu.Lock()
-	defer km.mu.Unlock()
 
 	nextAccount := make(map[identity.MachineID]identity.MachineID, len(next.keys))
 	for _, n := range next.keys {

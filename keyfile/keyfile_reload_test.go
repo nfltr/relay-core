@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -296,4 +297,52 @@ func machineStrings(ms []identity.MachineID) []string {
 		out[i] = string(m)
 	}
 	return out
+}
+
+// TestReloadDuringEnrolRevokesNothing (spec/KeyAccount.tla Reload is one
+// step on the file as it is): reloads run while machines enrol, as the
+// watcher's do after each write; no reload revokes a machine that just
+// enrolled (before: Reload read the file before it took the manager's
+// lock, so a read before an Enrol's line landed, compared after it, found
+// the new machine missing and revoked it: nfltr's
+// TestOrgNameIsTheAccountMachineName, "reloaded the key file" revoking the
+// rig's machine enrolled 2 ms before).
+func TestReloadDuringEnrolRevokesNothing(t *testing.T) {
+	km, _, _ := certManager(t)
+	now := time.Now()
+	stop := make(chan struct{})
+	bad := make(chan []identity.MachineID, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if revoked, err := km.Reload(); err == nil && len(revoked) > 0 {
+				select {
+				case bad <- revoked:
+				default:
+				}
+			}
+		}
+	}()
+	for i := range 200 {
+		code, err := km.MintCode("m"+strconv.Itoa(i), "", time.Hour, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := km.Enrol(code, &newKey(t).PublicKey, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	<-done
+	select {
+	case r := <-bad:
+		t.Fatalf("a reload during enrolments revoked %v", r)
+	default:
+	}
 }
