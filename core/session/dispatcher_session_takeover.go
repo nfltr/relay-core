@@ -29,6 +29,7 @@ type sessionTakeover struct {
 	credHash string
 	replace  func()
 	ended    chan struct{}
+	proc     string // its process in spec/Takeover.tla traces; "" untraced
 }
 
 // takeOverSession ends this pod's live session of agentID, if any, and
@@ -45,12 +46,28 @@ type sessionTakeover struct {
 // connection reached another replica, this one's renewal is superseded and
 // the replaced stream leaves routing but stays for its open sessions
 // (TCPDispatcher.yield, TestTCPTakeoverOnAnotherReplicaLetsOpenSessionsFinish).
-func (d *Dispatcher) takeOverSession(ctx context.Context, agentID, credHash string) error {
-	old, live := d.Agents.Load(agentID)
+// proc names the connecting session in spec/Takeover.tla traces.
+func (d *Dispatcher) takeOverSession(ctx context.Context, agentID, credHash, proc string) error {
+	var t *sessionTakeover
+	live := false
+	traceTakeoverStep(d, agentID, proc, credHash, func() (string, string) { // Takeover.tla Connect
+		var old *HTTPStream
+		if old, live = d.Agents.Load(agentID); live {
+			t = old.takeover
+		}
+		switch {
+		case !live:
+			return "Connect", ""
+		case t == nil:
+			return "Refuse", ""
+		case t.credHash != credHash:
+			return "Refuse", t.proc
+		}
+		return "Connect", t.proc
+	})
 	if !live {
 		return nil
 	}
-	t := old.takeover
 	if t == nil || t.credHash != credHash {
 		d.Logger.Info("agent already connected to this pod with another credential", "AgentID", agentID)
 		return status.Errorf(codes.AlreadyExists, "agent %s is already connected with another credential; stop that session or pick another --name", agentID)

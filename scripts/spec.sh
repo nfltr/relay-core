@@ -30,6 +30,9 @@
 #             relay client/agent's own tests in CLIENT_TESTS) against
 #             spec/TraceHandoffAgent.tla, each deployment's presence
 #             (presence-*.ndjson) against spec/TracePresence.tla, each
+#             agent ID's ConnectHTTP takeovers (takeover-*.ndjson,
+#             TAKEOVER_TESTS and every other ConnectHTTP of the run)
+#             against spec/TraceTakeover.tla, each
 #             agent-to-agent call's credit (callcredit-*.ndjson, relay
 #             client/rpcclient's recorder, TestInternalAgentRouting_*)
 #             against relay's spec/TraceCallCredit.tla (relayspec), each
@@ -266,6 +269,30 @@ CFG
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
 }
 
+# ttrace FILE: TLC on one recorded takeover trace (spec/TraceTakeover.tla); 0 when accepted.
+ttrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Procs <- TraceProcs
+    Cred <- TraceCred
+    Mach <- TraceMach
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    NoSilentReplace
+    DuplicateRefused
+    NoFalseRefusal
+    LockLive
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceTakeover.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
 # check_trace FILE: the checker for FILE's kind.
 # natrace FILE: one source's anonymous nf1 registrations and legs
 # (nf1anon-*.ndjson, core/nf1anon's recorder) against spec/TraceNF1Anon.tla.
@@ -333,6 +360,7 @@ check_trace() {
 	keyaccount-* | reject-keyaccount-*) katrace "$1" ;;
 	nf1anon-* | reject-nf1anon-*) natrace "$1" ;;
 	presence-* | reject-presence-*) ptrace "$1" ;;
+	takeover-* | reject-takeover-*) ttrace "$1" ;;
 	move-* | reject-move-*) trace_move "$1" ;;
 	handoff-* | reject-handoff-*) htrace "$1" ;;
 	hagent-* | reject-hagent-*) atrace "$1" ;;
@@ -424,7 +452,7 @@ actions_check() {
 		done
 	done
 	go=$(cat core/session/*.go | grep -v '^//' | grep -ohE '"[A-Za-z0-9]+"' | sort -u)
-	for t in Trace TraceHandoff TraceMove TraceMoveLog TracePresence; do
+	for t in Trace TraceHandoff TraceMove TraceMoveLog TracePresence TraceTakeover; do
 		for e in $(grep -E '\bev\b' "spec/$t.tla" | grep -ohE '"[A-Z][A-Za-z0-9]*"' | sort -u); do
 			echo "$go" | grep -qx "$e" || { echo "spec/$t.tla: event $e is recorded by no Go in core/session"; ok=1; }
 		done
@@ -694,12 +722,13 @@ traces)
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown|TestAgentLinkResumedByTheNextPrimary|TestAgentLinkCarriesSessions)$'}
 	ptests=${PRESENCE_TESTS:-'^(TestPresenceAcrossReplicas|TestPresenceAcrossReplicasFailedWrites)$'}
 	cctests=${CALLCREDIT_TESTS:-'^TestInternalAgentRouting_.*$'}
+	ttests=${TAKEOVER_TESTS:-'^TestConnectHTTPTakeover$'}
 	# The agent's own Handoff tests (relay client/agent, fake relays): the
 	# steps the real relay pair leaves to chance (an open on the parked link,
 	# a refused adoption, a dial that gives up).
 	ctests=${CLIENT_TESTS:-'^(TestLazyAgentLink|TestLazyAgentLinkGivesUp|TestAgentLinkUpOnlyWhileBound|TestTCPTunnelReturnsAfterTheLinkIsParked|TestTCPTunnelAdoptRefusedWhileDialling)$'}
-	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces" "$work/cctraces" "$work/cltraces" "$work/ftraces"
-	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests|$cctests" ./core/session/ >"$work/test.out" 2>&1 || {
+	mkdir -p "$work/all" "$work/traces" "$work/mtraces" "$work/htraces" "$work/atraces" "$work/ptraces" "$work/cctraces" "$work/cltraces" "$work/ftraces" "$work/ttraces"
+	RELAYTRACE=$work/all go test -tags relaytrace -count=1 -run "$tests|$htests|$ptests|$cctests|$ttests" ./core/session/ >"$work/test.out" 2>&1 || {
 		cat "$work/test.out"
 		exit 1
 	}
@@ -733,6 +762,7 @@ traces)
 		callcredit-*) mv "$t" "$work/cctraces/" ;;
 		calllifecycle-*) mv "$t" "$work/cltraces/" ;;
 		failover-*) mv "$t" "$work/ftraces/" ;;
+		takeover-*) mv "$t" "$work/ttraces/" ;;
 		*) mv "$t" "$work/traces/" ;;
 		esac
 	done
@@ -773,6 +803,8 @@ traces)
 	checktraces "$work/atraces" atrace || st=1
 	echo "== Presence (spec/TracePresence.tla)"
 	checktraces "$work/ptraces" ptrace || st=1
+	echo "== Takeover (spec/TraceTakeover.tla)"
+	checktraces "$work/ttraces" ttrace || st=1
 	echo "== CallCredit, agent-to-agent calls (relay spec/TraceCallCredit.tla)"
 	rs=$(relayspec)
 	ls "$work"/cctraces/*.ndjson >/dev/null 2>&1 || { echo "no CallCredit trace"; st=1; }

@@ -1191,15 +1191,16 @@ releases however the process ends, so a second process on the machine is
 refused at start naming the holder, unless it passes `--replace`; then it
 registers, the relay replaces and tells the first, and the newcomer takes
 the lock once the first is gone. The client half is in nfltr
-(`cmd/nfltr/internal/catcli`, `serve_holder.go`).
+(`cmd/nfltr/internal/upcli`, `agent_hold.go`: `nfltr up` and `nfltr cat
+serve` both take it in `upcli.Run`).
 
 | action | Go |
 |---|---|
-| `Start(p, r)` | nfltr `catcli` `holdAgent` (`filelock.TryLock`; `--replace`: `filelock.Lock` in the background) |
+| `Start(p, r)` | nfltr `upcli` `holdAgent` (`filelock.TryLock`; `--replace`: `filelock.Lock` in the background) |
 | `Connect(p)` | `Dispatcher.takeOverSession` (ConnectHTTP), the AgentTunnel replace in `dispatcher_grpc.go`, the replaced TCP stream in `dispatcher_tcp_streams.go`; `AlreadyExists` for another credential |
 | `Notice(p)` | the replaced stream's `errReplacedSessionStatus`; the client's `rpcclient.FatalReplaced`, nfltr `cat serve` exit 13 |
 | `Acquire(p)` | the `--replace` process's background `filelock.Lock` returning |
-| `Stop(p)` | Ctrl+C: the session's end and `DeregisterAgent` |
+| `Stop(p)` | Ctrl+C: the session's end and `DeregisterAgent` (`ConnectHTTP`'s teardown) |
 | `Crash(p)` | the process dies; the kernel releases its `flock` |
 | `Detect` | the agent link's or stream's liveness ending a dead holder's session |
 | `Restart(p)` | a supervisor (systemd, launchd) starting the process again |
@@ -1221,10 +1222,31 @@ while it holds a session: `NoFalseRefusal`). Witnesses, each violated:
 `WitnessRefused`, `WitnessReplaced`, `WitnessOtherCred`,
 `WitnessStaleTakeover` (a restart takes over its dead predecessor's
 session). Tests: `core/session` `TestAgentTunnelReconnectOfTheSameProcessIsNotATakeover`,
-`TestTCPTakeoverOnAnotherReplicaLetsOpenSessionsFinish`; nfltr `catcli`
-`TestServeRefusesASecondHolder`, `TestServeReplacedExitCode`. No trace
-recorder yet (the lock is the client's, the notice the relay's: a
-two-process recorder is the lane's open item).
+`TestTCPTakeoverOnAnotherReplicaLetsOpenSessionsFinish`,
+`TestConnectHTTPTakeover`; nfltr `upcli` `TestUpRefusesASecondHolder`,
+`TestHeldExit`, `catcli` `TestServeRefusesASecondHolder`.
+
+Traces (lane SERVEDUP2, `make spec-traces`): the relay's half.
+`core/session/trace_takeover_on.go` (`-tags relaytrace`) writes, per agent
+ID of a dispatcher, `takeover-<agent>-<n>.ndjson`: each `ConnectHTTP` is a
+process; its takeover decision in `takeOverSession` (`Connect`, or
+`Refuse` for another credential, naming the session it replaces or is
+refused for) and its end (`Notice` when replaced, else `End`) are one line
+each, written under one lock with the change they record (the load of
+the live session; its removal), so the file's order is theirs.
+`spec/TraceTakeover.tla` checks each against `Takeover` with every
+invariant: `Connect`, `Notice`, `Stop` and the refusing `Connect` are
+logged; a process's `Start` (the machine lock) is not, and TLC takes it
+before the process's first line on a machine of its own (the relay sees no
+machines). `TestConnectHTTPTakeover` takes every logged step; every other
+`ConnectHTTP` of the trace run is checked too. Rejected fixtures
+(`spec/testdata/reject-takeover-*.ndjson`): `silent-replace` (a session
+taken over without naming the live one: `NoSilentReplace`'s bug),
+`relay-refuses` (the same credential refused: `NoFalseRefusal`'s bug),
+`notice-untold` (a replaced notice no takeover sent). Open: the client's
+half (`Start`, `Acquire`, and so `DuplicateRefused`, `LockLive` on real
+machines) is not recorded; nfltr's lock tests check it, a recorder there
+would merge with this one by vector clock.
 
 Environment assumptions:
 
@@ -1241,6 +1263,7 @@ Environment assumptions:
 | `Connect`: same credential takes over, another refused | `core/session/dispatcher_session_takeover.go` |
 | `Connect`, `Notice`: the AgentTunnel replace | `core/session/dispatcher_grpc.go` |
 | `Notice`: the replaced TCP stream | `core/session/dispatcher_tcp_streams.go` |
+| `Connect`, `Notice`, `Stop`: `ConnectHTTP`'s takeover and teardown, traced | `core/session/dispatcher_subscribe.go`, `core/session/trace_takeover_on.go` |
 
 ## Layer contract: what the layer above may assume
 

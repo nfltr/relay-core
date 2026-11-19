@@ -58,12 +58,14 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	if d.refusesAgents(registrationCtx, agentID) { // agent_move.go, agent_rebalance.go: its reconnect must reach another replica
 		return status.Error(codes.Unavailable, "this relay replica is leaving or holds more than its share of agents: connect again")
 	}
-	if err := d.takeOverSession(registrationCtx, agentID, credHash); err != nil {
+	proc := traceTakeoverProc(d, agentID)
+	if err := d.takeOverSession(registrationCtx, agentID, credHash, proc); err != nil {
 		return err
 	}
 	credential := sessionCredential(credHash)
 	release, err := d.validateAgentConnection(registrationCtx, agentID, credential, d.IPInventory)
 	if err != nil {
+		traceTakeoverStep(d, agentID, proc, credHash, func() (string, string) { return "End", "" })
 		return err
 	}
 	defer release()
@@ -73,10 +75,16 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	ended := make(chan struct{})
 	var registered *HTTPStream
 	defer func() {
-		if registered != nil {
-			metrics.AgentDown(agentID)
-			d.DeregisterAgent(agentID, registered, stream.Context().Err())
-		}
+		traceTakeoverStep(d, agentID, proc, credHash, func() (string, string) { // Takeover.tla Notice, Stop
+			if registered != nil {
+				metrics.AgentDown(agentID)
+				d.DeregisterAgent(agentID, registered, stream.Context().Err())
+			}
+			if errors.Is(context.Cause(sessionCtx), errSessionReplaced) {
+				return "Notice", ""
+			}
+			return "End", ""
+		})
 		close(ended)
 	}()
 
@@ -225,7 +233,7 @@ func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
 	}()
 	consumer.Chan() // receiving from here
 
-	agentStream.takeover = &sessionTakeover{credHash: credHash, replace: func() { cancel(errSessionReplaced) }, ended: ended}
+	agentStream.takeover = &sessionTakeover{credHash: credHash, replace: func() { cancel(errSessionReplaced) }, ended: ended, proc: proc}
 	d.AddHTTPSession(agentID, agentStream) // after the claim: a request meanwhile waits (RouteArriving)
 	d.Presence.up(agentID, agentStream.labels, agentStream.capabilities, d.presenceServices(agentID))
 	if d.OnAgentMetadata != nil {

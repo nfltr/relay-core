@@ -16,7 +16,7 @@
 (* process on the machine is refused at start, naming the holder, unless  *)
 (* it passes --replace; then it registers, the relay replaces the first    *)
 (* and tells it, and the newcomer takes the lock once the first is gone.  *)
-(* The client half is nfltr cmd/nfltr/internal/catcli (serve_holder.go).   *)
+(* The client half is nfltr cmd/nfltr/internal/upcli (agent_hold.go).     *)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS Procs,   \* processes registering the agent ID
