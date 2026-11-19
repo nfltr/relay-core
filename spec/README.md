@@ -2386,10 +2386,24 @@ more than 256 responses before reading the requests, a caller sending
 more than 16 requests before reading the responses) waits until its
 deadline; before, the receive loop cut it after `handoff.Stall`.
 
+The model takes the relay's pipes as lossless while the agent reads. An
+in-process agent's stream (`InternalAgentLoopback`, 256 frames) refused a
+frame when full: a caller's whole response window queued toward its
+starved receive loop, the call's EOM and the error meant to replace it were
+both refused, and the caller read every response, then waited for an end
+that never came (relay-core f88bbec, `make test-race`:
+`TestInternalAgentRouting_StreamsPastTheWindows/local`; lane LINKABORT).
+Its dispatcher side now waits for room as a gRPC stream's Send does,
+refusing only an agent that takes nothing for `handoff.Stall`
+(`TestInternalAgentRouting_StarvedCallerGetsTheEnd`,
+`TestInternalAgentLoopback_DispatcherSendWaitsForRoom`). Open: a
+`CallCredit.tla` mutant for a pipe that drops when full (relay `spec/`).
+
 ### Code map (drift check)
 
 | what the spec models | file |
 |---|---|
 | `RelayGrant`: `handoffA2AWindow`; `RelayIn`/`RelayOut` of a local call | `core/session/dispatcher_agent_routing.go` |
+| `RelayOut` to an in-process agent: lossless while it takes | `core/session/internal_agent_loopback.go` |
 | `RelayOut` and `RelayGrant` of a call to another replica | `core/session/dispatcher_agent_routing_remote.go` |
 | `RelayTunnel`: an agent-to-agent call's frames forwarded until its stream ends | `core/session/dispatcher_grpc.go` |

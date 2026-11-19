@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nfltr/relay/client/rpcclient"
+	"github.com/nfltr/relay/proto/pb"
 )
 
 // The source agent's receive loop serves both calls. The stalled call's
@@ -207,6 +209,107 @@ func streamPastTheWindows(t *testing.T, sourceD, targetD *Dispatcher) {
 		}
 		if got := string(response.Data); got != fmt.Sprint(i) {
 			t.Fatalf("Recv(%d) = %q", i, got)
+		}
+	}
+	if _, err := call.Recv(); err != io.EOF {
+		t.Fatalf("terminal Recv = %v, want EOF", err)
+	}
+}
+
+// gatedAgentSide is an internal agent's side whose receive loop takes
+// nothing until open closes: a source agent starved while its call's
+// responses arrive.
+type gatedAgentSide struct {
+	loop *InternalAgentLoopback
+	open chan struct{}
+}
+
+func (g *gatedAgentSide) Send(msg *pb.TunnelFrame) error { return g.loop.AgentSide().Send(msg) }
+func (g *gatedAgentSide) Recv() (*pb.TunnelFrame, error) {
+	select {
+	case <-g.open:
+	case <-g.loop.ctx.Done():
+		return nil, g.loop.ctx.Err()
+	}
+	return g.loop.AgentSide().Recv()
+}
+
+// eomSignal is the dispatcher's side of an internal agent that reports the
+// first EOM it is handed.
+type eomSignal struct {
+	Streamer
+	once    sync.Once
+	sending chan struct{}
+}
+
+func (e *eomSignal) Send(msg *pb.TunnelFrame) error {
+	if msg.GetEom() {
+		e.once.Do(func() { close(e.sending) })
+	}
+	return e.Streamer.Send(msg)
+}
+
+// TestInternalAgentRouting_StarvedCallerGetsTheEnd: a full response window
+// queued toward a caller whose receive loop is starved still ends with the
+// call's EOM. The loopback refused the frame past its buffer (the window,
+// 256) and the error meant to replace it, so the caller read every response
+// and then waited for an end that never came (relay-core f88bbec, make
+// test-race: TestInternalAgentRouting_StreamsPastTheWindows; lane
+// LINKABORT). The loopback now waits for room as a gRPC stream does, up to
+// its stall bound (TestInternalAgentLoopback_DispatcherSendWaitsForRoom).
+func TestInternalAgentRouting_StarvedCallerGetsTheEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // a hang bound
+	defer cancel()
+	d := newTestDispatcherForInternalAgent(t)
+	sourceLoop := NewInternalAgentLoopback(ctx, "source-agent")
+	targetLoop := NewInternalAgentLoopback(ctx, "target-agent")
+	defer sourceLoop.Close()
+	defer targetLoop.Close()
+	eom := &eomSignal{Streamer: sourceLoop.DispatcherSide(), sending: make(chan struct{})}
+	defer d.RegisterInternalAgent(ctx, sourceLoop.AgentID(), eom)()
+	defer d.RegisterInternalAgent(ctx, targetLoop.AgentID(), targetLoop.DispatcherSide())()
+
+	gate := &gatedAgentSide{loop: sourceLoop, open: make(chan struct{})}
+	source := rpcclient.NewAgent(sourceLoop.AgentID(), gate)
+	target := rpcclient.NewAgent(targetLoop.AgentID(), targetLoop.AgentSide())
+	defer source.Close() //nolint:errcheck
+	defer target.Close() //nolint:errcheck
+
+	const responses = rpcclient.ResponseWindow // the caller's whole window, unread
+	target.Handle(func(stream rpcclient.ServerStream) error {
+		if _, err := stream.Recv(); err != nil {
+			return fmt.Errorf("request: %w", err)
+		}
+		if _, err := stream.Recv(); err != io.EOF {
+			return fmt.Errorf("request's end: %v, want EOF", err)
+		}
+		for i := range responses {
+			if err := stream.Send(fmt.Append(nil, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	call, err := source.NewStream(ctx, targetLoop.AgentID())
+	if err != nil {
+		t.Fatalf("NewStream: %v", err)
+	}
+	if err := call.Send([]byte("go")); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := call.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+	select { // the window queued, the call's end handed to the caller's loopback
+	case <-eom.sending:
+	case <-ctx.Done():
+		t.Fatal("the call's end never reached the caller's loopback")
+	}
+	close(gate.open)
+	for i := range responses {
+		if _, err := call.Recv(); err != nil {
+			t.Fatalf("Recv(%d): %v", i, err)
 		}
 	}
 	if _, err := call.Recv(); err != io.EOF {

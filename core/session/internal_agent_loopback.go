@@ -26,7 +26,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
+	"github.com/nfltr/relay/client/handoff"
 	"github.com/nfltr/relay/proto/pb"
 )
 
@@ -50,6 +52,9 @@ type InternalAgentLoopback struct {
 	agentToDispatcher chan *pb.TunnelFrame
 
 	closeOnce sync.Once
+
+	// stall bounds a dispatcher-side Send's wait for room (handoff.Stall).
+	stall time.Duration
 }
 
 const internalAgentLoopbackBuffer = 256
@@ -68,6 +73,7 @@ func NewInternalAgentLoopback(parent context.Context, agentID string) *InternalA
 		agentID:           agentID,
 		dispatcherToAgent: make(chan *pb.TunnelFrame, internalAgentLoopbackBuffer),
 		agentToDispatcher: make(chan *pb.TunnelFrame, internalAgentLoopbackBuffer),
+		stall:             handoff.Stall,
 	}
 }
 
@@ -130,19 +136,25 @@ func (s *internalAgentLoopbackDispatcherSide) err() error {
 	return s.loop.ctx.Err()
 }
 
+// Send hands msg to the agent, waiting for room as a gRPC stream's Send
+// waits for flow control: a frame within its call's credit is never
+// refused while the agent keeps taking (TestInternalAgentRouting_
+// StarvedCallerGetsTheEnd: a full response window queued, its EOM was
+// refused and the caller waited forever). An agent that takes nothing for
+// the stall bound is refused (errInternalAgentLoopbackBackpressure).
 func (s *internalAgentLoopbackDispatcherSide) Send(msg *pb.TunnelFrame) error {
 	select {
 	case <-s.done():
 		return s.err()
 	default:
 	}
-	select {
-	case s.loop.dispatcherToAgent <- msg:
+	switch err := handoff.Send(s.loop.dispatcherToAgent, msg, s.done(), s.loop.stall); {
+	case err == nil:
 		return nil
-	case <-s.done():
-		return s.err()
-	default:
+	case errors.Is(err, handoff.ErrStalled):
 		return fmt.Errorf("%w: queue_depth=%d capacity=%d", errInternalAgentLoopbackBackpressure, len(s.loop.dispatcherToAgent), cap(s.loop.dispatcherToAgent))
+	default:
+		return s.err()
 	}
 }
 

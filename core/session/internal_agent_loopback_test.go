@@ -128,6 +128,7 @@ func TestInternalAgentLoopback_DispatcherStreamerContext(t *testing.T) {
 func TestInternalAgentLoopback_DispatcherSendFailsWhenQueueIsSaturated(t *testing.T) {
 	loop := NewInternalAgentLoopback(context.Background(), "test-agent")
 	defer loop.Close()
+	loop.stall = 50 * time.Millisecond // an agent that takes nothing
 	ds := loop.DispatcherSide()
 
 	for i := range internalAgentLoopbackBuffer {
@@ -136,12 +137,28 @@ func TestInternalAgentLoopback_DispatcherSendFailsWhenQueueIsSaturated(t *testin
 		}
 	}
 
-	started := time.Now()
-	err := ds.Send(&pb.TunnelFrame{TransactionId: "overflow"})
-	if !errors.Is(err, errInternalAgentLoopbackBackpressure) {
+	if err := ds.Send(&pb.TunnelFrame{TransactionId: "overflow"}); !errors.Is(err, errInternalAgentLoopbackBackpressure) {
 		t.Fatalf("overflow send = %v, want %v", err, errInternalAgentLoopbackBackpressure)
 	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		t.Fatalf("overflow send took %v, want bounded failure", elapsed)
+}
+
+// A full loopback whose agent takes a frame lets a waiting Send through:
+// no frame is refused while the agent keeps taking.
+func TestInternalAgentLoopback_DispatcherSendWaitsForRoom(t *testing.T) {
+	loop := NewInternalAgentLoopback(context.Background(), "test-agent")
+	defer loop.Close()
+	ds := loop.DispatcherSide()
+	for i := range internalAgentLoopbackBuffer {
+		if err := ds.Send(&pb.TunnelFrame{TransactionId: fmt.Sprintf("tx-%d", i)}); err != nil {
+			t.Fatalf("fill send %d: %v", i, err)
+		}
+	}
+	sent := make(chan error, 1)
+	go func() { sent <- ds.Send(&pb.TunnelFrame{TransactionId: "end", Eom: true}) }()
+	if _, err := loop.AgentSide().Recv(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-sent; err != nil {
+		t.Fatalf("send after the agent took one: %v", err)
 	}
 }
