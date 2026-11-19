@@ -1174,6 +1174,74 @@ moves within (RFAGENT), or the new endpoint refuses it.
 | the recorder of `Accept` (`accept`, `refuse`; for RFTRACE) | `core/session/trace_failover_on.go` |
 | `Dial`, `DialFails`, `Detect` | `relay:client/agent` (RFAGENT) |
 
+## Takeover.tla: a second registration of an agent ID
+
+`Takeover.tla` (lane SERVEDUP, nfltr `docs/reports/cli-ux-2026-11-19.md`
+finding 5) models the processes that register one agent ID (`nfltr up`,
+`nfltr cat serve`) and the rule for a second one. The relay's half is the
+existing rule: another credential is refused (`AlreadyExists`); the same
+credential takes the agent over, newest wins, and the replaced stream is
+told (`errReplacedSessionStatus`, which the client SDK classes as final,
+`rpcclient.FatalReplaced`). The relay cannot refuse the same credential: it
+cannot tell a live holder from one that died unseen (a reboot, a lost
+network) until liveness ends its session, so refusing there refuses the
+restart (mutant `relay-refuses`). The machine can: the client holds a
+machine-local lock of (relay, agent) while it serves, which the kernel
+releases however the process ends, so a second process on the machine is
+refused at start naming the holder, unless it passes `--replace`; then it
+registers, the relay replaces and tells the first, and the newcomer takes
+the lock once the first is gone. The client half is in nfltr
+(`cmd/nfltr/internal/catcli`, `serve_holder.go`).
+
+| action | Go |
+|---|---|
+| `Start(p, r)` | nfltr `catcli` `holdAgent` (`filelock.TryLock`; `--replace`: `filelock.Lock` in the background) |
+| `Connect(p)` | `Dispatcher.takeOverSession` (ConnectHTTP), the AgentTunnel replace in `dispatcher_grpc.go`, the replaced TCP stream in `dispatcher_tcp_streams.go`; `AlreadyExists` for another credential |
+| `Notice(p)` | the replaced stream's `errReplacedSessionStatus`; the client's `rpcclient.FatalReplaced`, nfltr `cat serve` exit 13 |
+| `Acquire(p)` | the `--replace` process's background `filelock.Lock` returning |
+| `Stop(p)` | Ctrl+C: the session's end and `DeregisterAgent` |
+| `Crash(p)` | the process dies; the kernel releases its `flock` |
+| `Detect` | the agent link's or stream's liveness ending a dead holder's session |
+| `Restart(p)` | a supervisor (systemd, launchd) starting the process again |
+
+Invariants (`Takeover.cfg`, `make spec`: two processes with one credential
+on one machine, one with another credential on another; 16,520 distinct
+states, 6 s; `COVERAGE=1` takes every action): `NoSilentReplace` (a process
+that believes it serves is the one dials reach, or its replaced notice is
+on its way), `DuplicateRefused` (two live processes of one machine never
+both register without `--replace`), `NoFalseRefusal` (a restart after an
+unseen death is never refused for its dead predecessor's session),
+`LockLive` (the lock names a live process). Liveness (`TakeoverLive.cfg`,
+`make spec-liveness`): `ReplacedExits`. Mutants (`make spec-mutants`), each
+caught: `silent-replace` (the relay does not tell the replaced stream:
+`NoSilentReplace`), `notice-ignored` (the client redials on the notice:
+`NoSilentReplace`), `no-lock` (no local check, the finding:
+`DuplicateRefused`), `relay-refuses` (the relay refuses the same credential
+while it holds a session: `NoFalseRefusal`). Witnesses, each violated:
+`WitnessRefused`, `WitnessReplaced`, `WitnessOtherCred`,
+`WitnessStaleTakeover` (a restart takes over its dead predecessor's
+session). Tests: `core/session` `TestAgentTunnelReconnectOfTheSameProcessIsNotATakeover`,
+`TestTCPTakeoverOnAnotherReplicaLetsOpenSessionsFinish`; nfltr `catcli`
+`TestServeRefusesASecondHolder`, `TestServeReplacedExitCode`. No trace
+recorder yet (the lock is the client's, the notice the relay's: a
+two-process recorder is the lane's open item).
+
+Environment assumptions:
+
+| assumption | source |
+|---|---|
+| a `flock` lock is released when its process ends, however it ends | flock(2); Windows `LockFileEx`: released when the handle closes at process exit |
+| a dead holder's session ends once liveness notices | `Handoff.tla` (the agent link's liveness), `Directory.tla` (a record's TTL) |
+| the replaced stream's status reaches its client unless the client is gone | gRPC stream status semantics |
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `Connect`: same credential takes over, another refused | `core/session/dispatcher_session_takeover.go` |
+| `Connect`, `Notice`: the AgentTunnel replace | `core/session/dispatcher_grpc.go` |
+| `Notice`: the replaced TCP stream | `core/session/dispatcher_tcp_streams.go` |
+
 ## Layer contract: what the layer above may assume
 
 relay-server (its `spec/Replicas.tla`), the relay's clients and the agent

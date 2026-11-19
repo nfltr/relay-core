@@ -9,7 +9,7 @@
 #   check     actions, then TLC on spec/AgentLink.cfg (Refines left out),
 #             AgentLinkIface.cfg (Refines on fewer bytes), spec/Handoff.cfg,
 #             spec/Move.cfg, spec/Presence.cfg, spec/Directory.cfg and
-#             DirectoryHeal.cfg, spec/NF1Claim.cfg, spec/NF1Anon.cfg, spec/Failover.cfg and FailoverShare.cfg: invariants; spec/AgentLinkWrite.cfg:
+#             DirectoryHeal.cfg, spec/NF1Claim.cfg, spec/NF1Anon.cfg, spec/Failover.cfg and FailoverShare.cfg, spec/Takeover.cfg: invariants; spec/AgentLinkWrite.cfg:
 #             WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
@@ -400,7 +400,7 @@ checktraces() {
 # ways) and each trace module's event names against the recorder's Go.
 actions_check() {
 	ok=0
-	for m in AgentLink Handoff Move Presence Directory NF1Claim NF1Anon KeyAccount AccountLimit Failover; do
+	for m in AgentLink Handoff Move Presence Directory NF1Claim NF1Anon KeyAccount AccountLimit Failover Takeover; do
 		# A step: a definition whose body primes or keeps a variable (not a temporal formula).
 		acts=$(awk '
 			function flush() { if (name != "" && act && !tmp) print name; name = "" }
@@ -462,6 +462,7 @@ check)
 	run DirectoryHeal.cfg Directory.tla
 	run NF1Claim.cfg NF1Claim.tla
 	run NF1Anon.cfg NF1Anon.tla
+	run Takeover.cfg Takeover.tla
 	;;
 nightly)
 	run AgentLink.cfg MCAgentLink.tla
@@ -478,6 +479,7 @@ liveness)
 	run AccountLimitLive.cfg AccountLimit.tla
 	run FailoverLive.cfg Failover.tla
 	run NF1AnonLive.cfg NF1Anon.tla
+	run TakeoverLive.cfg Takeover.tla
 	;;
 mutants)
 	m='s/Mutant = "none"/Mutant = "'
@@ -609,6 +611,14 @@ mutants)
 	for b in subscriber-stops outbox-stops publish-drop; do
 		expect PresenceLive.cfg Presence.tla "live:$b" -e "$m$b\"/" -e 's/MaxFail = 1/MaxFail = 0/' -e 's/Crash = TRUE/Crash = FALSE/'
 	done
+	# Takeover.tla: a second registration of an agent ID (lane SERVEDUP).
+	for b in silent-replace no-lock relay-refuses notice-ignored; do
+		expect Takeover.cfg Takeover.tla "takeover:$b" -e "$m$b\"/"
+	done
+	expect Takeover.cfg Takeover.tla witness:takeover-refused -e 's/^    LockLive$/    WitnessRefused/'
+	expect Takeover.cfg Takeover.tla witness:takeover-replaced -e 's/^    LockLive$/    WitnessReplaced/'
+	expect Takeover.cfg Takeover.tla witness:takeover-other-cred -e 's/^    LockLive$/    WitnessOtherCred/'
+	expect Takeover.cfg Takeover.tla witness:takeover-stale -e 's/^    LockLive$/    WitnessStaleTakeover/'
 	# Directory.tla: the session records' bugs (findings 13, 34, 35, 37, R7); witnesses.
 	for b in renew-resurrects shared-counter seq-only seq-tie delete-any seqless-by-pod seqless-masks-counter prune-get-srem renew-yields; do
 		expect Directory.cfg Directory.tla "dir:$b" -e "$m$b\"/"
