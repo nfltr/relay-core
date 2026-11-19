@@ -54,7 +54,6 @@ type budget struct {
 func (b *budget) cut() {
 	b.once.Do(func() {
 		b.isCut.Store(true)
-		b.timer.Stop() // counted by its reason where the leg ended (nf1anon.Leg: Take, TimeUp)
 		abort(b.out, errAccountRequired)
 		abort(b.in, errAccountRequired)
 	})
