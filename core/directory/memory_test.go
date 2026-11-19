@@ -16,7 +16,9 @@ import (
 func TestMemoryCacheSweepsUnreadKeys(t *testing.T) {
 	before := runtime.NumGoroutine()
 	m := NewMemoryCache()
-	if n := runtime.NumGoroutine(); n != before {
+	// Greater, not different: goroutines an earlier test left may still be
+	// exiting (GitHub's race job saw -2).
+	if n := runtime.NumGoroutine(); n > before {
 		t.Fatalf("NewMemoryCache started %d goroutines", n-before)
 	}
 	now := time.Unix(1_800_000_000, 0)
