@@ -803,7 +803,7 @@ proof, unchanged).
 | `Open(s, v, r)` | `serveNF1Session` (r = nf1: a data connection's open, or a browser's WebSocket, `nf1ws.go`; `Registry.Leg`); every other route (`Reach`, `A2AReaches`: HTTP ingress, listings, A2A) refuses an `nf1anon` agent (r = keyed) |
 | `Relay(s)` | the budgeted onward leg of an anonymous session (`frontend/connect` `budgeted`, `Leg.Take`): what fits both budgets is carried, then the leg is aborted both ways with `ERROR_REASON_ACCOUNT_REQUIRED` |
 | `TimeCut(s)` | the anonymous leg's time limit (the same abort) |
-| `Deliver(s)`, `JoinEnd(s)` | a cut (`Cut`, `TimeCut`) aborts the agent's leg, then the client's (`budget.cut`); the client's end is that abort (`Deliver`) or the join's copy toward it ending first at the aborted agent leg (`JoinEnd`), which passes on the budgeted leg's Read: the cut's abort once cut (`budget.ended`) |
+| `Deliver(s)`, `JoinEnd(s)` | a cut (`Cut`, `TimeCut`) aborts the agent's leg, then the client's (`budget.cut`); the client's end is that abort (`Deliver`) or the join's copy toward it ending first at the aborted agent leg (`JoinEnd`), which passes on the budgeted leg's Read: the cut's abort, link's own end of a session aborted here (link spec/LinkSession.tla `GEnds` "here", lane LINKABORT; relay-core's `budget.ended` workaround deleted) |
 | `Punch(s)`, `Direct(s)`, `Lose(s)` | the peers' direct path (relay `client/agent` `DirectSession`, link `DirectPath.tla`): the relayed leg is released at the move |
 | `Reattach(s)` | a relayed re-attach (`A`): a new nf1 open, budgeted like the first |
 | `GiveUp(s)` | the SDK's direct-required bound: the client aborts with the same reason |

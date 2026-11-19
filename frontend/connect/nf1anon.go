@@ -5,7 +5,6 @@ package connect
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/link"
@@ -47,13 +46,11 @@ type budget struct {
 	leg     *nf1anon.Leg
 	timer   *time.Timer
 	once    sync.Once
-	isCut   atomic.Bool // set before the cut's aborts: what out's local end then reads as
 }
 
 // cut aborts both legs with the typed reason, once.
 func (b *budget) cut() {
 	b.once.Do(func() {
-		b.isCut.Store(true)
 		abort(b.out, errAccountRequired)
 		abort(b.in, errAccountRequired)
 	})
@@ -78,19 +75,10 @@ func (b *budget) take(n int) int {
 	return fit
 }
 
-// ended is err, or the cut's abort once the leg was cut: out aborted here
-// reads as a clean end (io.EOF) and writes as io.ErrClosedPipe, and the
-// join would pass that on to the client ahead of the cut's own abort of in
-// (spec/NF1Anon.tla JoinEnd, mutant join-clean-end;
-// TestBudgetedLegEndsTyped).
-func (b *budget) ended(err error) error {
-	if err != nil && b.isCut.Load() {
-		return errAccountRequired
-	}
-	return err
-}
-
-// read is out's Read, toward the client.
+// read is out's Read, toward the client. Once cut, out reads and writes
+// the cut's abort (link: a session aborted here never reads a clean end),
+// which the join passes on (spec/NF1Anon.tla JoinEnd, mutant
+// join-clean-end; TestBudgetedLegEndsTyped).
 func (b *budget) read(p []byte) (int, error) {
 	n, err := b.out.Read(p)
 	if n > 0 {
@@ -98,7 +86,7 @@ func (b *budget) read(p []byte) (int, error) {
 			return fit, errAccountRequired
 		}
 	}
-	return n, b.ended(err)
+	return n, err
 }
 
 // write is out's Write, from the client.
@@ -108,7 +96,7 @@ func (b *budget) write(p []byte) (int, error) {
 	if err == nil && fit < len(p) {
 		err = errAccountRequired
 	}
-	return n, b.ended(err)
+	return n, err
 }
 
 // close stops the leg's timer; the leg ended (the peers ended it, a

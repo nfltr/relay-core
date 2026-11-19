@@ -5,6 +5,7 @@ package connect
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -17,30 +18,31 @@ import (
 )
 
 // localEnd is a link session as its own side sees it after its AbortWith
-// or Reset: a Read returns io.EOF, a Write io.ErrClosedPipe (link
-// Session.end, writeErr).
+// or Reset: a Read returns the abort, a Write io.ErrClosedPipe wrapping it
+// (link Session.endHere, TestLocalAbortReadsTyped there).
 type localEnd struct {
 	net.Conn
 	once sync.Once
 	done chan struct{}
+	err  error
 }
 
 func newLocalEnd() *localEnd { return &localEnd{done: make(chan struct{})} }
 
-func (s *localEnd) Read([]byte) (int, error) { <-s.done; return 0, io.EOF }
+func (s *localEnd) Read([]byte) (int, error) { <-s.done; return 0, s.err }
 func (s *localEnd) Write(p []byte) (int, error) {
 	select {
 	case <-s.done:
-		return 0, io.ErrClosedPipe
+		return 0, fmt.Errorf("%w: %w", io.ErrClosedPipe, s.err)
 	default:
 		return len(p), nil
 	}
 }
-func (s *localEnd) end()                        { s.once.Do(func() { close(s.done) }) }
-func (s *localEnd) AbortWith(*link.Abort) error { s.end(); return nil }
-func (s *localEnd) Reset() error                { s.end(); return nil }
-func (s *localEnd) CloseWrite() error           { return nil }
-func (s *localEnd) Close() error                { s.end(); return nil }
+func (s *localEnd) end(err error)                 { s.once.Do(func() { s.err = err; close(s.done) }) }
+func (s *localEnd) AbortWith(a *link.Abort) error { s.end(a); return nil }
+func (s *localEnd) Reset() error                  { s.end(link.ErrReset); return nil }
+func (s *localEnd) CloseWrite() error             { return nil }
+func (s *localEnd) Close() error                  { s.end(io.EOF); return nil }
 
 // TestBudgetedLegEndsTyped: once the relay cut a budgeted leg, its Read and
 // Write report the cut's ERROR_REASON_ACCOUNT_REQUIRED, never the clean end
