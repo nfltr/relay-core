@@ -99,12 +99,25 @@ func streamCapabilities(tracker HeartbeatTracker) []string {
 }
 
 // refreshAgentInventoryOnInboundActivity renews the cross-pod agent inventory
-// TTL from any inbound stream message, not just explicit heartbeat frames.
-// The first inbound message after connect refreshes immediately; subsequent
-// busy-stream messages are throttled so Redis is not updated per frame. It
-// returns directory.ErrSuperseded, writing nothing, when a newer session of
-// the agent (s) on another pod holds the record: the caller ends this one.
+// TTL from any inbound stream message, not just explicit heartbeat frames,
+// throttled to one write per refresh interval so Redis is not updated per
+// frame. It returns directory.ErrSuperseded, writing nothing, when a newer
+// session of the agent (s) on another pod holds the record: the caller ends
+// this one.
 func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context, agentID string, inv directory.IPInventory, tracker HeartbeatTracker) error {
+	return d.renewRecord(ctx, agentID, inv, tracker, true)
+}
+
+// renewAgentInventory is the session watch's renewal (its start, its ticker
+// every refresh interval, the re-announce): never throttled. Gated by a
+// frame's or the re-announce's write off the ticker's phase, the next tick
+// was skipped and the record went unrenewed for up to its whole TTL
+// (spec/README.md finding 49, TestTickRenewalNotThrottledByReannounce).
+func (d *Dispatcher) renewAgentInventory(ctx context.Context, agentID string, inv directory.IPInventory, tracker HeartbeatTracker) error {
+	return d.renewRecord(ctx, agentID, inv, tracker, false)
+}
+
+func (d *Dispatcher) renewRecord(ctx context.Context, agentID string, inv directory.IPInventory, tracker HeartbeatTracker, throttle bool) error {
 	if d == nil || agentID == "" || inv == nil {
 		return nil
 	}
@@ -133,7 +146,7 @@ func (d *Dispatcher) refreshAgentInventoryOnInboundActivity(ctx context.Context,
 	}
 
 	now := time.Now()
-	if lastRaw, ok := d.InventoryRefreshByAgentID.Load(agentID); ok {
+	if lastRaw, ok := d.InventoryRefreshByAgentID.Load(agentID); ok && throttle {
 		if last, ok := lastRaw.(time.Time); ok && now.Sub(last) < refreshInterval {
 			return nil
 		}
@@ -213,7 +226,7 @@ func (d *Dispatcher) rewriteRecord(ctx context.Context, agentID string, inv dire
 		*stale = true
 		lock.Unlock()
 	}
-	return d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, tracker)
+	return d.renewAgentInventory(ctx, agentID, inv, tracker)
 }
 
 // departed releases the agent's record for session s, then publishes its

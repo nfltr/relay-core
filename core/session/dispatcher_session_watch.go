@@ -58,7 +58,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 	var reannounce <-chan struct{}
 	if interval := d.inboundInventoryRefreshInterval(); agentID != "" && tracker != nil && inv != nil && d.Config.HeartbeatRecvThreshold > 0 && interval > 0 {
 		reannounce = d.reannounced()
-		if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, tracker); err != nil {
+		if err := d.renewAgentInventory(ctx, agentID, inv, tracker); err != nil {
 			return errSessionReplaced
 		}
 		ticker := time.NewTicker(interval)
@@ -145,6 +145,10 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 		case <-reannounce: // the store lost the records: rewrite now (gates lifted)
 			reannounce = d.reannounced()
 			if err := d.rewriteRecord(ctx, agentID, inv, tracker); err != nil {
+				if mv != nil { // asked to move: the new session took the record
+					refresh, reannounce = nil, nil
+					continue
+				}
 				if gaveUp == nil {
 					return errSessionReplaced // directory.ErrSuperseded
 				}
@@ -152,7 +156,11 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 				gaveUp = nil
 			}
 		case <-refresh:
-			if err := d.refreshAgentInventoryOnInboundActivity(ctx, agentID, inv, tracker); err != nil {
+			if err := d.renewAgentInventory(ctx, agentID, inv, tracker); err != nil {
+				if mv != nil { // asked to move: the new session took the record
+					refresh, reannounce = nil, nil
+					continue
+				}
 				if gaveUp == nil {
 					return errSessionReplaced // directory.ErrSuperseded
 				}
@@ -185,8 +193,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 		case <-stopNow:
 			if mv == nil {
 				if mv = d.startMove(tracker, inv); mv != nil {
-					refresh, reannounce = nil, nil // the new session takes the record
-					moved = mv.stream.moved
+					moved = mv.stream.moved // renewals go on until the new session takes the record (finding 49)
 					timer := time.NewTimer(d.moveBound)
 					defer timer.Stop()
 					stopNow = timer.C
@@ -206,7 +213,11 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 			if mv = d.startMove(tracker, inv); mv == nil {
 				tracker.(*HTTPStream).moving.Store(false) // Rebalance set it; the session is ending
 			} else {
-				refresh, reannounce = nil, nil // the new session takes the record
+				// Renewals go on until one finds the new session's record:
+				// a move that reaches no other replica must not let the
+				// record expire while this replica routes the agent
+				// (spec/README.md finding 49, Move.tla RecordLives,
+				// TestRebalanceMoveKeepsRenewingTheRecord).
 				d.tcpMovingAway(agentID, true)
 				moved = mv.stream.moved
 				timer := time.NewTimer(d.moveBound)
@@ -233,6 +244,7 @@ func (d *Dispatcher) WatchAgentSession(ctx context.Context, agentID string, trac
 				// the agent's close run under the relay's shutdown, not a
 				// bound that would fail them (spec/README.md finding 21).
 				check, giveUp, stopNow = nil, nil, nil
+				refresh, reannounce = nil, nil // the record names the new session
 				settle = d.stopRouting(mv)
 			}
 		case <-settle:
