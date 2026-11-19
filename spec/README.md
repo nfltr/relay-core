@@ -389,7 +389,7 @@ github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
 | `Publish` | `Proxy.publishRequest` of a transaction's first message (on the consumer's channel, or `ErrNoConsumer`), then the lease's release |
 | `Unlease` | the lease ends with no message published: the visitor went away first, or the request went over the agent link (`dispatch.go`); it reached no agent here (`gone`) |
 | `Forward` | `relayRequestsToAgent`: the channel's next message onto the stream |
-| `Ask` | `startMove`: `MOVE_RECONNECT`, the record no longer renewed |
+| `Ask` | `startMove`: `MOVE_RECONNECT`; the record still renewed until a renewal finds B's (superseded: renewals stop) |
 | `GiveUp` | a rebalance's `moveBound` (`giveUp`), also after `MOVE_CONNECTED` while the record check has not seen B's record; none in a drain |
 | `StopRouting` | `recordMoved`, `stopRouting` |
 | `Refresh` | the renewal after `GiveUp` finding B's record (`directory.ErrSuperseded`): `resumeMove` |
@@ -400,8 +400,9 @@ github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
 | `PickB`, `ArriveB`, `RegisterB` | B's own `dispatcherURL` (B when B routes, else the record: A, or B itself); a request for B at B (B's own pick, or a peer's forward at `Ingress.peer`): `RouteArriving` waits while the record names B's session that has not registered; B's session registering (`d.Agents.Store` after `claimAgentRecord`, `dispatcher_subscribe.go`) (finding 45) |
 | `TCPSupersede`, `PlaceTCP` | `sendLoop`'s superseded renewal of the agent's TCP primary (`yield` when `movingAway`); `streamFor` placing a TCP session |
 | `RecvAgent`, `ConnectB`, `DialFails`, `Answer`, `CloseOld` | `processStream`, `moveConnect`, a handler's answer, `closeWhenAnswered` |
+| `Lose`, `RenewA`, `Expire` | the store restarting empty; `WatchAgentSession`'s `refresh` (`renewAgentInventory`, unthrottled every half TTL) and `reannounce` (`rewriteRecord`) while A routes, a move asked included (finding 49); the record's TTL |
 
-Invariants (`Move.cfg`, `make spec`, 11k states): `NoLoss` (no request
+Invariants (`Move.cfg`, `make spec`, 110k states): `NoLoss` (no request
 fails, unless a drain let the agent go before its new connection took the
 record: `lg`, the documented bounded loss), `RunOnce` (no request runs on
 the agent without its answer reaching the visitor; the same bound),
@@ -412,7 +413,8 @@ names never refuses a request while that session lives: between B's claim
 and its registration a request at B waits for the registration; finding
 45), `MovedForwards` (a peer's forward that reaches A after A stopped
 routing goes on to B while the record names B's session, never refused;
-finding 46). Liveness (`MoveLive.cfg`, no drain, weak
+finding 46), `RecordLives` (while A routes the agent its record never
+expires, a move's included: finding 49). Liveness (`MoveLive.cfg`, no drain, weak
 fairness on every step but the `GiveUp` timer and a peer's pick): every
 request answered, and A's old session ends once the agent connected B.
 `COVERAGE=1` takes every action.
@@ -437,18 +439,22 @@ finding 6), `race:supersede-ends` (finding 7), `done-ignores-leases`,
 agent closes the old stream with requests unanswered), `peer-no-lease`
 (finding 20), `drain-bound-after-stop` (finding 21),
 `tcp-stays-in-rotation` (finding 22), `no-arrival-wait` (finding 45: the
-code before `RouteArriving`). Witnesses, each violated:
+code before `RouteArriving`), `move-stops-renewal` and
+`reannounce-no-refresh` (finding 49). Witnesses, each violated:
 `WitnessHeld` (requests held as A stops routing), `WitnessLetGo` (the
 bounded loss is reachable), `WitnessRemote` (a peer's forward in flight
 after A stopped routing), `WitnessOwner`, `WitnessTCP` (a TCP session on
 A after the record moved: the window before the renewal finds it, which
 the agent's `waitIdle` bounds), `WitnessBGone` (A stopped routing while
 the record names B's session that ended: MV-5), `WitnessArriving` (a
-request at B while the record names B and B does not route yet: finding 45).
+request at B while the record names B and B does not route yet: finding 45),
+`WitnessReannounced` (a move asked while the record is a re-announce's
+write: finding 49).
 
 `FailB` (MV-5, lane W5-RCORE; `FailBOn`, off in `MoveLive.cfg`, whose
 `AllAnswered` it would break by design): B's new session ends after it
-took the record. A has stopped renewing and refuses the agent, so the
+took the record. A's renewal finds B's record (superseded: A stops
+renewing) and A refuses the agent, so the
 record names an ended session until its TTL; a request picked meanwhile
 is answered 503 Retry-After before any agent ran it (it stays `new`), and
 `NoLoss`, `RunOnce` and `OneOwner` (the record never names A again) hold
@@ -464,6 +470,7 @@ with it. The agent's next connection is a new session, outside the model.
 | B's session may fail after taking the record (`FailB`): the agent reconnects elsewhere, as a new session; requests answer 503 meanwhile (not loss) | finding MV-5 (review) |
 | B's session registers within `agentStreamWait` (1.5 s) of its claim, unless it ends: only local steps (the topic, the subscription, the claim's own `SAdd`) lie between; so `ArriveB` has no timeout step while the record names B's live session | `dispatcher_subscribe.go`, `RouteArriving` (finding 45) |
 | HTTP requests on the agent link do not ride the topic: MOVE_DONE does not order them; they end with the old connection (park TTL 10 s) | `dispatch.go` (link branch releases the lease), relay `client/agent/agent_link.go` |
+| The record lives its TTL (the heartbeat receive threshold) from its last write; the store may restart empty (`Lose`), and each replica re-announces its sessions' records once its marker is gone (`reannounceAll`, relay-server `inventory_epoch.go`) | relay-server `spec/Replicas.tla`; Redis `SET ... PX` |
 | A rebalancing move skips an agent the relay counts as carrying TCP sessions (`carriesSessions`, exact by `Handoff.tla` `CarriesExact`); sessions placed after that check are bounded by the agent's `waitIdle` (30 s) | `moveAgent`; relay `client/agent/move.go` |
 
 ### Code map (drift check)
@@ -471,7 +478,8 @@ with it. The agent's next connection is a new session, outside the model.
 | what the spec models | file |
 |---|---|
 | `routeLeases`, `RouteHere`, `startMove`, `recordMoved`, `stopRouting`, `resumeMove` | `core/session/agent_move.go` |
-| `WatchAgentSession`: `stopping`, `stopNow`, `ask`, `giveUp`, `moved`, `check`, `settle` | `core/session/dispatcher_session_watch.go` |
+| `WatchAgentSession`: `stopping`, `stopNow`, `ask`, `giveUp`, `moved`, `check`, `settle`, `refresh`, `reannounce` | `core/session/dispatcher_session_watch.go` |
+| `renewAgentInventory` (the throttle only on inbound frames), `rewriteRecord` | `core/session/dispatcher_inventory_refresh.go` |
 | `moveAgent`, `stays` | `core/session/agent_rebalance.go` |
 | `relayRequestsToAgent`, `moveDone` | `core/session/dispatcher_subscribe.go` |
 | `sendLoop`'s superseded renewal (`movingAway`, `yield`), `streamFor` | `core/session/dispatcher_tcp_streams.go` |
@@ -2393,6 +2401,30 @@ relay link connection never outlives every primary holding its token.
     with a match). Model: `Prune` (`IndexComplete`, mutant
     `prune-get-srem`). Guards `TestIndexStepsAreAtomic` "podless prune",
     `RunIndexRaces` "podless prune races a claim" (both failed before).
+49. **An agent's record expired during a rebalancing move: every peer's
+    new session 503** (model gap, code, fixed; medium; lane
+    REDISREANNOUNCE, 2026-11-19, nfltr's replica-link fault rig, case
+    `redis`: Redis restarted empty, the replicas re-announced, and 20 s
+    (one record TTL) after the re-announce every new session through a
+    peer replica got 503). Two gaps. `Ask` stopped the old session's
+    renewals until `GiveUp` ("the new session takes the record"), so a
+    move longer than the record's remaining TTL let it expire while A
+    still routed the agent: an agent that dials one replica's address
+    lands every try of its move back on A, refused, for its 8 s
+    (`stayFor`'s case), and B's session never comes. And the renewal
+    throttle (inbound frames renew at most every half TTL) also gated the
+    renewal ticker of the same period: the re-announce's write, off the
+    ticker's phase, made the next tick skip, so the record went unrenewed
+    for up to its whole TTL (the rig: re-announced at 16:20:19.9, the tick
+    at 29.3 skipped, the move asked at 38.9, expired at 39.9). `Move.tla`
+    had no TTL. Model: `rec` "lost"/"expired", `Lose`, `RenewA`, `Expire`,
+    `RecordLives` (mutants `move-stops-renewal` and
+    `reannounce-no-refresh`). Fixed: a move asked keeps renewing until
+    a renewal finds B's record superseded (then renewals stop, nothing
+    ends: finding 7's case), and the ticker's and the re-announce's
+    renewals are not throttled. Guards
+    `TestRebalanceMoveKeepsRenewingTheRecord`,
+    `TestTickRenewalNotThrottledByReannounce`.
 
 ## Agent-to-agent calls (relay spec/CallCredit.tla)
 

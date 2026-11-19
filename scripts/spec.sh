@@ -614,7 +614,8 @@ mutants)
 	expect Move.cfg Move.tla race:settle-timer -e 's/Lease = TRUE/Lease = FALSE/'
 	expect Move.cfg Move.tla race:supersede-ends -e "$m"'supersede-ends"/'
 	# Findings MV-1 (peer forwards), MV-2 (the drain's bound), MV-4 (TCP rotation), 45 (arrival), 46 (onward); witnesses.
-	for b in peer-no-lease drain-bound-after-stop tcp-stays-in-rotation no-arrival-wait peer-refuses-moved; do
+	# Lane REDISREANNOUNCE: the record expiring while A routes (the move stopped renewing it; a re-announce left unrenewed).
+	for b in peer-no-lease drain-bound-after-stop tcp-stays-in-rotation no-arrival-wait peer-refuses-moved move-stops-renewal reannounce-no-refresh; do
 		expect Move.cfg Move.tla "$b" -e "$m$b\"/"
 	done
 	expect Move.cfg Move.tla witness:held -e 's/^    NoLoss$/    WitnessHeld/'
@@ -624,6 +625,7 @@ mutants)
 	expect Move.cfg Move.tla witness:tcp -e 's/^    NoTCPAfterMove$/    WitnessTCP/'
 	expect Move.cfg Move.tla witness:b-gone -e 's/^    OneOwner$/    WitnessBGone/'
 	expect Move.cfg Move.tla witness:arriving -e 's/^    OwnerServes$/    WitnessArriving/'
+	expect Move.cfg Move.tla witness:reannounced -e 's/^    RecordLives$/    WitnessReannounced/'
 	# Presence.tla: the bugs the design prevents (findings 8-13, 24-29, 34; release-by-agent: 2a1cf33).
 	for b in unfenced-label-write partial-list partial-my-agents renew-race drop-no-resync renew-resurrects publish-before-write resync-early resync-ignored publish-drop silent-rewrite no-late-down shared-counter release-by-agent update-after-end; do
 		expect Presence.cfg Presence.tla "$b" -e "$m$b\"/"

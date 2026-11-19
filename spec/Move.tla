@@ -33,7 +33,10 @@ VARIABLES
     routes,  \* A's Agents holds the old stream (IsAgentConnected)
     conn,    \* A received MOVE_CONNECTED
     rec,     \* the directory's record: "A", "B", or "Bgone" (it names B's
-             \* session, which ended: MV-5; until its TTL)
+             \* session, which ended: MV-5; until its TTL); "lost" (the store
+             \* restarted empty) or "expired" (its TTL passed unrenewed)
+    rw,      \* the record of A's session was last written by a re-announce
+             \* (after a loss), not yet by a renewal
     ag,      \* the agent: old, dialing, failed, both, closing, closed
     rq,      \* request -> new, picked, remote, fwd, onA, agentA, atB, answered, failed, gone
     exec,    \* requests the agent ran
@@ -51,12 +54,12 @@ VARIABLES
     ref,     \* requests B refused while the record named B's live session
     refA     \* peers' forwards A refused while the record named B's live session
 
-vars == <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg, tin, tsup, ts, late, bR, ref, refA>>
+vars == <<rel, routes, conn, rec, rw, ag, rq, exec, infl, cq, chA, upA, drn, lg, tin, tsup, ts, late, bR, ref, refA>>
 tcpVars == <<tin, tsup, ts, late>>
 bVars == <<bR, ref, refA>>
 
 Init ==
-    /\ rel = "routing" /\ routes = TRUE /\ conn = FALSE /\ rec = "A"
+    /\ rel = "routing" /\ routes = TRUE /\ conn = FALSE /\ rec = "A" /\ rw = FALSE
     /\ ag = "old" /\ rq = [r \in Req |-> "new"] /\ exec = {} /\ infl = {}
     /\ cq = <<>> /\ chA = <<>> /\ upA = <<>>
     /\ drn = FALSE /\ lg = FALSE
@@ -85,7 +88,7 @@ Pick(r) ==
        ELSE IF rec = "Bgone" THEN UNCHANGED rq \* B answers 503 Retry-After: no agent ran it
        ELSE rq' = [rq EXCEPT ![r] = "failed"] \* the record names A, which does not route
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* A peer replica's dispatcherURL: the record names A; the request goes
 \* over the replica link.
@@ -93,7 +96,7 @@ PickRemote(r) ==
     /\ rq[r] = "new" /\ rec = "A"
     /\ rq' = [rq EXCEPT ![r] = "remote"]
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* The forwarded request reaches A (Ingress.peer): it takes a route lease
 \* (RouteHere) as A's own ingress does. Refused (A no longer routes to the
@@ -115,7 +118,7 @@ ArriveA(r) ==
           /\ rq' = [rq EXCEPT ![r] = "new"]
           /\ refA' = IF rec = "B" THEN refA \cup {r} ELSE refA
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED <<bR, ref>>
+    /\ UNCHANGED tcpVars /\ UNCHANGED <<bR, ref, rw>>
 
 \* The first message published to the agent's topic on A.
 Publish(r) ==
@@ -124,7 +127,7 @@ Publish(r) ==
        THEN /\ cq' = Append(cq, r) /\ rq' = [rq EXCEPT ![r] = "onA"]
        ELSE /\ rq' = [rq EXCEPT ![r] = "failed"] /\ UNCHANGED cq \* ErrNoConsumer
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* The lease ends without a message published: the visitor went away
 \* before its first chunk, or the request went over the agent link
@@ -134,20 +137,20 @@ Publish(r) ==
 Unlease(r) ==
     /\ rq[r] = "picked" /\ rq' = [rq EXCEPT ![r] = "gone"]
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* relayRequestsToAgent: the consumer's next message onto the stream.
 Forward ==
     /\ cq # <<>> /\ rel # "ended"
     /\ chA' = Append(chA, Head(cq)) /\ cq' = Tail(cq)
     /\ UNCHANGED <<rel, routes, conn, rec, ag, rq, exec, infl, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* B serves what reaches it (its own session; not this model's).
 ServeB(r) ==
     /\ rq[r] = "atB" /\ rq' = [rq EXCEPT ![r] = "answered"] /\ exec' = exec \cup {r}
     /\ UNCHANGED <<rel, routes, conn, rec, ag, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 (* ---------------- replica B: the new session's arrival ----------------- *)
 (* B's session claims the record (ConnectB) before it registers in B's      *)
@@ -166,7 +169,7 @@ PickB(r) ==
     /\ rq[r] = "new" /\ (bR \/ rec \in {"A", "B"})
     /\ rq' = [rq EXCEPT ![r] = IF bR THEN "atB" ELSE IF rec = "A" THEN "remote" ELSE "toB"]
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* A request for B at B (its own ingress, or a peer's forward: Ingress.peer):
 \* served once B routes the agent; while the record names B's live session
@@ -179,17 +182,18 @@ ArriveB(r) ==
           /\ rq' = [rq EXCEPT ![r] = "new"] /\ ref' = ref \cup {r}
        \/ ~bR /\ rec # "B" /\ rq' = [rq EXCEPT ![r] = "new"] /\ UNCHANGED ref
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED <<bR, refA>>
+    /\ UNCHANGED tcpVars /\ UNCHANGED <<bR, refA, rw>>
 
 \* B's new session registers (d.Agents.Store): B routes the agent.
 RegisterB ==
     /\ rec = "B" /\ ~bR /\ bR' = TRUE
     /\ UNCHANGED <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED <<ref, refA>>
+    /\ UNCHANGED tcpVars /\ UNCHANGED <<ref, refA, rw>>
 
 (* ---------------- replica A (WatchAgentSession) ------------------------- *)
 
-\* startMove: MOVE_RECONNECT; A stops renewing the record.
+\* startMove: MOVE_RECONNECT; A renews the record until B's session takes
+\* it (ARenews).
 \* After a rebalancing move gave up, a drain asks again (its stopNow:
 \* startMove with the move given up; finding 32).
 Ask ==
@@ -198,7 +202,7 @@ Ask ==
     /\ rel' = "asked"
     /\ chA' = Append(chA, "RECONNECT")
     /\ UNCHANGED <<routes, conn, rec, ag, rq, exec, infl, cq, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* A rebalance's moveBound passed (the giveUp timer, also after
 \* MOVE_CONNECTED while the record check has not yet seen B's record):
@@ -206,28 +210,28 @@ Ask ==
 GiveUp ==
     /\ rel = "asked" /\ ~drn /\ rel' = "gaveUp"
     /\ UNCHANGED <<routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* stopRouting: the record names the new session; A routes no more.
 StopRouting ==
     /\ rel = "asked"
-    /\ conn /\ rec # "A"
+    /\ conn /\ rec \in {"B", "Bgone"}
     /\ rel' = "stopped" /\ routes' = FALSE
     /\ UNCHANGED <<conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* A's record renewal (routing, or after giving up): superseded by B's
 \* record. The code ended the session (errSessionReplaced: its requests
 \* fail); in the design a session A asked to move takes it as the move
 \* done.
 Refresh ==
-    /\ rel = "gaveUp" /\ rec # "A"
+    /\ rel = "gaveUp" /\ rec \in {"B", "Bgone"}
     /\ IF Mutant # "supersede-ends"
        THEN /\ rel' = "stopped" /\ routes' = FALSE
             /\ UNCHANGED <<rq, cq, chA>>
        ELSE EndA
     /\ UNCHANGED <<conn, rec, ag, exec, infl, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* MOVE_DONE. The design: in band, by the consumer's goroutine, once no
 \* lease is held and the channel is drained. The code: a timer after
@@ -238,13 +242,13 @@ Done ==
                  /\ cq = <<>> \/ Mutant = "done-overtakes")
     /\ rel' = "done" /\ chA' = Append(chA, "DONE")
     /\ UNCHANGED <<routes, conn, rec, ag, rq, exec, infl, cq, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* The replica starts draining (stopping), at any point of a move.
 StartDrain ==
     /\ Drain /\ ~drn /\ drn' = TRUE
     /\ UNCHANGED <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* The drain's moveBound (stopNow): an agent that did not get its new
 \* connection to take the record in time is let go (errServerRestarting):
@@ -259,7 +263,7 @@ DrainBound ==
     /\ EndA
     /\ lg' = (rel \in {"asked", "gaveUp"})
     /\ UNCHANGED <<conn, rec, ag, exec, infl, upA, drn>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* A receives from the old stream.
 RecvA ==
@@ -271,7 +275,7 @@ RecvA ==
                 /\ rq' = [rq EXCEPT ![Head(upA)] = "answered"]
                 /\ UNCHANGED <<rel, routes, conn, cq, chA>>
     /\ UNCHANGED <<rec, ag, exec, infl, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 (* ---------------- the agent's TCP stream on A --------------------------- *)
 
@@ -283,7 +287,7 @@ PlaceTCP(s) ==
                    /\ late' = [late EXCEPT ![s] = tsup]
               ELSE /\ ts' = [ts EXCEPT ![s] = "onB"] /\ UNCHANGED late
     /\ UNCHANGED <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg, tin, tsup>>
-    /\ UNCHANGED bVars
+    /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* sendLoop's renewal of A's TCP primary finds B's record: the agent moved
 \* (movingAway), so it closes this stream with its old connection. The
@@ -291,11 +295,54 @@ PlaceTCP(s) ==
 \* (finding MV-4) left it in rotation, so new sessions kept landing on a
 \* stream the agent is about to close.
 TCPSupersede ==
-    /\ rec # "A" /\ ~tsup
+    /\ rec \in {"B", "Bgone"} /\ ~tsup
     /\ tsup' = TRUE
     /\ tin' = (Mutant = "tcp-stays-in-rotation" /\ tin)
     /\ UNCHANGED <<rel, routes, conn, rec, ag, rq, exec, infl, cq, chA, upA, drn, lg, ts, late>>
-    /\ UNCHANGED bVars
+    /\ UNCHANGED bVars /\ UNCHANGED rw
+
+(* ---------------- the record's lease (the directory) -------------------- *)
+(* A's session keeps its record alive by renewing it (every half TTL, and  *)
+(* at once when the store lost the records: reannounceAll) while it routes *)
+(* the agent, also while a move is asked (until B's session takes the      *)
+(* record: a renewal then finds it superseded and writes nothing) and      *)
+(* after a rebalance gave up. A record nobody renews expires at its TTL.   *)
+(* The bugs (lane REDISREANNOUNCE, the replica-link fault rig's redis case:  *)
+(* every peer's new session 503 once the record expired mid-move):         *)
+(* "move-stops-renewal", the code before: Ask stopped the renewals until   *)
+(* GiveUp, so a move longer than the record's remaining TTL (an agent that  *)
+(* lands back on A, refused, for its 8 s of tries) let it expire while A   *)
+(* still routed; "reannounce-no-refresh": the re-announce's write reset    *)
+(* the renewal throttle off the renewal ticker's phase, so the next tick   *)
+(* was skipped and the re-announced record lived only to its TTL's edge.   *)
+
+ARenews ==
+    \/ rel \in {"routing", "gaveUp"}
+    \/ rel = "asked" /\ Mutant # "move-stops-renewal"
+
+\* The store restarted empty, or was unreachable past the TTL.
+Lose ==
+    /\ rec = "A" /\ rec' = "lost"
+    /\ UNCHANGED <<rel, routes, conn, rw, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+
+\* A renewal, or the re-announce after a loss (rw), writes the record of
+\* A's session: renewPut (a missing record is written again; a newer
+\* session's is superseded: not enabled).
+RenewA ==
+    /\ ARenews /\ rec \in {"A", "lost", "expired"}
+    /\ rec' = "A" /\ rw' = (rec = "lost")
+    /\ UNCHANGED <<rel, routes, conn, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+
+\* The record's TTL passed: renewed within half of it while A renews,
+\* it expires only once A stopped renewing.
+Expire ==
+    /\ rec = "A"
+    /\ ~ARenews \/ (Mutant = "reannounce-no-refresh" /\ rw)
+    /\ rec' = "expired" /\ rw' = FALSE
+    /\ UNCHANGED <<rel, routes, conn, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
 
 (* ---------------- the agent (connect.go, run.go) ------------------------ *)
 
@@ -314,7 +361,7 @@ RecvAgent ==
                 /\ infl' = IF ag = "closed" THEN infl ELSE infl \cup {m}
                 /\ UNCHANGED ag
     /\ UNCHANGED <<rel, routes, conn, rec, cq, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* moveConnect: B accepts the new connection, its session takes the
 \* record; MOVE_CONNECTED on the old stream.
@@ -322,7 +369,7 @@ ConnectB ==
     /\ ag = "dialing" /\ ag' = "both" /\ rec' = "B"
     /\ upA' = Append(upA, "CONNECTED")
     /\ UNCHANGED <<rel, routes, conn, rq, exec, infl, cq, chA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* B's new session ends after it took the record (MV-5: B crashed, or
 \* the new connection broke): the record names that ended session until
@@ -333,25 +380,25 @@ ConnectB ==
 FailB ==
     /\ FailBOn /\ rec = "B" /\ rec' = "Bgone" /\ bR' = FALSE
     /\ UNCHANGED <<rel, routes, conn, ag, rq, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED <<ref, refA>>
+    /\ UNCHANGED tcpVars /\ UNCHANGED <<ref, refA, rw>>
 
 \* Every try refused: the agent stays on the old connection.
 DialFails ==
     /\ ag = "dialing" /\ ag' = "failed"
     /\ UNCHANGED <<rel, routes, conn, rec, rq, exec, infl, cq, chA, upA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 Answer(r) ==
     /\ r \in infl /\ infl' = infl \ {r} /\ upA' = Append(upA, r)
     /\ UNCHANGED <<rel, routes, conn, rec, ag, rq, exec, cq, chA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 \* closeWhenAnswered: CloseSend once every request received is answered.
 CloseOld ==
     /\ ag = "closing" /\ (infl = {} \/ Mutant = "close-early")
     /\ ag' = "closed" /\ upA' = Append(upA, "EOF")
     /\ UNCHANGED <<rel, routes, conn, rec, rq, exec, infl, cq, chA, drn, lg>>
-    /\ UNCHANGED tcpVars /\ UNCHANGED bVars
+    /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
 Next ==
     \/ \E r \in Req : Pick(r) \/ PickRemote(r) \/ ArriveA(r) \/ Publish(r) \/ Unlease(r) \/ ServeB(r) \/ Answer(r)
@@ -359,6 +406,7 @@ Next ==
     \/ StartDrain \/ DrainBound \/ TCPSupersede \/ \E s \in TSess : PlaceTCP(s)
     \/ RecvAgent \/ ConnectB \/ DialFails \/ CloseOld \/ FailB
     \/ RegisterB \/ \E r \in Req : PickB(r) \/ ArriveB(r)
+    \/ Lose \/ RenewA \/ Expire
 
 Spec == Init /\ [][Next]_vars
 
@@ -369,6 +417,7 @@ Fairness ==
     /\ WF_vars(Forward) /\ WF_vars(StopRouting) /\ WF_vars(Refresh) /\ WF_vars(Done)
     /\ WF_vars(RecvA) /\ WF_vars(RecvAgent) /\ WF_vars(ConnectB) /\ WF_vars(CloseOld)
     /\ WF_vars(RegisterB) /\ \A r \in Req : WF_vars(ArriveB(r))
+    /\ WF_vars(RenewA)
 
 LiveSpec == Spec /\ Fairness
 
@@ -376,7 +425,7 @@ LiveSpec == Spec /\ Fairness
 
 TypeOK ==
     /\ rel \in {"routing", "asked", "gaveUp", "stopped", "done", "ended"}
-    /\ rec \in {"A", "B", "Bgone"}
+    /\ rec \in {"A", "B", "Bgone", "lost", "expired"} /\ rw \in BOOLEAN
     /\ ag \in {"old", "dialing", "failed", "both", "closing", "closed"}
     /\ \A r \in Req : rq[r] \in {"new", "picked", "remote", "fwd", "onA", "agentA", "toB", "atB", "answered", "failed", "gone"}
     /\ \A s \in TSess : ts[s] \in {"new", "onA", "onB"}
@@ -408,6 +457,11 @@ OwnerServes == ref = {}
 \* move is never refused while the agent is connected (finding 46).
 MovedForwards == refA = {}
 
+\* While A routes the agent its record never expires: a peer replica's
+\* new session finds the agent, during a move too (lane REDISREANNOUNCE).
+\* A store that lost the record ("lost") is re-announced at once.
+RecordLives == routes => rec # "expired"
+
 \* Every request is answered, and A's old session ends once the agent
 \* moved (liveness: MoveLive.cfg, without the drain's bound).
 AllAnswered == <>(\A r \in Req : rq[r] \in {"answered", "gone"})
@@ -421,5 +475,6 @@ WitnessRemote == ~(rel \in {"stopped", "done"} /\ \E r \in Req : rq[r] = "remote
 WitnessOwner == ~(rel = "done")                                                            \* OneOwner
 WitnessTCP == ~(\E s \in TSess : ts[s] = "onA" /\ rec = "B")                               \* NoTCPAfterMove
 WitnessArriving == ~(\E r \in Req : rq[r] = "toB" /\ rec = "B" /\ ~bR)                    \* OwnerServes (DF-1)
+WitnessReannounced == ~(rel = "asked" /\ rec = "A" /\ rw)                                \* RecordLives
 WitnessBGone == ~(rel \in {"stopped", "done"} /\ rec = "Bgone")                            \* OneOwner, NoLoss (MV-5)
 =============================================================================
