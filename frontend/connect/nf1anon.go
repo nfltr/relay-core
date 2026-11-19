@@ -4,8 +4,8 @@
 package connect
 
 import (
-	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/link"
@@ -14,8 +14,9 @@ import (
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
-// errAccountRequired is a budgeted leg's error past its cut.
-var errAccountRequired = errors.New(nf1anon.Msg)
+// errAccountRequired is a budgeted leg's error past its cut: the cut's
+// abort itself, so the join passes the typed reason on.
+var errAccountRequired = &link.Abort{Code: dataplane.AbortCode(nf1anon.Reason), Msg: nf1anon.Msg}
 
 // budgeted is out, the onward leg of an nf1 session to agentID, counted
 // against an anonymous agent's leg budget and its source's bucket (nfltr
@@ -46,15 +47,16 @@ type budget struct {
 	leg     *nf1anon.Leg
 	timer   *time.Timer
 	once    sync.Once
+	isCut   atomic.Bool // set before the cut's aborts: what out's local end then reads as
 }
 
 // cut aborts both legs with the typed reason, once.
 func (b *budget) cut() {
 	b.once.Do(func() {
+		b.isCut.Store(true)
 		b.timer.Stop() // counted by its reason where the leg ended (nf1anon.Leg: Take, TimeUp)
-		a := &link.Abort{Code: dataplane.AbortCode(nf1anon.Reason), Msg: nf1anon.Msg}
-		abort(b.out, a)
-		abort(b.in, a)
+		abort(b.out, errAccountRequired)
+		abort(b.in, errAccountRequired)
 	})
 }
 
@@ -77,6 +79,18 @@ func (b *budget) take(n int) int {
 	return fit
 }
 
+// ended is err, or the cut's abort once the leg was cut: out aborted here
+// reads as a clean end (io.EOF) and writes as io.ErrClosedPipe, and the
+// join would pass that on to the client ahead of the cut's own abort of in
+// (spec/NF1Anon.tla JoinEnd, mutant join-clean-end;
+// TestBudgetedLegEndsTyped).
+func (b *budget) ended(err error) error {
+	if err != nil && b.isCut.Load() {
+		return errAccountRequired
+	}
+	return err
+}
+
 // read is out's Read, toward the client.
 func (b *budget) read(p []byte) (int, error) {
 	n, err := b.out.Read(p)
@@ -85,7 +99,7 @@ func (b *budget) read(p []byte) (int, error) {
 			return fit, errAccountRequired
 		}
 	}
-	return n, err
+	return n, b.ended(err)
 }
 
 // write is out's Write, from the client.
@@ -95,7 +109,7 @@ func (b *budget) write(p []byte) (int, error) {
 	if err == nil && fit < len(p) {
 		err = errAccountRequired
 	}
-	return n, err
+	return n, b.ended(err)
 }
 
 // close stops the leg's timer; the leg ended (the peers ended it, a
