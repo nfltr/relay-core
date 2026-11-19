@@ -88,7 +88,7 @@ parse() {
 		next
 	}
 	!injobs { next }
-	ind($0) == 2 { endjob(); job = $1; sub(/:$/, "", job); next }
+	ind($0) == 2 { endjob(); job = $1; sub(/:$/, "", job); if (seen[job]++) die("job " job ": defined twice (GitHub rejects the workflow)"); next }
 	ind($0) == 4 {
 		endstep(); inenv = ($0 ~ /^    env:/); inmatrix = 0; indefaults = ($0 ~ /^    defaults:/)
 		if ($0 ~ /^    if:/ && $0 ~ /github\.event_name ==/) skip = 1
@@ -294,6 +294,8 @@ EOF
 	if parse "$d/bad.yml" >/dev/null 2>&1; then echo "ci.sh self-test: a step-level if was accepted" >&2; rm -rf "$d"; return 1; fi
 	printf 'jobs:\n  a:\n    steps:\n      - run: make x\n  b:\n    needs: a\n    steps:\n      - run: make y\n' >"$d/bad.yml"
 	if parse "$d/bad.yml" >/dev/null 2>&1; then echo "ci.sh self-test: a job's needs: was accepted" >&2; rm -rf "$d"; return 1; fi
+	printf 'jobs:\n  a:\n    steps:\n      - run: make x\n  a:\n    if: github.event_name == '"'"'schedule'"'"'\n    steps:\n      - run: make y\n' >"$d/bad.yml"
+	if parse "$d/bad.yml" >/dev/null 2>&1; then echo "ci.sh self-test: a job defined twice was accepted" >&2; rm -rf "$d"; return 1; fi
 	rm -rf "$d"
 }
 
