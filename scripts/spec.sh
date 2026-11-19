@@ -639,7 +639,7 @@ mutants)
 	# NF1Anon.tla: an nf1 address served with no account (NF1ANON, design):
 	# the relay's budget, its scope and the registration's lifetime put back
 	# wrong; witnesses.
-	for b in no-budget reattach-unbudgeted cut-account untyped-cut no-expiry keyed-route; do
+	for b in no-budget reattach-unbudgeted cut-account untyped-cut no-expiry keyed-route join-clean-end; do
 		expect NF1Anon.cfg NF1Anon.tla "anon:$b" -e "$m$b\"/"
 	done
 	expect NF1AnonLive.cfg NF1Anon.tla anon:no-time-limit -e "$m"'no-time-limit"/'

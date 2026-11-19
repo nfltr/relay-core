@@ -34,7 +34,7 @@ VARIABLES
     reg,    \* the anonymous server's registration: [st, age, n]
     srv,    \* s -> the server it opened, None before
     route,  \* s -> the route it came by, None before
-    st,     \* s -> "idle", "relayed", "direct", "detached", "done", "failed"
+    st,     \* s -> "idle", "relayed", "cutting", "direct", "detached", "done", "failed"
     leg,    \* s -> units its current relayed leg carried
     att,    \* s -> relayed legs after the first (re-attaches, A)
     used,   \* units the relay counted against the anonymous address
@@ -51,7 +51,7 @@ TypeOK ==
     /\ reg.st \in {"none", "live"} /\ reg.age \in 0..Lifetime + 1 /\ reg.n \in 0..MaxRegs
     /\ srv \in [Sess -> Servers \cup {None}]
     /\ route \in [Sess -> Routes \cup {None}]
-    /\ st \in [Sess -> {"idle", "relayed", "direct", "detached", "done", "failed"}]
+    /\ st \in [Sess -> {"idle", "relayed", "cutting", "direct", "detached", "done", "failed"}]
     /\ leg \in [Sess -> 0..MaxUnits]
     /\ att \in [Sess -> 0..1]
     /\ used \in 0..MaxUnits * Cardinality(Sess)
@@ -149,8 +149,8 @@ Relay(s) ==
     /\ IF /\ Budgeted(s)
           /\ leg[s] + 1 > LegBudget \/ used + 1 > AddrBudget
           /\ Mutant # "no-budget"
-       THEN /\ st' = [st EXCEPT ![s] = "failed"]
-            /\ why' = [why EXCEPT ![s] = [c |-> CutWhy, a |-> CutWhy]]
+       THEN /\ st' = [st EXCEPT ![s] = "cutting"]
+            /\ why' = [why EXCEPT ![s].a = CutWhy]
             /\ act' = [s |-> "Cut", x |-> s]
             /\ UNCHANGED <<leg, used, arel, sent>>
        ELSE /\ leg' = [leg EXCEPT ![s] = @ + 1]
@@ -165,9 +165,30 @@ Relay(s) ==
 \* at most the limit, then account_required); "no-time-limit": none.
 TimeCut(s) ==
     /\ st[s] = "relayed" /\ Budgeted(s) /\ Mutant # "no-time-limit"
-    /\ st' = [st EXCEPT ![s] = "failed"]
-    /\ why' = [why EXCEPT ![s] = [c |-> CutWhy, a |-> CutWhy]]
+    /\ st' = [st EXCEPT ![s] = "cutting"]
+    /\ why' = [why EXCEPT ![s].a = CutWhy]
     /\ act' = [s |-> "TimeCut", x |-> s]
+    /\ UNCHANGED <<reg, srv, route, leg, att, used, arel, sent>>
+
+\* A cut (Cut, TimeCut) aborts the agent's leg, then the client's: two
+\* steps, and the join between the legs runs in between. Deliver: the
+\* cut's abort of the client's leg. JoinEnd: the join's copy toward the
+\* client ended first, at the agent's leg the cut aborted, and passes on
+\* what the budgeted leg's read returned: the cut's reason;
+\* "join-clean-end": that leg's local end, a clean end the client reads as
+\* a cut in transit (relay-core v0.16.5, TestNF1AnonLegTime).
+Deliver(s) ==
+    /\ st[s] = "cutting"
+    /\ st' = [st EXCEPT ![s] = "failed"]
+    /\ why' = [why EXCEPT ![s].c = why[s].a]
+    /\ act' = [s |-> "Deliver", x |-> s]
+    /\ UNCHANGED <<reg, srv, route, leg, att, used, arel, sent>>
+
+JoinEnd(s) ==
+    /\ st[s] = "cutting"
+    /\ st' = [st EXCEPT ![s] = "failed"]
+    /\ why' = [why EXCEPT ![s].c = IF Mutant = "join-clean-end" THEN "reset" ELSE why[s].a]
+    /\ act' = [s |-> "JoinEnd", x |-> s]
     /\ UNCHANGED <<reg, srv, route, leg, att, used, arel, sent>>
 
 \* The punch succeeded after the control exchange: the session moves to
@@ -223,7 +244,7 @@ Next ==
     \/ Register \/ Tick \/ Expire
     \/ \E s \in Sess :
         \/ \E v \in Servers, r \in Routes : Open(s, v, r)
-        \/ Relay(s) \/ TimeCut(s) \/ Punch(s) \/ Direct(s) \/ Lose(s)
+        \/ Relay(s) \/ TimeCut(s) \/ Deliver(s) \/ JoinEnd(s) \/ Punch(s) \/ Direct(s) \/ Lose(s)
         \/ Reattach(s) \/ GiveUp(s) \/ Done(s)
 
 Spec == Init /\ [][Next]_vars

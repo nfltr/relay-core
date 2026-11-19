@@ -803,6 +803,7 @@ proof, unchanged).
 | `Open(s, v, r)` | `serveNF1Session` (r = nf1: a data connection's open, or a browser's WebSocket, `nf1ws.go`; `Registry.Leg`); every other route (`Reach`, `A2AReaches`: HTTP ingress, listings, A2A) refuses an `nf1anon` agent (r = keyed) |
 | `Relay(s)` | the budgeted onward leg of an anonymous session (`frontend/connect` `budgeted`, `Leg.Take`): what fits both budgets is carried, then the leg is aborted both ways with `ERROR_REASON_ACCOUNT_REQUIRED` |
 | `TimeCut(s)` | the anonymous leg's time limit (the same abort) |
+| `Deliver(s)`, `JoinEnd(s)` | a cut (`Cut`, `TimeCut`) aborts the agent's leg, then the client's (`budget.cut`); the client's end is that abort (`Deliver`) or the join's copy toward it ending first at the aborted agent leg (`JoinEnd`), which passes on the budgeted leg's Read: the cut's abort once cut (`budget.ended`) |
 | `Punch(s)`, `Direct(s)`, `Lose(s)` | the peers' direct path (relay `client/agent` `DirectSession`, link `DirectPath.tla`): the relayed leg is released at the move |
 | `Reattach(s)` | a relayed re-attach (`A`): a new nf1 open, budgeted like the first |
 | `GiveUp(s)` | the SDK's direct-required bound: the client aborts with the same reason |
@@ -832,7 +833,10 @@ nf1 session budgeted, an account's too: `NoCutOnAccount`, 3), `untyped-cut`
 (the cut is a plain reset: `TypedFailure`, 5), `no-expiry` (the connection
 runs past `NotAfter`: `RegBounded`, 4), `keyed-route` (another route names
 the anonymous agent and carries no budget: `LegBounded`, 6), `no-time-limit`
-(`LeavesRelay`, 7). Witnesses, each reached: `WitnessDirectDone` (an
+(`LeavesRelay`, 7), `join-clean-end` (the join passes the aborted agent
+leg's local clean end to the client ahead of the cut's abort, which reads
+it as a cut in transit: `TypedFailure`; relay-core v0.16.5,
+`TestNF1AnonLegTime` on a loaded runner, lane ANONLEG). Witnesses, each reached: `WitnessDirectDone` (an
 anonymous transfer done with its bulk direct), `WitnessCut`,
 `WitnessAccountRelayed` (an account's session carries more than the leg
 budget relayed and completes), `WitnessReattachCut`, `WitnessRenewed` (a

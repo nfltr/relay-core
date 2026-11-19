@@ -35,14 +35,17 @@ Step ==
       [] E.ev \in {"Expire", "Leave"} -> Expire
       [] E.ev = "Open" -> Open(E.s, E.srv, "nf1")
       [] E.ev = "Relay" -> RelayN(E.s, E.n)
-      [] E.ev = "Cut" -> Relay(E.s) /\ act'.s = "Cut" /\ why'[E.s].c = E.why
-      [] E.ev = "TimeCut" -> TimeCut(E.s) /\ why'[E.s].c = E.why
+      [] E.ev = "Cut" -> Relay(E.s) /\ act'.s = "Cut" /\ why'[E.s].a = E.why
+      [] E.ev = "TimeCut" -> TimeCut(E.s) /\ why'[E.s].a = E.why
       [] E.ev = "End" -> \/ Punch(E.s) \/ GiveUp(E.s) \/ Done(E.s)
                          \/ st[E.s] = "failed" /\ UNCHANGED vars \* its registration ended under it (Expire)
       [] OTHER -> Print(<<"unknown event", E>>, FALSE)
 
-\* The registration's ticks before its end (not logged).
-Unlogged == l <= Len(Log) /\ E.ev \in {"Expire", "Leave"} /\ Tick
+\* The registration's ticks before its end, and a cut's end at the client
+\* (Deliver or JoinEnd: the join's), not logged.
+Unlogged ==
+    \/ l <= Len(Log) /\ E.ev \in {"Expire", "Leave"} /\ Tick
+    \/ \E s \in Sess : Deliver(s) \/ JoinEnd(s)
 
 TraceInit == Init /\ l = 2 /\ Log[1].ev = "Limits" /\ Log[1].rate = 0
 
