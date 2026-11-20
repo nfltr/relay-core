@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/nfltr/link"
+	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay-core/core/directory"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/agentservices"
+	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
 // NF1NotServed is the one answer to an open of a capability address that
@@ -70,7 +73,7 @@ func (c *Core) openNF1(ctx context.Context, t Target) (Opened, error) {
 		ep := TCPEndpoint{AgentID: agentID, TargetAddr: decl.Target(), E2EE: true, Answer: t.Answer}
 		s, done, err := c.TCPDispatcher.OnwardWithRetry(route, ep, retries, interval)
 		if err == nil {
-			return Opened{Session: s, AgentID: agentID, Release: func() {
+			return Opened{Session: nf1Leg(s), AgentID: agentID, Release: func() {
 				if done != nil {
 					done()
 				}
@@ -89,4 +92,49 @@ func (c *Core) openNF1(ctx context.Context, t Target) (Opened, error) {
 		last = dial
 	}
 	return Opened{}, last
+}
+
+// nativeLeg is an onward leg that answers opens itself (a link or quiclink
+// session) with every end method the joint uses (peerlink: EndAcker,
+// endSyncer, receiptSyncer).
+type nativeLeg interface {
+	peerlink.ChainSession
+	HoldEndAck()
+	AckEnd()
+	CloseWriteSync() error
+	CloseWriteSyncReceived(received func()) error
+}
+
+// nf1Leg is an nf1 open's leg to its agent whose answer names no agent:
+// the agent gone before it answered (its link ended or drains at its
+// stop: a link refusal of its leg, or the connection's end) is the one
+// answer NF1NotServed, as for an unknown address; the agent's own
+// refusal passes on (spec/NF1Claim.tla Answer, OneAnswer, mutant
+// lost-answer; lane PIPERESET2: TestNF1CapsAndNotServed read "relay
+// unreachable"). A leg without native answers (an in-band one) is s.
+func nf1Leg(s peerlink.Session) peerlink.Session {
+	if l, ok := s.(nativeLeg); ok && l.Answers() {
+		return answerNF1{l}
+	}
+	return s
+}
+
+type answerNF1 struct{ nativeLeg }
+
+func (l answerNF1) Answered(ctx context.Context) error {
+	err := l.nativeLeg.Answered(ctx)
+	var a *link.Abort
+	if err == nil || ctx.Err() != nil || errors.As(err, &a) && a.Code >= link.CodeApp {
+		return err
+	}
+	r := nf1NotServed()
+	return dataplane.Refusal(r.Reason, r.Msg)
+}
+
+// Done is the leg's Done channel (peerlink's doneOf), nil when it has none.
+func (l answerNF1) Done() <-chan struct{} {
+	if d, ok := l.nativeLeg.(interface{ Done() <-chan struct{} }); ok {
+		return d.Done()
+	}
+	return nil
 }
