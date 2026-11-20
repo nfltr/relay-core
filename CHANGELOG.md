@@ -10,6 +10,18 @@ changes listed (from the first tag on).
 
 ## [Unreleased] (v0.18.0: the API changes since v0.17.0)
 
+### Changed (end acknowledgements on QUIC, lane ENDACKTRUTH)
+
+- The QUIC agent link offers `quiclink.ALPNEndAck` first: with an agent
+  that offers it too, a session's `CloseWriteSync` (and a join's onward
+  wait) returns only once the far end read every byte and the FIN; an
+  older agent negotiates `peerlink-chain` (or `nfltr-agent-link/1`) as
+  before (`TestAgentLinkQUICEndAckInterop`). Requires quiclink v0.7.0.
+- `metrics.CountConn` keeps a link session's `CloseWriteSyncReceived`:
+  a `peerlink.Join` onto a counted session ends its hold at the next
+  hop's receipt, not at the far end's acknowledgement (link
+  spec/HopHold.tla, mutant `hold-until-ack`; `TestCountConnPassesTheReceipt`).
+
 ### Removed (the blob service's leftovers, lane BLOBREST)
 
 - The `blob_store.*` and `blobs.*` settings (`blobs.service`,

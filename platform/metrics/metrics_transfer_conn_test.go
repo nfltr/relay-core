@@ -149,3 +149,41 @@ func TestCountConnPassesTheEndHandshake(t *testing.T) {
 		t.Fatal("a counted plain conn claims an end handshake")
 	}
 }
+
+// receiptConn is an endConn that reports the next hop's receipt.
+type receiptConn struct {
+	endConn
+	received bool
+}
+
+func (c *receiptConn) CloseWriteSyncReceived(received func()) error {
+	c.received = true
+	received()
+	return nil
+}
+
+// TestCountConnPassesTheReceipt (lane ENDACKTRUTH): a counted link session
+// keeps CloseWriteSyncReceived, so a peerlink.Join onto it ends its hold
+// at the next hop's receipt (link spec/HopHold.tla, mutant hold-until-ack);
+// a counted session without one claims none.
+func TestCountConnPassesTheReceipt(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	e := &receiptConn{endConn: endConn{Conn: a}}
+	r, ok := CountConn(e, PathTCPLink, nil, time.Now(), false, false).(interface {
+		CloseWriteSyncReceived(func()) error
+	})
+	if !ok {
+		t.Fatal("a counted link session lost CloseWriteSyncReceived")
+	}
+	ran := false
+	if err := r.CloseWriteSyncReceived(func() { ran = true }); err != nil || !e.received || !ran {
+		t.Fatalf("passed on: %v, received %v, ran %v", err, e.received, ran)
+	}
+	if _, ok := CountConn(&endConn{Conn: b}, PathTCPLink, nil, time.Now(), false, false).(interface {
+		CloseWriteSyncReceived(func()) error
+	}); ok {
+		t.Fatal("a counted session without a receipt claims one")
+	}
+}

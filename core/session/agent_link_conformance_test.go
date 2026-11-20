@@ -173,3 +173,100 @@ func TestAgentLinkRefusesUnknownToken(t *testing.T) {
 		t.Fatal("QUIC: unknown token bound")
 	}
 }
+
+// TestAgentLinkQUICEndAckInterop (lane ENDACKTRUTH): the relay's QUIC
+// agent link prefers quiclink.ALPNEndAck: an agent that offers it
+// negotiates it and the relay's CloseWriteSync waits for the agent's
+// acknowledgement; an older agent (dataplane.AgentLinkALPNs, or
+// AgentLinkALPN alone) keeps peerlink-chain (or the in-band answers), its
+// sessions' bytes and half close crossing as before.
+func TestAgentLinkQUICEndAckInterop(t *testing.T) {
+	cert := testcert.Generate(t)
+	for _, c := range []struct {
+		name  string
+		offer []string
+		want  string
+	}{
+		{"new agent", append([]string{quiclink.ALPNEndAck}, dataplane.AgentLinkALPNs()...), quiclink.ALPNEndAck},
+		{"old agent", dataplane.AgentLinkALPNs(), quiclink.ALPNChain},
+		{"oldest agent", []string{dataplane.AgentLinkALPN}, dataplane.AgentLinkALPN},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l := newTestAgentLink(t)
+			pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = pc.Close() })
+			if err := l.listenQUIC(pc, &tls.Config{Certificates: []tls.Certificate{cert}}); err != nil {
+				t.Fatal(err)
+			}
+			go func() { _ = l.quic.Serve(refuseAgentSessions) }()
+			negotiated := make(chan string, 1)
+			b := mustNode(quiclink.New(quiclink.Config{
+				Dial: func(ctx context.Context, _ string, qc *quic.Config) (*quic.Conn, error) {
+					tc := &tls.Config{InsecureSkipVerify: true, NextProtos: c.offer} //nolint:gosec // test-only self-signed relay cert
+					q, err := dialAgentLinkQUIC(ctx, pc.LocalAddr().String(), tc, qc, agentLinkTestToken)
+					if err == nil {
+						select {
+						case negotiated <- q.ConnectionState().TLS.NegotiatedProtocol:
+						default:
+						}
+					}
+					return q, err
+				},
+				Connect:  []string{"relay"},
+				Liveness: link.LivenessDefault,
+			}))
+			go func() {
+				_ = b.Serve(func(_ string, _ []byte, s peerlink.Session) { // an echo
+					defer s.Close() //nolint:errcheck
+					_, _ = io.Copy(s, s)
+					_ = s.CloseWrite()
+				})
+			}()
+			t.Cleanup(func() {
+				done, cancel := context.WithCancel(context.Background())
+				cancel()
+				_ = b.Drain(done)
+				_ = l.quic.Drain(done)
+			})
+			select {
+			case got := <-negotiated:
+				if got != c.want {
+					t.Fatalf("negotiated %q, want %q", got, c.want)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the agent never connected")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var s peerlink.Session
+			for s == nil {
+				if s, err = l.quic.Open(ctx, agentLinkTestToken, []byte("echo")); err != nil && ctx.Err() != nil {
+					t.Fatal(err)
+				}
+			}
+			defer s.Close() //nolint:errcheck
+			ea, ok := s.(interface {
+				AcksEnds() bool
+				CloseWriteSync() error
+			})
+			if !ok {
+				t.Fatalf("the relay's session %T is no quiclink session", s)
+			}
+			if ea.AcksEnds() != (c.want == quiclink.ALPNEndAck) {
+				t.Fatalf("AcksEnds %v on %q", ea.AcksEnds(), c.want)
+			}
+			if _, err := s.Write([]byte("ping")); err != nil {
+				t.Fatal(err)
+			}
+			if err := ea.CloseWriteSync(); err != nil {
+				t.Fatalf("CloseWriteSync: %v", err)
+			}
+			if got, err := io.ReadAll(s); err != nil || string(got) != "ping" {
+				t.Fatalf("echo %q, %v", got, err)
+			}
+		})
+	}
+}

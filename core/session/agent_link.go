@@ -220,7 +220,11 @@ func (d *TCPDispatcher) AgentLinkQUIC(pc net.PacketConn, tc *tls.Config) (serve 
 // listenQUIC makes the QUIC Node on pc (Serve starts it).
 func (l *agentLink) listenQUIC(pc net.PacketConn, tc *tls.Config) error {
 	tc = tc.Clone()
-	tc.NextProtos = append(dataplane.AgentLinkALPNs(), qadALPN) // FeatureChain where the agent offers it; QAD (qad.go)
+	// end acknowledgements where the agent offers them (quiclink.ALPNEndAck),
+	// else FeatureChain, else the in-band answers; QAD (qad.go). The proto's
+	// AgentLinkALPNs has no ALPNEndAck: only a module linking a quiclink with
+	// it may offer it.
+	tc.NextProtos = append(append([]string{quiclink.ALPNEndAck}, dataplane.AgentLinkALPNs()...), qadALPN)
 	tc.MinVersion = tls.VersionTLS13
 	l.Mu.Lock()
 	defer l.Mu.Unlock()

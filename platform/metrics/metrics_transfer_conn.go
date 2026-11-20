@@ -24,6 +24,9 @@ import (
 func CountConn(c net.Conn, p Path, m *Meter, began time.Time, agentSide, bytes bool) net.Conn {
 	cc := &countedConn{Conn: c, p: p, m: m, began: began, agentSide: agentSide, bytes: bytes}
 	if e, ok := c.(endSession); ok { // a link session: peerlink.Join syncs and acknowledges its end through cc
+		if r, ok := c.(receiptSession); ok { // its join's hold ends at the next hop's receipt
+			return &countedReceiptSession{countedSession{cc, e}, r}
+		}
 		return &countedSession{cc, e}
 	}
 	return cc
@@ -48,6 +51,25 @@ type countedSession struct {
 func (c *countedSession) CloseWriteSync() error { return c.e.CloseWriteSync() }
 func (c *countedSession) HoldEndAck()           { c.e.HoldEndAck() }
 func (c *countedSession) AckEnd()               { c.e.AckEnd() }
+
+// receiptSession is a link session's CloseWriteSync that also reports the
+// next hop's receipt (link and quiclink CloseWriteSyncReceived): a
+// peerlink.Join onto it ends its hold there, not at the far end's ENDACK
+// (link spec/HopHold.tla, mutant hold-until-ack: without it a join onto a
+// counted session held the other end until the far end acknowledged).
+type receiptSession interface {
+	CloseWriteSyncReceived(received func()) error
+}
+
+// countedReceiptSession is a countedSession passing the receipt on.
+type countedReceiptSession struct {
+	countedSession
+	r receiptSession
+}
+
+func (c *countedReceiptSession) CloseWriteSyncReceived(received func()) error {
+	return c.r.CloseWriteSyncReceived(received)
+}
 
 type countedConn struct {
 	net.Conn
