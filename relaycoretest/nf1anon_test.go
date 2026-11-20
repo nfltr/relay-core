@@ -114,7 +114,7 @@ func anonMetric(t *testing.T, name, value string) float64 {
 		t.Fatal(err)
 	}
 	for _, mf := range mfs {
-		if mf.GetName() != "rpc_server_dispatcher_nf1_anon_"+name {
+		if mf.GetName() != "nfltr_relay_dispatcher_nf1_anon_"+name {
 			continue
 		}
 		for _, m := range mf.GetMetric() {

@@ -148,3 +148,35 @@ func TestNoTrafficCaptureFlags(t *testing.T) {
 		}
 	})
 }
+
+// TestKeysOneSpelling: a boolean key that turns a feature on is *.enabled,
+// never *.enable, and the hosted product's keys are registered by
+// relay-server, the binary that reads them, not here (docs/v1-api-review.md
+// "Config keys").
+func TestKeysOneSpelling(t *testing.T) {
+	product := []string{"security.sql.", "security.session.", "security.google.", "security.users.", "mailbox.service", "ui.dev_dir"}
+	relayFlags(t).VisitAll(func(f *flag.Flag) {
+		if strings.HasSuffix(f.Name, ".enable") {
+			t.Errorf("key %q: spell it %senabled", f.Name, strings.TrimSuffix(f.Name, "enable"))
+		}
+		for _, p := range product {
+			if strings.HasPrefix(f.Name, p) {
+				t.Errorf("key %q: a hosted-product key; relay-server registers it", f.Name)
+			}
+		}
+	})
+}
+
+// TestCheckRenamedRefusesAnOldEnvName: TLS_ENABLE=true, ignored, would
+// start the relay without TLS, so it is refused, naming the new spelling.
+func TestCheckRenamedRefusesAnOldEnvName(t *testing.T) {
+	if err := CheckRenamed("security.sql.enable"); err != nil {
+		t.Fatalf("no old name set: %v", err)
+	}
+	t.Setenv("TLS_ENABLE", "true")
+	t.Setenv("SECURITY_SQL_ENABLE", "true")
+	err := CheckRenamed("security.sql.enable")
+	if err == nil || !strings.Contains(err.Error(), "TLS_ENABLED") || !strings.Contains(err.Error(), "SECURITY_SQL_ENABLED") {
+		t.Fatalf("CheckRenamed = %v, want both old names refused", err)
+	}
+}

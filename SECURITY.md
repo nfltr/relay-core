@@ -21,7 +21,7 @@ a credential, clients open sessions to those agents through it. What it
 guarantees, and what it leaves to the operator:
 
 - **Transport security is the operator's.** The proxy and gRPC ports take
-  the operator's certificate (`tls.enable`, `tls.cert_file`,
+  the operator's certificate (`tls.enabled`, `tls.cert_file`,
   `tls.key_file`); there is no ACME. Without TLS, `nfltr-relay-core`
   listens on loopback only and refuses any other address.
 - **Authentication is a provider chain** (`core/identity`): the key file

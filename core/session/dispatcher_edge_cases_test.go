@@ -21,7 +21,7 @@ func TestNewDispatcher_DefaultConfig(t *testing.T) {
 	viper.Set("rpc.connected_agents_threshold", 100)
 	viper.Set("rpc.agent.heartbeat.recvthreshold", 5*time.Second)
 	viper.Set("rpc.agent.heartbeat.sendduration", 2*time.Second)
-	viper.Set("rpc.agent.heartbeat.enable", false)
+	viper.Set("rpc.agent.heartbeat.enabled", false)
 	viper.Set("rpc.recv_buffer_size", 10)
 	defer viper.Reset()
 

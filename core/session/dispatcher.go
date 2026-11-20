@@ -274,7 +274,7 @@ func NewDispatcherConfig() DispatcherConfig {
 		ConnectedAgentsThreshold: viper.GetInt("rpc.connected_agents_threshold"),
 		HeartbeatRecvThreshold:   viper.GetDuration("rpc.agent.heartbeat.recvthreshold"),
 		HeartbeatSendDuration:    viper.GetDuration("rpc.agent.heartbeat.sendduration"),
-		HeartbeatEnabled:         viper.GetBool("rpc.agent.heartbeat.enable"),
+		HeartbeatEnabled:         viper.GetBool("rpc.agent.heartbeat.enabled"),
 		RecvBufferSize:           viper.GetInt("rpc.recv_buffer_size"),
 		SyncMapClearTimeout:      viper.GetDuration("grpc.proxying.downstream.sync_map.clear_timeout"),
 		GRPCPort:                 viper.GetInt("grpc-port"),

@@ -68,7 +68,7 @@ func clientStreamsOpen(t *testing.T, method string, c agentwire.Client) float64 
 		t.Fatal(err)
 	}
 	for _, f := range families {
-		if f.GetName() != "rpc_server_dispatcher_client_streams" {
+		if f.GetName() != "nfltr_relay_dispatcher_client_streams" {
 			continue
 		}
 		for _, m := range f.GetMetric() {

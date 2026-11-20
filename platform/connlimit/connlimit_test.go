@@ -164,11 +164,11 @@ func TestCloseEndsAccept(t *testing.T) {
 	}
 }
 
-// refusals reads rpc_server_proxy_conn_refused_total{listener,reason}.
+// refusals reads nfltr_relay_proxy_conn_refused_total{listener,reason}.
 func refusals(listener, reason string) float64 {
 	mfs, _ := prometheus.DefaultGatherer.Gather()
 	for _, mf := range mfs {
-		if mf.GetName() != "rpc_server_proxy_conn_refused_total" {
+		if mf.GetName() != "nfltr_relay_proxy_conn_refused_total" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {

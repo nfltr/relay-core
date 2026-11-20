@@ -12,7 +12,7 @@
 // sessions to their agents' ports and services on the proxy port's
 // /connect/ (data connections, HTTP/2 streams, WebSocket). On SIGTERM it
 // drains: no new client, open sessions run to the grace period's end. The
-// proxy and gRPC ports take the operator's certificate (tls.enable,
+// proxy and gRPC ports take the operator's certificate (tls.enabled,
 // tls.cert_file, tls.key_file); without TLS they listen on loopback only,
 // and a non-loopback listen.address is refused.
 //
@@ -23,7 +23,7 @@
 //	                                    (PROXY_PORT, GRPC_PORT, INTERNAL_PORT,
 //	                                    METRICS_PORT, LISTEN_ADDRESS,
 //	                                    RELAY_CORE_TOKEN, RELAY_CORE_TOKEN_FILE,
-//	                                    TCP_ENABLED, TLS_ENABLE, ...)
+//	                                    TCP_ENABLED, TLS_ENABLED, ...)
 //	nfltr-relay-core version
 //
 // Under serve, the environment still overrides each zero-config default.
@@ -103,15 +103,15 @@ func zeroConfig(logger *slog.Logger) error {
 }
 
 // serverTLS is the TLS of the proxy and gRPC ports (and the SNI router's
-// non-E2EE names): the operator's certificate (tls.enable with
+// non-E2EE names): the operator's certificate (tls.enabled with
 // tls.cert_file and tls.key_file), as nfltr-relay loads it; nil without
-// tls.enable, which listen.address must then keep on loopback, as
+// tls.enabled, which listen.address must then keep on loopback, as
 // nfltr-relay serve does. The internal and metrics ports stay plain, as
 // the relay's (probes, scrapes on internal.address).
 func serverTLS() (*tls.Config, error) {
-	if !viper.GetBool("tls.enable") {
+	if !viper.GetBool("tls.enabled") {
 		if err := tlsconfig.RefusePlaintext(viper.GetString("listen.address")); err != nil {
-			return nil, fmt.Errorf("%w: set TLS_ENABLE=true with TLS_CERT_FILE and TLS_KEY_FILE (tls.enable, tls.cert_file, tls.key_file), or LISTEN_ADDRESS=127.0.0.1", err)
+			return nil, fmt.Errorf("%w: set TLS_ENABLED=true with TLS_CERT_FILE and TLS_KEY_FILE (tls.enabled, tls.cert_file, tls.key_file), or LISTEN_ADDRESS=127.0.0.1", err)
 		}
 		return nil, nil
 	}
@@ -136,7 +136,7 @@ func listen(tlsCfg *tls.Config) (ls compose.Ports, err error) {
 		for _, l := range listeners {
 			_ = l.Close()
 		}
-		return ls, errors.New("the core serves the proxy, gRPC and internal ports: http.server.enable, rpc.server.enable and internal.enable")
+		return ls, errors.New("the core serves the proxy, gRPC and internal ports: http.server.enabled, rpc.server.enabled and internal.enabled")
 	}
 	if l := port(config.SNIRouterPort); l != nil && compose.BoundPorts(false)[config.SNIRouterPort] != "" {
 		ls.Ports = map[string]net.Listener{config.SNIRouterPort: l}

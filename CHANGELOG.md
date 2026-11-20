@@ -10,6 +10,40 @@ changes listed (from the first tag on).
 
 ## [Unreleased] (v0.18.0: the API changes since v0.17.0)
 
+### Changed: config keys and metric names settled for v1 (lane RCNAMES)
+
+A hard cut, no aliases (docs/v1-api-review.md "Config keys and metric
+names"). The Go API is unchanged.
+
+- One metric prefix, `nfltr_relay_`: the 75 metrics under
+  `rpc_server_proxy_`, `rpc_server_dispatcher_` and `rpc_server_broker_`
+  are now `nfltr_relay_proxy_*`, `nfltr_relay_dispatcher_*` and
+  `nfltr_relay_broker_*` (the rest of each name as it was), and
+  `rpc_server_proxy_rpc_server_agent_latency_milliseconds` is
+  `nfltr_relay_proxy_agent_latency_milliseconds`. Label names and values
+  are unchanged. Migration: rename the series in dashboards, alerts and
+  recording rules (`s/rpc_server_/nfltr_relay_/`, and the latency one);
+  history under the old names ends at the upgrade.
+  `TestMetricNamesHaveOnePrefix` (`internal/repocheck`) fails on a metric
+  of another name.
+- One boolean form, `*.enabled`: `rpc.server.enable`, `http.server.enable`,
+  `internal.enable`, `metrics.enable`, `profiling.enable`,
+  `rpc.agent.heartbeat.enable`, `tls.enable`, `security.audit.enable`,
+  `ratelimit.enable` are now `*.enabled` (env `TLS_ENABLED`,
+  `METRICS_ENABLED`, ...; a flag `--tls.enabled`). A relay given the old
+  flag refuses it, and `compose.Serve` refuses an old env name still set
+  (`config.CheckRenamed`: ignored, `TLS_ENABLE=true` would start plain
+  listeners). Migration: rename the keys in flags, env and the runtime
+  config file.
+- The hosted product's keys left the core: `security.sql.*`,
+  `security.session.*`, `security.google.*`, `security.users.*`,
+  `mailbox.service` and `ui.dev_dir` (23 keys) are registered by
+  relay-server, the binary that reads them (there as
+  `security.sql.enabled`, `security.session.enabled`,
+  `security.google.enabled`). A binary of relay-core alone no longer
+  takes them. `TestKeysOneSpelling` (`platform/config`) fails on a
+  `*.enable` key or a product key registered here.
+
 ### Removed (the v1 API review, lane RCAPI: docs/v1-api-review.md)
 
 No consumer (relay-server, nfltr, hosted, send, pipe at their mains) names

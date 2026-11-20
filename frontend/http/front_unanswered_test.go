@@ -38,7 +38,7 @@ func TestFrontCountsUnansweredRequests(t *testing.T) {
 	}
 }
 
-// requestsTotal is rpc_server_proxy_requests_total{method, status}, summed
+// requestsTotal is nfltr_relay_proxy_requests_total{method, status}, summed
 // over api_type.
 func requestsTotal(t *testing.T, method string, status int) float64 {
 	t.Helper()
@@ -48,7 +48,7 @@ func requestsTotal(t *testing.T, method string, status int) float64 {
 	}
 	var n float64
 	for _, mf := range mfs {
-		if mf.GetName() != "rpc_server_proxy_requests_total" {
+		if mf.GetName() != "nfltr_relay_proxy_requests_total" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {

@@ -8,7 +8,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,8 +121,8 @@ func SetDefaultFlags() {
 	_ = flag.String("listen.address", "", "bind address of the proxy and gRPC ports, or a comma-separated list of addresses all bound on the same ports (empty: all interfaces)")
 
 	// ── Dispatcher ──────────────────────────────────────────────────────
-	_ = flag.Bool("rpc.server.enable", true, "start the gRPC server for agent connections")
-	_ = flag.Bool("http.server.enable", true, "start the HTTP server for REST proxy")
+	_ = flag.Bool("rpc.server.enabled", true, "start the gRPC server for agent connections")
+	_ = flag.Bool("http.server.enabled", true, "start the HTTP server for REST proxy")
 
 	// ── Request Timeouts ────────────────────────────────────────────────
 	_ = flag.Duration("default.request.timeout", defaultRequestTimeout, "max wait for an agent's response to start or send its next chunk (not a cap on the whole response)")
@@ -133,23 +136,20 @@ func SetDefaultFlags() {
 	// ── Runtime Config ──────────────────────────────────────────────────
 	_ = flag.String("runtime.config.path", "", "path to a YAML file (typically ConfigMap-mounted) watched for runtime config changes")
 
-	// ── UI Assets ───────────────────────────────────────────────────────
-	_ = flag.String("ui.dev_dir", "", "serve UI files from this directory instead of embedded assets")
-
 	// ── Health / Internal ───────────────────────────────────────────────
-	_ = flag.Bool("internal.enable", defaultInternalEnable, "start the internal HTTP server (health, readiness)")
+	_ = flag.Bool("internal.enabled", defaultInternalEnable, "start the internal HTTP server (health, readiness)")
 	_ = flag.String("internal.address", defaultInternalAddress, "bind address for the internal HTTP server and the metrics server")
 	_ = flag.String("internal.port", defaultInternalPort, "listen port for the internal HTTP server")
 	_ = flag.String("internal.health", defaultInternalHealth, "URL path for liveness health checks")
 	_ = flag.String("internal.readiness", defaultInternalReadiness, "URL path for readiness probes")
 
 	// ── Metrics & Profiling ─────────────────────────────────────────────
-	_ = flag.Bool("metrics.enable", defaultMetricsEnable, "expose Prometheus metrics endpoint")
+	_ = flag.Bool("metrics.enabled", defaultMetricsEnable, "expose Prometheus metrics endpoint")
 	_ = flag.String("metrics.port", defaultMetricsPort, "listen port for the Prometheus metrics server")
-	_ = flag.Bool("profiling.enable", defaultProfilingEnable, "expose /debug/pprof profiling endpoints")
+	_ = flag.Bool("profiling.enabled", defaultProfilingEnable, "expose /debug/pprof profiling endpoints")
 
 	// ── Heartbeat ───────────────────────────────────────────────────────
-	_ = flag.Bool("rpc.agent.heartbeat.enable", true, "enable periodic heartbeat pings to connected agents")
+	_ = flag.Bool("rpc.agent.heartbeat.enabled", true, "enable periodic heartbeat pings to connected agents")
 	// The relay states its heartbeat in each agent stream's accept headers;
 	// an agent ends a connection silent for three of them, so 5s (was 15s)
 	// notices a relay that died without a FIN reaching the agent within 15s.
@@ -175,7 +175,7 @@ func SetDefaultFlags() {
 	_ = flag.String("redis.port", "6379", "external Redis port (used with redis.endpoint)")
 
 	// ── TLS ─────────────────────────────────────────────────────────────
-	_ = flag.Bool("tls.enable", false, "enable TLS on all external listeners (gRPC, HTTP proxy)")
+	_ = flag.Bool("tls.enabled", false, "enable TLS on all external listeners (gRPC, HTTP proxy)")
 	_ = flag.String("tls.cert_file", "", "path to PEM-encoded TLS certificate")
 	_ = flag.String("tls.key_file", "", "path to PEM-encoded TLS private key")
 	_ = flag.Bool("tls.auto", false, "auto-generate a self-signed certificate when cert/key are not provided (development only)")
@@ -193,7 +193,7 @@ func SetDefaultFlags() {
 	_ = flag.String("security.machines.file", "/etc/rpcserver/machines", "the machines file: the machines of a relay without a database, one \"<machine id> <name> spki:<hex> [account=<id>]\" per line (keyfile)")
 
 	// ── mTLS identity provider (client certificates; off without a CA file) ──
-	_ = flag.String("security.mtls.ca_file", "", "PEM bundle of the CAs whose client certificates authenticate (one or more; reloaded on change); turns the mTLS identity provider on (needs tls.enable)")
+	_ = flag.String("security.mtls.ca_file", "", "PEM bundle of the CAs whose client certificates authenticate (one or more; reloaded on change); turns the mTLS identity provider on (needs tls.enabled)")
 	_ = flag.String("security.mtls.revoked_file", "", "optional revocation list, reloaded on change: a CRL (PEM or DER) signed by a CA of the bundle, or hex serials one per line; a revoked certificate's connections end")
 	_ = flag.String("security.mtls.owner", "{cn}", "rule making a certificate's owner (namespaced mtls:<owner>) from its fields {cn} {o} {ou} {dns} {email} {uri} {serial}")
 	_ = flag.String("security.mtls.subject", "{cn}", "rule making a certificate's subject (its agent id) from the same fields")
@@ -207,44 +207,21 @@ func SetDefaultFlags() {
 	_ = flag.String("security.oidc.scopes_claim", "scope", "claim holding a token's scopes (space-separated or a list; admin is never taken from an IdP)")
 	_ = flag.Duration("security.oidc.clock_skew", time.Minute, "clock skew allowed on exp, nbf and iat (at most 5m); a connection ends at exp plus this")
 
-	// ── SQL store (database-backed machines) ─────────────────────────────
-	_ = flag.Bool("security.sql.enable", false, "enable the SQL-backed machine store")
-	_ = flag.String("security.sql.dsn", "/var/lib/rpcserver/keys.db", "database path (SQLite) or connection string (Postgres)")
-	_ = flag.String("security.sql.dialect", "sqlite", "SQL dialect: sqlite or postgres")
-	_ = flag.Bool("security.sql.migrate_on_startup", true, "run SQL schema migrations when the server starts")
-	_ = flag.Int("security.sql.max_conns", 16, "Postgres connections per pool: the open and idle cap of each pool the relay opens (the key store, and the accounts read store of accounts.read_dsn: at most twice this per replica), so busy connections are reused instead of reopened (SQLite keeps its own pools)")
-	_ = flag.Duration("security.sql.conn_max_idle_time", 5*time.Minute, "close a pooled Postgres connection idle this long (0 = never)")
-
 	// ── IP Allowlist ────────────────────────────────────────────────────
 	_ = flag.StringSlice("security.ip_allowlist", nil, "CIDR ranges allowed to connect (empty = allow all)")
 
 	// ── Audit Logging ───────────────────────────────────────────────────
-	_ = flag.Bool("security.audit.enable", false, "enable structured audit logging for security events")
+	_ = flag.Bool("security.audit.enabled", false, "enable structured audit logging for security events")
 
-	// ── Browser Sessions ────────────────────────────────────────────────
-	_ = flag.Bool("security.session.enable", false, "enable cookie-based browser sessions (requires the SQL store)")
-	_ = flag.String("security.session.secret_env", "RPC_SESSION_SECRET", "environment variable containing the HMAC-SHA256 session signing secret")
-	_ = flag.Duration("security.session.ttl", 24*time.Hour, "session cookie TTL")
-	_ = flag.Bool("security.session.secure", true, "set Secure flag on session cookie (false for HTTP-only dev environments)")
-
-	// ── Google OAuth ────────────────────────────────────────────────────
-	_ = flag.Bool("security.google.enable", false, "enable Google OAuth2 login for the admin dashboard")
-	_ = flag.String("security.google.client_id_env", "GOOGLE_CLIENT_ID", "environment variable containing the Google OAuth client ID")
-	_ = flag.String("security.google.client_secret_env", "GOOGLE_CLIENT_SECRET", "environment variable containing the Google OAuth client secret")
-	_ = flag.String("security.google.redirect_url", "", "full OAuth callback URL (e.g., https://rpc.example.com/oauth/google/callback)")
-	_ = flag.StringSlice("security.google.allowed_emails", nil, "email addresses allowed to log in via Google OAuth")
-	_ = flag.StringSlice("security.google.allowed_domains", nil, "email domains allowed to log in via Google OAuth (e.g., example.com)")
-	_ = flag.String("security.google.auth_url", "", "override the Google OAuth authorize endpoint (for mock testing)")
-	_ = flag.String("security.google.token_url", "", "override the Google OAuth token endpoint (for mock testing)")
-	_ = flag.String("security.google.userinfo_url", "", "override the Google OAuth userinfo endpoint (for mock testing)")
+	// The hosted product's keys (security.sql.*, security.session.*,
+	// security.google.*, security.users.*, mailbox.service, ui.dev_dir) are
+	// registered by relay-server, the binary that reads them.
 	_ = flag.StringSlice("security.admin_emails", nil, "email addresses allowed to manage global settings (empty = all authenticated users)")
 	_ = flag.Bool("usage.page_visits", false, "count views of the public pages (landing, docs, blog, install) per day for the admin usage report: counts only, no cookies or scripts, no IP or User-Agent stored; needs the SQL user store; env USAGE_PAGE_VISITS")
 	_ = flag.Duration("usage.meter_interval", 0, "record usage: every interval, the bytes each account's sessions carried on each frontend path go to the accounts service in batches it applies once each (shadow mode: recorded, never charged); 0 (default) = off; env USAGE_METER_INTERVAL")
-	_ = flag.String("security.users.import_file", "/etc/rpcserver/users.json", "legacy JSON users file imported once into the SQL user store at startup, only while the users table is empty (missing file = nothing to import)")
-	_ = flag.Bool("security.users.in_memory", false, "DEV/TEST ONLY: with Google OAuth and no security.sql.enable, keep dashboard users in a throwaway in-memory SQLite database (sign-ins and agent ownership are lost on restart); without it such a relay refuses to start")
 
 	_ = flag.String("agent_link.quic.listen", "", "UDP address (e.g. :443) where agents' agent-link connections arrive over QUIC, with the gRPC port's TLS certificate; agents use it only when they ask for it (nfltr --transport quic|auto); empty (default) = TCP only; needs TLS; env AGENT_LINK_QUIC_LISTEN")
-	_ = flag.Int("security.min_client_generation", 0, "refuse clients below this generation at connect (gRPC calls and tcp-connect): 2 refuses every nfltr before v2.0.0 with a message to run `nfltr update`; 0 (default) takes every client and counts and logs those below generation 2 (rpc_server_dispatcher_old_generation_clients_total); env SECURITY_MIN_CLIENT_GENERATION")
+	_ = flag.Int("security.min_client_generation", 0, "refuse clients below this generation at connect (gRPC calls and tcp-connect): 2 refuses every nfltr before v2.0.0 with a message to run `nfltr update`; 0 (default) takes every client and counts and logs those below generation 2 (nfltr_relay_dispatcher_old_generation_clients_total); env SECURITY_MIN_CLIENT_GENERATION")
 
 	// ── Authorization ───────────────────────────────────────────────────
 	_ = flag.Bool("security.trust_loopback", false, "DEV ONLY: trust requests from a loopback address (127.0.0.1/::1) as a fixed local principal with no credential, so local agents use the relay with zero auth setup. Loopback-only; never enable in production. Env: SECURITY_TRUST_LOOPBACK=true.")
@@ -272,7 +249,6 @@ func SetDefaultFlags() {
 	// Gap 7: direct agent subdomain routing — <agentID>.share_domain reaches the
 	// live agent for its owner (its machine); anyone else needs a share code.
 	_ = flag.Bool("http.direct_agent_subdomains", false, "route <agentID>.<share_domain> to the matching agent for its owner (its machine); visitors use share codes")
-	_ = flag.String("mailbox.service", "", "the relay: mailbox service agents (cmd/nfltr-mailbox) the mailbox, webhook and web push routes go to, <owner>/<agent>[,<owner>/<agent>...] (each declares the tcp service mailbox); empty: this process serves them when it links the service (nfltr-relay), else it refuses to start (cmd/server); env MAILBOX_SERVICE")
 	_ = flag.String("accounts.service", "", "the relay: accounts service agents (cmd/nfltr-accounts) the dashboard host (dashboard.<http.share_domain>) goes to, <owner>/<agent>[,...] (each declares the tcp service accounts); needs accounts.read_dsn; empty: this process serves sign-in and the dashboard when it links the service; env ACCOUNTS_SERVICE")
 	_ = flag.String("accounts.read_dsn", "", "the accounts service's database, opened read-only (key, session and owner lookups; the revocation journal), dialect security.sql.dialect; env ACCOUNTS_READ_DSN")
 	_ = flag.StringSlice("http.site_hosts", nil, "hosts under http.share_domain served by one account's agent: <label>=<owner>/<agent>[/<service>], any DNS label (a product name such as docs-site, or another); a mapped label is reserved on this relay like the product names: no agent, share or direct subdomain takes it. e.g. site=ops@example.com/site-key.site/web; env HTTP_SITE_HOSTS")
@@ -323,7 +299,7 @@ func SetDefaultFlags() {
 	_ = flag.Bool("on_downstream_errors.drop_agent_connection", defaultOnDownstreamErrorsDropAgentConn, "disconnect the agent when a downstream gRPC call fails")
 
 	// ── Rate Limiting ───────────────────────────────────────────────────
-	_ = flag.Bool("ratelimit.enable", true, "enable per-AgentID request rate limiting")
+	_ = flag.Bool("ratelimit.enabled", true, "enable per-AgentID request rate limiting")
 	_ = flag.Float64("ratelimit.rate", 100, "tokens added per second per AgentID")
 	_ = flag.Int("ratelimit.burst", 200, "max token capacity (burst size) per AgentID")
 	_ = flag.Float64("ratelimit.visitor_rate", 20, "share and site visits a second one visitor IP may make to one agent, checked before the agent's ratelimit.rate so one visitor cannot spend it (0 = no per-visitor limit)")
@@ -491,6 +467,27 @@ func loadFlags(v *viper.Viper, fs *flag.FlagSet) {
 			v.SetDefault(f.Name, bound.Get(f.Name))
 		}
 	})
+}
+
+// renamedKeys are the core's keys spelled *.enable before v0.18.0 (lane
+// RCNAMES): each is now *.enabled.
+var renamedKeys = []string{"rpc.server.enable", "http.server.enable", "internal.enable", "metrics.enable",
+	"profiling.enable", "rpc.agent.heartbeat.enable", "tls.enable", "security.audit.enable", "ratelimit.enable"}
+
+// CheckRenamed refuses a renamed key (renamedKeys, and a binary's own in
+// more) still set in the environment: viper ignores an env name no key has,
+// so TLS_ENABLE=true would start the relay with plain listeners. A flag of
+// the old name is refused by the flag parser already. Remove after v1.0.0,
+// once no deploy of an earlier relay remains.
+func CheckRenamed(more ...string) error {
+	var errs []error
+	for _, k := range append(slices.Clone(renamedKeys), more...) {
+		env := strings.ToUpper(strings.NewReplacer(".", "_", "-", "_").Replace(k))
+		if _, ok := os.LookupEnv(env); ok {
+			errs = append(errs, fmt.Errorf("%s is set: the key %s is now %sd (env %sD); rename it", env, k, k, env))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // tcp.e2ee_policy values.

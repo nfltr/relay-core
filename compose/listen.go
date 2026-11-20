@@ -27,13 +27,13 @@ import (
 // its own.
 func portKeys(muxOnGRPC bool) []string {
 	var keys []string
-	if viper.GetBool("http.server.enable") {
+	if viper.GetBool("http.server.enabled") {
 		keys = append(keys, config.ProxyServerPort)
 	}
-	if viper.GetBool("rpc.server.enable") {
+	if viper.GetBool("rpc.server.enabled") {
 		keys = append(keys, config.GrpcServerPort)
 	}
-	if viper.GetBool("internal.enable") {
+	if viper.GetBool("internal.enabled") {
 		keys = append(keys, "internal.port")
 	}
 	keys = append(keys, "metrics.port")
@@ -46,10 +46,10 @@ func portKeys(muxOnGRPC bool) []string {
 // sniRouter reports whether the SNI frontend serves E2EE passthrough on a
 // port of its own (frontend/sni): tcp sessions, passthrough with a base
 // domain (what the frontend serves on), and no mux on the gRPC port
-// (nfltr-relay's under tls.enable; the core never has one). Listen binds
+// (nfltr-relay's under tls.enabled; the core never has one). Listen binds
 // that port, so "0" is a kernel-chosen port the ports file reports.
 func sniRouter(muxOnGRPC bool) bool {
-	return viper.GetBool("rpc.server.enable") && viper.GetBool("tcp.enabled") &&
+	return viper.GetBool("rpc.server.enabled") && viper.GetBool("tcp.enabled") &&
 		viper.GetBool("e2ee.tls_passthrough.enabled") && viper.GetString("e2ee.tls_passthrough.base_domain") != "" &&
 		!muxOnGRPC
 }

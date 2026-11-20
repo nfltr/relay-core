@@ -23,7 +23,7 @@ func agentLinkSeries(t *testing.T, transport string) map[string]float64 {
 	got := map[string]float64{}
 	for _, mf := range mfs {
 		name := mf.GetName()
-		if name != "rpc_server_dispatcher_agent_link_open_sessions" && name != "rpc_server_dispatcher_agent_link_bytes_total" {
+		if name != "nfltr_relay_dispatcher_agent_link_open_sessions" && name != "nfltr_relay_dispatcher_agent_link_bytes_total" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
@@ -49,8 +49,8 @@ func agentLinkSeries(t *testing.T, transport string) map[string]float64 {
 // them.
 func TestAgentLinkBytesAndOpenSessions(t *testing.T) {
 	const (
-		open  = "rpc_server_dispatcher_agent_link_open_sessions"
-		bytes = "rpc_server_dispatcher_agent_link_bytes_total"
+		open  = "nfltr_relay_dispatcher_agent_link_open_sessions"
+		bytes = "nfltr_relay_dispatcher_agent_link_bytes_total"
 	)
 	for _, tc := range linkTransportAgents {
 		t.Run(tc.transport, func(t *testing.T) {

@@ -12,11 +12,11 @@ import (
 )
 
 // Metrics is the metrics port's handler in every composition: /metrics,
-// and the pprof endpoints with profiling.enable.
+// and the pprof endpoints with profiling.enabled.
 func Metrics() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	if viper.GetBool("profiling.enable") {
+	if viper.GetBool("profiling.enabled") {
 		mux.HandleFunc("/debug/pprof/", pprof.Index)
 		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)

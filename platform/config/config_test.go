@@ -116,8 +116,8 @@ func TestSetDefaultFlags_HeartbeatDefaults(t *testing.T) {
 	defer viper.Reset()
 	SetDefaultFlags()
 
-	if !viper.GetBool("rpc.agent.heartbeat.enable") {
-		t.Fatal("rpc.agent.heartbeat.enable default = false; heartbeats are required to detect silent disconnections")
+	if !viper.GetBool("rpc.agent.heartbeat.enabled") {
+		t.Fatal("rpc.agent.heartbeat.enabled default = false; heartbeats are required to detect silent disconnections")
 	}
 	if got, want := viper.GetDuration("rpc.agent.heartbeat.sendduration"), 5*time.Second; got != want {
 		t.Errorf("rpc.agent.heartbeat.sendduration = %v, want %v (agents leave a relay silent for three: 15s)", got, want)

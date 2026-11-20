@@ -13,9 +13,9 @@ var timingBuckets = []float64{
 }
 
 const (
-	proxyNamespace      = "rpc_server_proxy"
-	dispatcherNamespace = "rpc_server_dispatcher"
-	brokerNamespace     = "rpc_server_broker"
+	proxyNamespace      = "nfltr_relay_proxy"
+	dispatcherNamespace = "nfltr_relay_dispatcher"
+	brokerNamespace     = "nfltr_relay_broker"
 )
 
 var (
@@ -87,7 +87,7 @@ var (
 	rpcServerAgentLatencyHis = auto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: proxyNamespace,
-			Name:      "rpc_server_agent_latency_milliseconds",
+			Name:      "agent_latency_milliseconds",
 			Help:      "Histogram of latency introduced by RPC Server and RPC Agent",
 			Buckets:   timingBuckets,
 		},

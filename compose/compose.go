@@ -50,7 +50,7 @@ type Ports struct {
 // Serve runs the core on ls until ctx ends, frontends attached
 // (frontend.CoreHost): the dispatchers, the agents' gRPC port (AgentPort),
 // the internal port's /ready and the metrics port's /metrics (and pprof
-// with profiling.enable). It reads its settings from the process
+// with profiling.enabled). It reads its settings from the process
 // configuration (platform/config.SetDefaultFlags, then viper).
 //
 // Agents and clients authenticate with providers, asked in order, the
@@ -59,7 +59,7 @@ type Ports struct {
 // file, keyfile, authenticates machine certificates and needs the
 // composition's TLS and machine CA).
 func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []frontend.Frontend, providers ...identity.Provider) error {
-	if err := config.CheckNF1(); err != nil {
+	if err := errors.Join(config.CheckRenamed(), config.CheckNF1()); err != nil {
 		return err
 	}
 	if len(providers) == 0 {

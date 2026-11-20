@@ -49,7 +49,7 @@ func TestNewDispatcherConfig(t *testing.T) {
 	viper.Set("rpc.connected_agents_threshold", 50)
 	viper.Set("rpc.agent.heartbeat.recvthreshold", 30*time.Second)
 	viper.Set("rpc.agent.heartbeat.sendduration", 10*time.Second)
-	viper.Set("rpc.agent.heartbeat.enable", true)
+	viper.Set("rpc.agent.heartbeat.enabled", true)
 	viper.Set("rpc.recv_buffer_size", 20)
 	viper.Set("grpc.proxying.downstream.sync_map.clear_timeout", 2*time.Second)
 	viper.Set("grpc-port", 9090)

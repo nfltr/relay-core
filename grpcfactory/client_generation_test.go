@@ -56,8 +56,8 @@ func TestClientGenerationGate(t *testing.T) {
 			_ = st.CloseSend()
 			return st.RecvMsg(new(struct{}))
 		}
-		refused, taken := counter(t, "rpc_server_dispatcher_clients_refused_total", "reason", "generation"),
-			counter(t, "rpc_server_dispatcher_old_generation_clients_total", "transport", "grpc")
+		refused, taken := counter(t, "nfltr_relay_dispatcher_clients_refused_total", "reason", "generation"),
+			counter(t, "nfltr_relay_dispatcher_old_generation_clients_total", "transport", "grpc")
 
 		// A client before v2.0.0: its Hello, no generation.
 		old := metadata.AppendToOutgoingContext(context.Background(), agentwire.Self().HelloPairs()...)
@@ -68,10 +68,10 @@ func TestClientGenerationGate(t *testing.T) {
 		case min == 0 && status.Code(err) == codes.FailedPrecondition:
 			t.Errorf("min 0, old client refused: %v", err)
 		}
-		if min == 2 && counter(t, "rpc_server_dispatcher_clients_refused_total", "reason", "generation") != refused+1 {
+		if min == 2 && counter(t, "nfltr_relay_dispatcher_clients_refused_total", "reason", "generation") != refused+1 {
 			t.Error("the refusal was not counted")
 		}
-		if min == 0 && counter(t, "rpc_server_dispatcher_old_generation_clients_total", "transport", "grpc") != taken+1 {
+		if min == 0 && counter(t, "nfltr_relay_dispatcher_old_generation_clients_total", "transport", "grpc") != taken+1 {
 			t.Error("the old client was not counted")
 		}
 		// A current client.

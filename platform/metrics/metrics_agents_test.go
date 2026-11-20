@@ -32,9 +32,9 @@ func TestConnectedAgentsSumsSources(t *testing.T) {
 	}
 	want := func(total int, byServes string) {
 		t.Helper()
-		exp := "# HELP rpc_server_dispatcher_connected_agents Agents connected: each agent once, whatever streams it holds (HTTP, TCP or both).\n" +
-			"# TYPE rpc_server_dispatcher_connected_agents gauge\n" +
-			"rpc_server_dispatcher_connected_agents " + strconv.Itoa(total) + "\n" +
+		exp := "# HELP nfltr_relay_dispatcher_connected_agents Agents connected: each agent once, whatever streams it holds (HTTP, TCP or both).\n" +
+			"# TYPE nfltr_relay_dispatcher_connected_agents gauge\n" +
+			"nfltr_relay_dispatcher_connected_agents " + strconv.Itoa(total) + "\n" +
 			"# HELP nfltr_relay_connected_agents_by_serves Agents connected, by the kinds of services each declared at connect (http, tcp, udp, or those present joined by _, e.g. http_tcp, tcp_udp; none: it declared none).\n" +
 			"# TYPE nfltr_relay_connected_agents_by_serves gauge\n" + byServes
 		if err := testutil.GatherAndCompare(reg, strings.NewReader(exp)); err != nil {

@@ -185,9 +185,8 @@ used API's documented use needs it):
 3. **Product keys in the core's config**: `security.google.*`,
    `security.sql.*`, `security.users.*`, `security.session.*`,
    `mailbox.service`, `ui.dev_dir` are read by relay-server (the hosted
-   product), never by relay-core; they belong in the binary that reads
-   them (relay-server registers its own flags). Keys stay as spelled;
-   only where they are registered moves.
+   product), never by relay-core. Done in lane RCNAMES: relay-server
+   registers them (below, "Decided").
 
 ## Surface: config keys and metric names (renames now or never)
 
@@ -235,7 +234,8 @@ was the one none read).
 | `ui` | 1 | `ui.dev_dir` |
 | `usage` | 2 | `usage.meter_interval`, `usage.page_visits` |
 
-Spelling the owner may want fixed before v1 (not changed: each rename
+Spelling the owner may want fixed before v1 (the `enable` one is
+decided and done, "Decided" below; the rest not changed: each rename
 touches nfltr `deploy/relay-settings.yaml` (both deploy shapes render
 from it, `make check-relay-settings`), the rendered `start.sh` and Helm
 values `helm/rpc-server/values.yaml`, relay-server's `selfhost` and
@@ -264,7 +264,7 @@ The full list with help texts is `metrics.tsv` in the evidence; per-agent
 and per-account labels are summed away before storage (nfltr
 `docs/guides/local-relay-metrics.md`).
 
-Proposed for v1 (not changed): one prefix, `nfltr_relay_`, for all 89.
+Proposed for v1, decided and done (below): one prefix, `nfltr_relay_`, for all 89.
 Serving both names for a release window would be the dual path the
 governance rules forbid, so it is a hard cut in one ordered change:
 relay-core's `platform/metrics` (the three namespace constants and the
@@ -293,6 +293,25 @@ round. What names them today:
 
 Label values are surface too (`connlimit.Reason*`, `metrics.Path*`,
 `Serves*`, `Transfer*`): frozen with the names.
+
+### Decided (lead, owner-delegated, lane RCNAMES 2026-11-20)
+
+Hard cuts, no aliases (CHANGELOG "Changed: config keys and metric names
+settled for v1"):
+
+1. One metric prefix: every `rpc_server_{proxy,dispatcher,broker}_*` is
+   `nfltr_relay_{proxy,dispatcher,broker}_*` (75 names), and
+   `..._rpc_server_agent_latency_milliseconds` is
+   `nfltr_relay_proxy_agent_latency_milliseconds`. Guard
+   `TestMetricNamesHaveOnePrefix` (`internal/repocheck`: every prometheus
+   `*Opts` and `NewDesc` name in the module's code).
+2. One boolean form: the 12 `*.enable` keys are `*.enabled` (9 here, 3
+   with the product keys in relay-server); `config.CheckRenamed` refuses
+   an old env name still set. Guard `TestKeysOneSpelling`.
+3. The 23 product keys are registered by relay-server. Guard
+   `TestKeysOneSpelling`.
+
+Not decided, kept: the run-together words and the `rpc.*` prefix above.
 
 ## Consumers affected
 

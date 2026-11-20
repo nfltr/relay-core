@@ -50,7 +50,7 @@ Off loopback the relay serves TLS only; it refuses to listen elsewhere in
 plaintext and says what to set. Bring your own certificate and key file:
 
 ```sh
-LISTEN_ADDRESS=0.0.0.0 TLS_ENABLE=true TLS_CERT_FILE=relay.crt TLS_KEY_FILE=relay.key \
+LISTEN_ADDRESS=0.0.0.0 TLS_ENABLED=true TLS_CERT_FILE=relay.crt TLS_KEY_FILE=relay.key \
 RELAY_CORE_TOKEN_FILE=nfltr-relay-core.token TCP_ENABLED=true bin/nfltr-relay-core serve --from-env
 ```
 

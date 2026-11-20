@@ -21,9 +21,9 @@ import (
 // launcher probed ports, closed the probes and passed the numbers on, so
 // another process could take one before the relay bound it.
 func TestListenBindsZeroPortsItselfAndReportsThem(t *testing.T) {
-	viper.Set("http.server.enable", true)
-	viper.Set("rpc.server.enable", true)
-	viper.Set("internal.enable", true)
+	viper.Set("http.server.enabled", true)
+	viper.Set("rpc.server.enabled", true)
+	viper.Set("internal.enabled", true)
 	for _, key := range []string{config.ProxyServerPort, config.GrpcServerPort, "internal.port", "metrics.port"} {
 		viper.Set(key, "0")
 	}
@@ -66,10 +66,10 @@ func TestListenBindsZeroPortsItselfAndReportsThem(t *testing.T) {
 // A pinned port is bound as configured next to ephemeral ones.
 func TestListenKeepsPinnedPorts(t *testing.T) {
 	pinned := strconv.Itoa(pinnablePort(t))
-	viper.Set("http.server.enable", true)
+	viper.Set("http.server.enabled", true)
 	viper.Set(config.ProxyServerPort, pinned)
-	viper.Set("rpc.server.enable", false)
-	viper.Set("internal.enable", false)
+	viper.Set("rpc.server.enabled", false)
+	viper.Set("internal.enabled", false)
 	viper.Set("metrics.port", "0")
 	viper.Set("internal.address", "127.0.0.1")
 	defer viper.Reset()
@@ -112,9 +112,9 @@ func TestListenHonoursListenAddress(t *testing.T) {
 		{"127.0.0.1", "127.0.0.1"},
 		{"", ""}, // every interface
 	} {
-		viper.Set("http.server.enable", true)
-		viper.Set("rpc.server.enable", true)
-		viper.Set("internal.enable", false)
+		viper.Set("http.server.enabled", true)
+		viper.Set("rpc.server.enabled", true)
+		viper.Set("internal.enabled", false)
 		viper.Set(config.ProxyServerPort, "0")
 		viper.Set(config.GrpcServerPort, "0")
 		viper.Set("metrics.port", "0")
@@ -147,9 +147,9 @@ func TestListenBindsEveryListenAddressOnOnePort(t *testing.T) {
 	} else {
 		_ = l.Close()
 	}
-	viper.Set("http.server.enable", true)
-	viper.Set("rpc.server.enable", true)
-	viper.Set("internal.enable", false)
+	viper.Set("http.server.enabled", true)
+	viper.Set("rpc.server.enabled", true)
+	viper.Set("internal.enabled", false)
 	viper.Set(config.ProxyServerPort, "0")
 	viper.Set(config.GrpcServerPort, "0")
 	viper.Set("metrics.port", "0")
@@ -200,9 +200,9 @@ func TestListenBindsEveryListenAddressOnOnePort(t *testing.T) {
 // the previous run's numbers as fixed ports (an in-process restart then
 // failed with "address already in use" once anything else held one).
 func TestListenForgetReadsTheConfiguredPortsAgain(t *testing.T) {
-	viper.Set("http.server.enable", false)
-	viper.Set("rpc.server.enable", false)
-	viper.Set("internal.enable", false)
+	viper.Set("http.server.enabled", false)
+	viper.Set("rpc.server.enabled", false)
+	viper.Set("internal.enabled", false)
 	viper.SetDefault("metrics.port", "0") // a layer below Set, as env and flags are
 	viper.Set("internal.address", "127.0.0.1")
 	defer viper.Reset()
@@ -245,15 +245,15 @@ func TestListenForgetReadsTheConfiguredPortsAgain(t *testing.T) {
 // launcher had to probe a port, close it and pass its number on, and the
 // relay failed to start when another process took it in between.
 func TestListenBindsZeroSNIPortAndReportsIt(t *testing.T) {
-	viper.Set("http.server.enable", false)
-	viper.Set("rpc.server.enable", true)
+	viper.Set("http.server.enabled", false)
+	viper.Set("rpc.server.enabled", true)
 	viper.SetDefault(config.GrpcServerPort, "0") // defaults: forget then reads "0" again
-	viper.Set("internal.enable", false)
+	viper.Set("internal.enabled", false)
 	viper.SetDefault("metrics.port", "0")
 	viper.Set("internal.address", "127.0.0.1")
 	viper.Set("listen.address", "127.0.0.1")
 	viper.Set("tcp.enabled", true)
-	viper.Set("tls.enable", false)
+	viper.Set("tls.enabled", false)
 	viper.Set("e2ee.tls_passthrough.enabled", true)
 	viper.Set("e2ee.tls_passthrough.base_domain", "e2ee.example.com")
 	viper.SetDefault(config.SNIRouterPort, "0") // a layer below Set, as env and flags are
@@ -285,7 +285,7 @@ func TestListenBindsZeroSNIPortAndReportsIt(t *testing.T) {
 		t.Fatalf("after forget %s=%s, want 0 (the configured value)", config.SNIRouterPort, got)
 	}
 
-	// With the SNI mux on the gRPC port (nfltr-relay under tls.enable) it
+	// With the SNI mux on the gRPC port (nfltr-relay under tls.enabled) it
 	// serves E2EE there: no port of its own is bound.
 	again, forget, err := Listen(true)
 	if err != nil {
@@ -301,11 +301,11 @@ func TestListenBindsZeroSNIPortAndReportsIt(t *testing.T) {
 }
 
 func TestPortNumbers(t *testing.T) {
-	viper.Set("http.server.enable", true)
+	viper.Set("http.server.enabled", true)
 	viper.Set(config.ProxyServerPort, "8080")
-	viper.Set("rpc.server.enable", true)
+	viper.Set("rpc.server.enabled", true)
 	viper.Set(config.GrpcServerPort, "9090")
-	viper.Set("internal.enable", true)
+	viper.Set("internal.enabled", true)
 	viper.Set("internal.port", "8081")
 	viper.Set("metrics.port", "8082")
 	defer viper.Reset()
@@ -317,9 +317,9 @@ func TestPortNumbers(t *testing.T) {
 }
 
 func TestPortNumbers_Minimal(t *testing.T) {
-	viper.Set("http.server.enable", false)
-	viper.Set("rpc.server.enable", false)
-	viper.Set("internal.enable", false)
+	viper.Set("http.server.enabled", false)
+	viper.Set("rpc.server.enabled", false)
+	viper.Set("internal.enabled", false)
 	viper.Set("metrics.port", "8082")
 	defer viper.Reset()
 
@@ -348,9 +348,9 @@ func TestListenHostBindsPrivatePortsToTheirAddress(t *testing.T) {
 // (proxy, gRPC) and not the internal or metrics ones
 // (relay-flood-hardening-2026-11-05).
 func TestListenLimitsOnlyPublicPorts(t *testing.T) {
-	viper.Set("http.server.enable", true)
-	viper.Set("rpc.server.enable", true)
-	viper.Set("internal.enable", true)
+	viper.Set("http.server.enabled", true)
+	viper.Set("rpc.server.enabled", true)
+	viper.Set("internal.enabled", true)
 	for _, key := range []string{config.ProxyServerPort, config.GrpcServerPort, "internal.port", "metrics.port"} {
 		viper.Set(key, "0")
 	}

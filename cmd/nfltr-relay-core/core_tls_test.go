@@ -57,7 +57,7 @@ func TestCoreProcessTLSAndE2EE(t *testing.T) {
 	dir := t.TempDir()
 	relayCert, relayKey, relayDER := writeCert(t, dir, "relay", "127.0.0.1", "localhost")
 	agentCert, agentKey, agentDER := writeCert(t, dir, "web", "web")
-	p := startCoreProcess(t, "TLS_ENABLE=true", "TLS_CERT_FILE="+relayCert, "TLS_KEY_FILE="+relayKey, "TCP_E2EE_POLICY=require")
+	p := startCoreProcess(t, "TLS_ENABLED=true", "TLS_CERT_FILE="+relayCert, "TLS_KEY_FILE="+relayKey, "TCP_E2EE_POLICY=require")
 	roots := x509.NewCertPool()
 	rc, err := x509.ParseCertificate(relayDER)
 	if err != nil {

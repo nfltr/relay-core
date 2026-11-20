@@ -702,7 +702,7 @@ func TestDispatcher_routeAgentToAgent_TargetNotConnected(t *testing.T) {
 }
 
 // podToPodConnectionFailuresValue reads the current total of
-// rpc_server_dispatcher_pod_to_pod_connection_failures_total straight from the default Prometheus registry, where the
+// nfltr_relay_dispatcher_pod_to_pod_connection_failures_total straight from the default Prometheus registry, where the
 // metrics package registers.
 func podToPodConnectionFailuresValue(t *testing.T) float64 {
 	t.Helper()
@@ -712,7 +712,7 @@ func podToPodConnectionFailuresValue(t *testing.T) float64 {
 	}
 	total := 0.0
 	for _, mf := range families {
-		if mf.GetName() != "rpc_server_dispatcher_pod_to_pod_connection_failures_total" {
+		if mf.GetName() != "nfltr_relay_dispatcher_pod_to_pod_connection_failures_total" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {

@@ -147,7 +147,7 @@ func scrape(t *testing.T, p Path) map[string]float64 {
 // registered again; their sessions count on path sni, connect, replica and
 // the tcp_* paths.
 func TestReplacedFamiliesStayRetired(t *testing.T) {
-	retired := []string{"_tcp_tunnel_", "_sni_router_", "_ssh_proxy_", "rpc_server_proxy_request_duration_milliseconds"}
+	retired := []string{"_tcp_tunnel_", "_sni_router_", "_ssh_proxy_", "nfltr_relay_proxy_request_duration_milliseconds"}
 	ch := make(chan *prometheus.Desc, 1024)
 	all.Describe(ch)
 	close(ch)

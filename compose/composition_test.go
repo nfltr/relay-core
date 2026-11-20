@@ -15,10 +15,10 @@ import (
 )
 
 // TestCompositionPortsUntilTheDrain: the internal and metrics ports (pprof
-// with profiling.enable) serve, and without an agent port both close when
+// with profiling.enabled) serve, and without an agent port both close when
 // the drain starts; Run returns and runs After.
 func TestCompositionPortsUntilTheDrain(t *testing.T) {
-	viper.Set("profiling.enable", true)
+	viper.Set("profiling.enabled", true)
 	defer viper.Reset()
 	il, _ := net.Listen("tcp", "127.0.0.1:0")
 	ml, _ := net.Listen("tcp", "127.0.0.1:0")
