@@ -24,6 +24,7 @@ CONSTANTS Holders,   \* agents holding the server key
 
 Agents == Holders \cup Others
 None == "none"
+Lost == "lost"  \* a link refusal passed on: the agent's leg ended before it answered
 
 VARIABLES
     rec,  \* agent -> the claim stamp of its live record declaring the rid, 0: none
@@ -34,16 +35,16 @@ VARIABLES
 
 vars == <<rec, idx, n, op, act>>
 
-IdleOp == [pc |-> "idle", left |-> {}, got |-> [a \in Agents |-> 0], tried |-> {}, res |-> None, steady |-> {}]
+IdleOp == [pc |-> "idle", left |-> {}, got |-> [a \in Agents |-> 0], tried |-> {}, res |-> None, steady |-> {}, lost |-> FALSE]
 
 TypeOK ==
     /\ rec \in [Agents -> 0..MaxClaims]
     /\ idx \subseteq Agents
     /\ n \in 0..MaxClaims
-    /\ op.pc \in {"idle", "read", "dial", "done"}
+    /\ op.pc \in {"idle", "read", "dial", "answer", "done"} /\ op.lost \in BOOLEAN
     /\ op.left \subseteq Agents /\ op.tried \subseteq Agents /\ op.steady \subseteq Holders
     /\ op.got \in [Agents -> 0..MaxClaims]
-    /\ op.res \in Agents \cup {None}
+    /\ op.res \in Agents \cup {None, Lost}
 
 Init ==
     /\ rec = [a \in Agents |-> 0]
@@ -145,11 +146,27 @@ Dial ==
     /\ op.pc = "dial"
     /\ LET a == Next1
        IN IF rec[a] # 0
-          THEN op' = [op EXCEPT !.pc = "done", !.res = a]
+          THEN op' = [op EXCEPT !.pc = "answer", !.res = a]
           ELSE IF Mutant = "no-fallback" \/ Cands \ (op.tried \cup {a}) = {}
           THEN op' = [op EXCEPT !.pc = "done", !.res = None, !.tried = @ \cup {a}]
           ELSE op' = [op EXCEPT !.tried = @ \cup {a}]
     /\ act' = [s |-> "Dial", a |-> None]
+    /\ UNCHANGED <<rec, idx, n>>
+
+\* The agent's answer (FeatureChain: the agent answers the open itself).
+\* An agent gone before it answered (its link ended, its record since or
+\* soon): its leg's link refusal (connection lost, draining) is the one
+\* answer not served, never passed on (lane PIPERESET2: relay-core
+\* TestNF1CapsAndNotServed read "relay unreachable"; mutant lost-answer,
+\* the code before). No other candidate is tried: the client's first
+\* bytes went to this leg.
+Answer ==
+    /\ op.pc = "answer"
+    /\ IF rec[op.res] # 0
+       THEN op' = [op EXCEPT !.pc = "done"]
+       ELSE op' = [op EXCEPT !.pc = "done", !.lost = TRUE,
+                             !.res = IF Mutant = "lost-answer" THEN Lost ELSE None]
+    /\ act' = [s |-> "Answer", a |-> None]
     /\ UNCHANGED <<rec, idx, n>>
 
 \* The open's answer went back; the next open starts.
@@ -161,7 +178,7 @@ Reset ==
 
 Next ==
     \/ \E a \in Agents : Claim(a) \/ End(a) \/ Expire(a) \/ Prune(a) \/ Read(a)
-    \/ Snap \/ Decide \/ Dial \/ Reset
+    \/ Snap \/ Decide \/ Dial \/ Answer \/ Reset
 
 Spec == Init /\ [][Next]_vars
 
@@ -174,11 +191,16 @@ IndexComplete == \A a \in Agents : rec[a] # 0 => a \in idx
 \* The relay routes an address only to an agent holding its server key
 \* (with the pin, the rest refuse at the client anyway: this is the
 \* duplicate that would make every open fail).
-RouteSound == op.pc = "done" /\ op.res # None => op.res \in Holders
+RouteSound == op.pc = "done" /\ op.res \in Agents => op.res \in Holders
+
+\* Unknown, offline and disabled are one answer: an open answers served or
+\* not served, never a link refusal that tells an agent left (no
+\* enumeration of recently served addresses).
+OneAnswer == op.res # Lost
 
 \* No duplicate-address denial: an open answers not served only if no
 \* key holder's record was live from its snapshot to its answer.
-NoFalseNotServed == op.pc = "done" /\ op.res = None => op.steady = {}
+NoFalseNotServed == op.pc = "done" /\ op.res = None /\ ~op.lost => op.steady = {}
 
 \* A key holder's declaration is never refused (the owner's second server,
 \* or its new machine while the old record waits for its TTL).
@@ -190,4 +212,5 @@ WitnessRoutedAmongTwo == ~(op.pc = "done" /\ op.res # None /\ Cardinality(Cands)
 WitnessFallback == ~(op.pc = "done" /\ op.res # None /\ op.tried # {})
 WitnessRefused == act.s # "Refused"
 WitnessNotServed == ~(op.pc = "done" /\ op.res = None /\ Cands # {})
+WitnessLostAnswer == ~(op.pc = "done" /\ op.lost)
 =============================================================================

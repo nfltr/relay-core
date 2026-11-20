@@ -679,7 +679,8 @@ mutants)
 	# NF1Claim.tla: which agent an nf1 address reaches (NF1RISKS, design):
 	# the code before it (no-proof, exactly-one), the dial without a
 	# fallback, the rejected rule (refuse-second); witnesses.
-	for b in no-proof exactly-one no-fallback refuse-second; do
+	# The agent's leg's link refusal passed on (lane PIPERESET2).
+	for b in no-proof exactly-one no-fallback refuse-second lost-answer; do
 		expect NF1Claim.cfg NF1Claim.tla "nf1:$b" -e "$m$b\"/"
 	done
 	expect NF1Claim.cfg NF1Claim.tla witness:nf1-two-serving -e 's/^    RouteSound$/    WitnessTwoServing/'
@@ -687,6 +688,7 @@ mutants)
 	expect NF1Claim.cfg NF1Claim.tla witness:nf1-fallback -e 's/^    NoFalseNotServed$/    WitnessFallback/'
 	expect NF1Claim.cfg NF1Claim.tla witness:nf1-refused -e 's/^    NoHolderRefused$/    WitnessRefused/'
 	expect NF1Claim.cfg NF1Claim.tla witness:nf1-not-served -e 's/^    NoFalseNotServed$/    WitnessNotServed/'
+	expect NF1Claim.cfg NF1Claim.tla witness:nf1-lost-answer -e 's/^    OneAnswer$/    WitnessLostAnswer/'
 	# NF1Anon.tla: an nf1 address served with no account (NF1ANON, design):
 	# the relay's budget, its scope and the registration's lifetime put back
 	# wrong; witnesses.

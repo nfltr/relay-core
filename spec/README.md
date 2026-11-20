@@ -781,12 +781,24 @@ declaration refused), `WitnessNotServed` (a member read live, gone by the
 dial). The order among holders is not an invariant: TLC finds none broken
 with the oldest claim first.
 
+The agent's answer (lane PIPERESET2, 2026-11-21): the dial reaches a live
+agent, which answers the open itself (FeatureChain); an agent gone before
+it answered (its link ended at its stop) left the relay passing its leg's
+link refusal on ("connection lost": nf1.Dial's "relay unreachable",
+relay-core `TestNF1CapsAndNotServed` on box 2026-11-20), which tells an
+address served a moment ago from an unknown one. `Answer` makes it the one
+answer not served (`OneAnswer`; mutant `lost-answer`, the code before;
+witness `WitnessLostAnswer`). No other candidate is tried then (the
+client's first bytes went to that leg), so `NoFalseNotServed` excludes a
+lost answer: with a second live holder that open answers not served and
+the client's next dial reaches it.
+
 ### Code map (drift check)
 
 | what the spec models | file |
 |---|---|
 | `Accepts` (`declaredServices`, `checkRegistrations`) | `core/session/agent_services.go` |
-| `Decide`, `Dial` (`openNF1`) | `core/session/nf1.go` |
+| `Decide`, `Dial` (`openNF1`), `Answer` (`nf1Leg`: the agent leg's link refusal is NotServed) | `core/session/nf1.go` |
 | `Snap`, `Read`, `Prune`, `Next1`'s order (`NF1Agents`) | `core/directory/nf1_index.go` |
 | `RouteSound`, `NoHolderRefused` (`TestNF1DeclarationProof`); `NoFalseNotServed`, fallback (`TestNF1TwoServers`, `TestNF1TwoServersEndToEnd`) | `core/session/nf1_test.go`, `relaycoretest/nf1_test.go` |
 
