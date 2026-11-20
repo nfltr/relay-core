@@ -10,6 +10,14 @@ changes listed (from the first tag on).
 
 ## [Unreleased] (v0.18.0: the API changes since v0.17.0)
 
+### Added (the gRPC health check, lane CLIUX3)
+
+- Every gRPC server `grpcfactory.NewGRPCServer` builds (the agent port)
+  answers the standard `grpc.health.v1.Health` check, SERVING, without a
+  credential (the Hello is still required): a client tells the gRPC port
+  from the HTTPS port, both TLS and h2 (`TestHealthAnswersWithoutCredential`;
+  nfltr `status`).
+
 ### Changed (the HTTP pool follows a replaced primary or QUIC connection, lane HTTPPOOL)
 
 - `TCPDispatcher.ServesHTTP(agentID) bool` is replaced by

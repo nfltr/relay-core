@@ -18,6 +18,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/experimental"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 
 	grpc_prom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
@@ -245,6 +247,10 @@ func NewGRPCServer(logger *slog.Logger, opts ...GRPCServerOption) *grpc.Server {
 	grpcServer := grpc.NewServer(
 		grpcOpts...,
 	)
+	// The standard health check, answered without a credential: it tells the
+	// gRPC port from the HTTPS port, both TLS and h2 (nfltr status,
+	// TestHealthAnswersWithoutCredential).
+	healthpb.RegisterHealthServer(grpcServer, health.NewServer())
 
 	srvMetrics.InitializeMetrics(grpcServer)
 	return grpcServer
