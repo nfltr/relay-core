@@ -9,7 +9,7 @@
 #   check     actions, then TLC on spec/AgentLink.cfg (Refines left out),
 #             AgentLinkIface.cfg (Refines on fewer bytes), spec/Handoff.cfg,
 #             spec/Move.cfg, spec/Presence.cfg, spec/Directory.cfg and
-#             DirectoryHeal.cfg, spec/NF1Claim.cfg, spec/NF1Anon.cfg, spec/Failover.cfg and FailoverShare.cfg, spec/Takeover.cfg: invariants; spec/AgentLinkWrite.cfg:
+#             DirectoryHeal.cfg, spec/NF1Claim.cfg, spec/NF1Anon.cfg, spec/Failover.cfg and FailoverShare.cfg, spec/Takeover.cfg, spec/HTTPPool.cfg: invariants; spec/AgentLinkWrite.cfg:
 #             WriteReturns (CI).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
@@ -428,7 +428,7 @@ checktraces() {
 # ways) and each trace module's event names against the recorder's Go.
 actions_check() {
 	ok=0
-	for m in AgentLink Handoff Move Presence Directory NF1Claim NF1Anon KeyAccount AccountLimit Failover Takeover; do
+	for m in AgentLink Handoff Move Presence Directory NF1Claim NF1Anon KeyAccount AccountLimit Failover Takeover HTTPPool; do
 		# A step: a definition whose body primes or keeps a variable (not a temporal formula).
 		acts=$(awk '
 			function flush() { if (name != "" && act && !tmp) print name; name = "" }
@@ -491,6 +491,7 @@ check)
 	run NF1Claim.cfg NF1Claim.tla
 	run NF1Anon.cfg NF1Anon.tla
 	run Takeover.cfg Takeover.tla
+	run HTTPPool.cfg HTTPPool.tla
 	;;
 nightly)
 	run AgentLink.cfg MCAgentLink.tla
@@ -588,6 +589,15 @@ mutants)
 	expect Handoff.cfg Handoff.tla witness:silent -e 's/^    SilenceOnDeadPath$/    WitnessSilent/'
 	expect Handoff.cfg Handoff.tla witness:parked-open -e 's/^    LinkOpensAnswered$/    WitnessParkedOpen/'
 	expect Handoff.cfg Handoff.tla witness:end-unparked -e 's/^    ParkOffered$/    WitnessEndUnparked/'
+	# HTTPPool.tla: the HTTP keep-alive pool across a replaced primary or
+	# QUIC connection (lane HTTPPOOL); witnesses.
+	for b in pool-by-agent no-retire no-single-use retire-any; do
+		expect HTTPPool.cfg HTTPPool.tla "httppool:$b" -e "$m$b\"/"
+	done
+	for w in Reuse Replaced Race; do
+		expect HTTPPool.cfg HTTPPool.tla "witness:httppool-$w" -e "s/^    NoStaleDispatch$/    Witness$w/"
+	done
+	expect HTTPPool.cfg HTTPPool.tla witness:httppool-Growth -e 's/^    NoLiveCut$/    WitnessGrowth/'
 	# A trace whose last step breaks an invariant is rejected: every trace
 	# cfg lists TraceNotDone last, since TLC reports the first violated
 	# invariant in listed order (spec/README.md "Trace validation"). The

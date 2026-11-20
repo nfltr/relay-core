@@ -1280,6 +1280,89 @@ Environment assumptions:
 | `Notice`: the replaced TCP stream | `core/session/dispatcher_tcp_streams.go` |
 | `Connect`, `Notice`, `Stop`: `ConnectHTTP`'s takeover and teardown, traced | `core/session/dispatcher_subscribe.go`, `core/session/trace_takeover_on.go` |
 
+## HTTPPool.tla: the HTTP keep-alive pool to an agent
+
+`HTTPPool.tla` (lane HTTPPOOL, found by LINKFAULTS: nfltr
+`docs/decisions/link-v1-gate-2026-11-20.md` "Network faults") models the
+relay's keep-alive pool of HTTP sessions to one agent (`agentHTTP`'s
+`http.Transport`, `frontend/http/agent_http_link.go`) against what the
+directory names for the agent: its current primary stream
+(`TCPDispatcher.Streams`) and that primary's agent-link connections. The
+finding: after the agent replaced its QUIC connection (a closed socket, a
+partition) or its primary (a restart, a takeover), the pool, one per agent,
+kept writing requests on sessions of the old connection, which the relay
+held open until its liveness (`DeadAfter`, 15 s) or, for a live old
+process, for as long as requests kept the sessions busy.
+
+The design: (1) the pool's key is the agent's route, its current primary's
+number (`HTTPRoute`), read with the routing under `d.Mu`: a session of a
+primary that is no longer current is never taken again; (2) a session that
+rides another route than its key's (the dial raced a primary's change) is
+closed after its request (`agentHTTP.ServeHTTP`), never pooled; (3) a QUIC
+connection bound with a token retires the token's other QUIC connections
+(`agentLink.bind` closes them, their sessions with them, pooled ones
+included): the agent's quiclink Node holds one connection to its relay and
+dials another only once its own is unusable, so the old one is dead on the
+agent's side. A TCP bind retires nothing: a token's link/TCP connections
+grow side by side. A relay draining retires nothing (its connections finish
+to the drain deadline). No timer: the directory's change drives all three.
+
+| action | Go |
+|---|---|
+| `Register(g)`, `Changed` | `RegisterStream` -> `enterRotation`: a newer primary is `Streams[agent]`, its route `tcpAgentStream.route` |
+| `PrimEnd(g)` | `unregister` -> `leaveRotationLocked` (the latest primary left takes its place); its link's connections in their resume grace (`Handoff.tla`) |
+| `Bind(c, g, t)`, `CloseSess` | `agentLink.bind` (link/TCP `ServedPeer`, QUIC `quicPeer`): a QUIC bind closes the token's other QUIC connections; `unbind` follows their end |
+| `Lose(c)` | the agent's end of a connection goes unseen (a closed socket, a lost close, a crash) |
+| `Close(c)` | the relay's end closes: QUIC's idle timeout, link's liveness, the grace's end, the agent's close |
+| `Key(r)` | `agentHTTP` `ServeHTTP`/`Rewrite`: `HTTPRoute` into the request's host, the transport's pool key |
+| `Take(r, s)`, `Wrote` | `http.Transport` takes an idle session of that key |
+| `Dial(r, c)`, `KeepReq` | `DialContext` -> `TCPDispatcher.DialHTTP` -> `onwardLocal` -> `agentLink.open` (quiclink `pickServed`: any open connection of the token) |
+| `Respond(r)` | the response; `ServeHTTP` closes a session whose `Route()` is not its key's |
+| `Fail(r)` | a request on a closed session: the reverse proxy's 502, or the transport's retry of a replayable request on a reused one |
+| `IdleEnd(s)` | `IdleConnTimeout` (90 s) |
+
+Invariants (`HTTPPool.cfg`, `make spec`: two primaries, two connections,
+two requests; 160,565 distinct states, 16 s on one worker; `COVERAGE=1`
+takes every action): `NoStaleDispatch` (a request is written only on a
+session of a connection the directory names for the agent, its current
+primary's and not replaced, unless a route changed after the request read
+its key: that race is a request's a moment before the change, and it ends
+as one would, the session closed (3) or abandoned (1)), `NoLiveCut` (a
+replacement closes only connections the agent no longer holds). Mutants
+(`make spec-mutants`), each caught: `pool-by-agent` (one pool per agent,
+every session back in it: the code before; a new primary registers and
+the next request takes the old one's session), `no-retire` (a QUIC bind
+leaves the old connection open: the finding), `no-single-use` (a session
+dialled across a primary's change pooled under the older key: taken once
+the newer primary ended), `retire-any` (a TCP bind retires the token's
+other connections: `NoLiveCut`). Witnesses, each violated: `WitnessReuse`
+(a pooled session reused), `WitnessReplaced` (a QUIC connection replaced),
+`WitnessRace` (the race `NoStaleDispatch` allows is reached),
+`WitnessGrowth` (two live connections of one primary). Tests:
+`frontend/http` `TestAgentHTTPLinkNewPrimaryTakesTheNextRequest`,
+`TestAgentHTTPLinkQUICReplacedTakesTheNextRequest` (both failed before).
+Open: no trace recorder yet (the pool is net/http's; a recorder would log
+`HTTPRoute`, `DialHTTP`'s route and `bind`'s retirements, merged with the
+Handoff trace's).
+
+Environment assumptions:
+
+| assumption | source |
+|---|---|
+| the agent holds one QUIC connection to its relay and dials another only once its own is unusable (closed, or told to go away) | link `peerlink/quiclink` `Node.pick` (`peerConns.c`, `usable`); relay `client/agent` `agent_link.go` (`dialQUICNode`) |
+| a token's link/TCP connections may be several at once | link `peerlink` `Node` pool; `agentLinkMaxConns` |
+| a closed session's pending and next reads fail at once; net/http drops an idle connection whose read fails, and retries a replayable request on a reused one that failed before a response | quic-go stream semantics; `net/http` `persistConn.readLoop`, `shouldRetryRequest` |
+| a newer primary of an agent takes its new sessions (`Streams`) | `enterRotation` (`Handoff.tla`, relay-server `spec/Replicas.tla` R9) |
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| `Key`, `Take`, `Dial`, `Respond`: the pool key, the single-use close | `frontend/http/agent_http_link.go` |
+| `HTTPRoute`, `DialHTTP` | `core/session/agent_http_link.go` |
+| `Bind`: a QUIC bind retires the token's other QUIC connections | `core/session/agent_link.go` |
+| `Register`, `PrimEnd`: the route, `Streams` | `core/session/dispatcher_tcp_streams.go` |
+
 ## Layer contract: what the layer above may assume
 
 relay-server (its `spec/Replicas.tla`), the relay's clients and the agent
