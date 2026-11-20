@@ -153,7 +153,7 @@ func (d *TCPDispatcher) serveDataConn(c net.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), DataPlaneSniffTimeout)
 	defer cancel()
 	lc, id, err := link.Server(ctx, c, link.Config{
-		Window: TCPDataWindow, Auth: bindTokens{d},
+		Window: TCPDataWindow, Auth: bindTokens{d}, Hop: true, // its sessions are joined to agents': an end is acknowledged once the agent's side took it
 		Observer: dataConnObserver{Observer: metrics.TransferObserver(metrics.PathTCPDataConn, false), logger: d.logger},
 	})
 	if err != nil {

@@ -22,8 +22,32 @@ import (
 // goes through one (TestEveryOpenedPathCountsItsBytes, metricstest).
 // m is the session's meter (OpenMeter), nil for none.
 func CountConn(c net.Conn, p Path, m *Meter, began time.Time, agentSide, bytes bool) net.Conn {
-	return &countedConn{Conn: c, p: p, m: m, began: began, agentSide: agentSide, bytes: bytes}
+	cc := &countedConn{Conn: c, p: p, m: m, began: began, agentSide: agentSide, bytes: bytes}
+	if e, ok := c.(endSession); ok { // a link session: peerlink.Join syncs and acknowledges its end through cc
+		return &countedSession{cc, e}
+	}
+	return cc
 }
+
+// endSession is a link session's end handshake (link FeatureEndAck):
+// peerlink.Join holds its ENDACK, passes its end on, and waits for the
+// far end's (peerlink.EndAcker, CloseWriteSync).
+type endSession interface {
+	CloseWriteSync() error
+	HoldEndAck()
+	AckEnd()
+}
+
+// countedSession is a countedConn of a link session, passing its end
+// handshake on.
+type countedSession struct {
+	*countedConn
+	e endSession
+}
+
+func (c *countedSession) CloseWriteSync() error { return c.e.CloseWriteSync() }
+func (c *countedSession) HoldEndAck()           { c.e.HoldEndAck() }
+func (c *countedSession) AckEnd()               { c.e.AckEnd() }
 
 type countedConn struct {
 	net.Conn

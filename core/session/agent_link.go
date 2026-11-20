@@ -145,7 +145,7 @@ func newAgentLink(d *TCPDispatcher, addr net.Addr) *agentLink {
 		ln: &agentLinkListener{conns: make(chan net.Conn), addr: addr, done: make(chan struct{})}}
 	l.tcp = mustNode(peerlink.New(peerlink.Config{
 		Listener: l.ln,
-		Link:     link.Config{Window: TCPDataWindow, Auth: agentLinkTokens{l}},
+		Link:     link.Config{Window: TCPDataWindow, Auth: agentLinkTokens{l}, Hop: true}, // sessions joined onward: ends acknowledged once passed on
 		Observer: func(string) link.Observer {
 			return agentLinkObserver{Observer: metrics.TransferObserver(metrics.PathTCPLink, true), l: l}
 		},

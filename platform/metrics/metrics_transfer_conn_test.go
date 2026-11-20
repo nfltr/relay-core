@@ -110,3 +110,42 @@ func TestCountHTTPWriterFlushes(t *testing.T) {
 		t.Fatalf("Flush did not reach w: flushed %v, code %d", rec.Flushed, rec.Code)
 	}
 }
+
+// endConn is a conn with a link session's end handshake.
+type endConn struct {
+	net.Conn
+	held, acked, synced bool
+}
+
+func (c *endConn) CloseWriteSync() error { c.synced = true; return nil }
+func (c *endConn) HoldEndAck()           { c.held = true }
+func (c *endConn) AckEnd()               { c.acked = true }
+
+// TestCountConnPassesTheEndHandshake (lane RELAYCLOSE): a counted link
+// session keeps its end handshake, so peerlink.Join holds its ENDACK and
+// waits for the far end's through it (link FeatureEndAck); a counted
+// plain conn gets none (Join closes its writes, as before).
+func TestCountConnPassesTheEndHandshake(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	e := &endConn{Conn: a}
+	c := CountConn(e, PathTCPLink, nil, time.Now(), false, false)
+	s, ok := c.(interface {
+		CloseWriteSync() error
+		HoldEndAck()
+		AckEnd()
+	})
+	if !ok {
+		t.Fatal("a counted link session lost its end handshake")
+	}
+	s.HoldEndAck()
+	s.AckEnd()
+	_ = s.CloseWriteSync()
+	if !e.held || !e.acked || !e.synced {
+		t.Fatalf("passed on: held %v acked %v synced %v", e.held, e.acked, e.synced)
+	}
+	if _, ok := CountConn(b, PathTCPLink, nil, time.Now(), false, false).(interface{ CloseWriteSync() error }); ok {
+		t.Fatal("a counted plain conn claims an end handshake")
+	}
+}
