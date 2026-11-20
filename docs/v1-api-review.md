@@ -19,8 +19,8 @@ and, because they are surface too, its config keys and metric names.
 Outcome: 21 package-level exports unexported and 7 deleted (none had a
 consumer; one of them a config key nothing read), 53 doc references to
 names that do not exist fixed (the guard `TestDocsNameNoGhosts` found 51), 7
-concurrency statements added, `api/v0.17.0.txt` updated (next release
-**v0.18.0**), 0 wire changes. **No consumer changes**: `go vet` of every
+concurrency statements added, `api/v0.18.0.txt` recorded (next release
+**v0.19.0**: promote r30 took v0.18.0), 0 wire changes. **No consumer changes**: `go vet` of every
 package that imports relay-core in relay-server (27), nfltr (12), hosted
 (2), send (1) and pipe (1) passes against this branch (`replace` in a
 copy of each go.mod, `-modfile`). Proposed, not made: the metric names'
@@ -317,7 +317,7 @@ Not decided, kept: the run-together words and the `rpc.*` prefix above.
 
 None must change for this branch: no consumer at its main names a removed
 export (`go vet` of each importing package, above). At their next bump to
-v0.18.0:
+v0.19.0:
 
 - nfltr: `docs/reference/config.md` lists `gitops.type` (generated from
   the vendored source); `make docs-generate` in the bump drops its row,
@@ -333,14 +333,15 @@ v0.18.0:
 | guard | what fails |
 |---|---|
 | `TestDocsNameNoGhosts` (`internal/repocheck/docnames_test.go`; link's and relay's test, ported: one module, packages by directory, `frontend` and `core/frontend` share a package name so a `frontend.` name may be either's) | a doc comment of a public package naming an unexported identifier, a member its type lacks, or a name `api/*.txt` records as removed (planted `fooBar` in `MemoryCache`'s doc: fails) |
-| `make check-api` (`scripts/check-api.sh`, already a CI step) | an API change since v0.17.0 that `api/v0.17.0.txt` does not list; it now lists this lane's |
+| `make check-api` (`scripts/check-api.sh`, already a CI step) | an API change since v0.18.0 that `api/v0.18.0.txt` does not list; it lists this lane's and RCNAMES' |
 
 ## What the next release makes
 
-`api/v0.17.0.txt` lists every change since v0.17.0: the two already on
-main (`PathBlob`, `ServesHTTP` removed; `DialHTTP`, `HTTPRoute` added) and
-this lane's 28 removals. Names are removed, so the release is a minor:
-**v0.18.0**. No consumer at its main names a removed one; relay-server's
+`api/v0.18.0.txt` lists every change since v0.18.0 (promote r30, which
+shipped `PathBlob` and `ServesHTTP` removed, `DialHTTP` and `HTTPRoute`
+added): this lane's 28 removals and RCNAMES' `config.CheckRenamed`
+(re-recorded by lane R31PREP on the r31 stack). Names are removed, so
+the release is a minor: **v0.19.0**. No consumer at its main names a removed one; relay-server's
 `go test ./relaytest/` passes against this branch (the downstream check).
 
 ## What "v1 compatible" will mean for relay-core

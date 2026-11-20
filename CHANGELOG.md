@@ -8,7 +8,7 @@ and every such change is listed here with its migration; a patch version
 (v0.N.M) does not change it. `make check-api` holds each release to the
 changes listed (from the first tag on).
 
-## [Unreleased] (v0.18.0: the API changes since v0.17.0)
+## [Unreleased] (v0.19.0: the API changes since v0.18.0)
 
 ### Changed: config keys and metric names settled for v1 (lane RCNAMES)
 
@@ -70,6 +70,8 @@ any of these; each was used only inside its own package or by nothing.
   nothing read (a relay started with `--gitops.type` now refuses the flag).
 - 51 doc comments named unexported helpers or names that no longer exist;
   `TestDocsNameNoGhosts` (internal/repocheck) fails on a new one.
+
+## [v0.18.0] - 2026-11-21 (promote r30)
 
 ### Added (the gRPC health check, lane CLIUX3)
 

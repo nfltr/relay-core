@@ -1,35 +1,6 @@
 Incompatible changes:
-- ./core/session.(*TCPDispatcher).ServesHTTP: removed
-- ./core/session.ValidPort: removed
-- ./platform/metrics.AddTransferStall: removed
-- ./platform/metrics.ObserveTransferOpen: removed
 - ./platform/metrics.PathBlob: removed
-- ./compose.ListenHost: removed
-- ./compose.MergeListeners: removed
-- ./platform/util.Cast: removed
-- ./platform/util.NewLogger: removed
-- ./platform/util.ProtoToTunnelFrame: removed
-- ./platform/config.GitOpsExec: removed
-- ./frontend/connect.RequestToken: removed
-- ./grpcauth.BalanceExhaustedStatus: removed
-- ./grpcauth.CredentialEndedStatus: removed
-- ./grpcauth.MetadataPrincipal: removed
-- ./grpcauth.PeerCertificates: removed
-- ./keyfile.KeyListResponse: removed
-- ./core/directory/directorytest.Rounds: removed
-- ./core/session/sessiontest.SetSessionStall: removed
-- ./core/nf1anon.Source: removed
-- ./frontend/http.GetAPIType: removed
-- ./frontend/http.HeaderPolicy: removed
-- ./frontend/http.HeaderRewriteMiddleware: removed
-- ./frontend/http.Ingress: removed
-- ./frontend/http.Metadata: removed
-- ./frontend/http.New: removed
-- ./frontend/http.NewHeaderPolicyFromConfig: removed
-- ./frontend/http.NewProxy: removed
-- ./frontend/http.Proxy: removed
-- ./frontend/http.SkipHeaders: removed
+- ./core/session.(*TCPDispatcher).ServesHTTP: removed
 Compatible changes:
 - ./core/session.(*TCPDispatcher).DialHTTP: added
 - ./core/session.(*TCPDispatcher).HTTPRoute: added
-- ./platform/config.CheckRenamed: added

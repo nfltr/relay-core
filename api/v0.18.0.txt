@@ -1,0 +1,31 @@
+Incompatible changes:
+- ./core/nf1anon.Source: removed
+- ./frontend/http.GetAPIType: removed
+- ./frontend/http.HeaderPolicy: removed
+- ./frontend/http.HeaderRewriteMiddleware: removed
+- ./frontend/http.Ingress: removed
+- ./frontend/http.Metadata: removed
+- ./frontend/http.New: removed
+- ./frontend/http.NewHeaderPolicyFromConfig: removed
+- ./frontend/http.NewProxy: removed
+- ./frontend/http.Proxy: removed
+- ./frontend/http.SkipHeaders: removed
+- ./grpcauth.BalanceExhaustedStatus: removed
+- ./grpcauth.CredentialEndedStatus: removed
+- ./grpcauth.MetadataPrincipal: removed
+- ./grpcauth.PeerCertificates: removed
+- ./compose.ListenHost: removed
+- ./compose.MergeListeners: removed
+- ./core/session/sessiontest.SetSessionStall: removed
+- ./platform/util.Cast: removed
+- ./platform/util.NewLogger: removed
+- ./platform/util.ProtoToTunnelFrame: removed
+- ./platform/config.GitOpsExec: removed
+- ./core/session.ValidPort: removed
+- ./core/directory/directorytest.Rounds: removed
+- ./frontend/connect.RequestToken: removed
+- ./keyfile.KeyListResponse: removed
+- ./platform/metrics.AddTransferStall: removed
+- ./platform/metrics.ObserveTransferOpen: removed
+Compatible changes:
+- ./platform/config.CheckRenamed: added
