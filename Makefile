@@ -99,6 +99,13 @@ readme-quickstart:
 check-api:
 	./scripts/check-api.sh
 
+# bench-tcp-tunnel: the TCP data path's throughput, COUNT runs (default 6)
+# for benchstat (nfltr AGENTS.md "Relay data path": before and after a
+# data-path change; the box runs it: make ci-request TARGET=bench-tcp-tunnel).
+.PHONY: bench-tcp-tunnel
+bench-tcp-tunnel:
+	go test -run '^$$' -bench BenchmarkTCPTunnelThroughput -benchmem -count $(or $(COUNT),6) ./core/session/
+
 # The TLA+ models of the agent's frame streams and their handoff
 # (spec/README.md): spec: invariants; spec-mutants: every bug put back is
 # caught and the documented races found (both in CI); spec-liveness,
