@@ -343,9 +343,9 @@ func bridgeWSToConn(ws *wsconn.Conn, conn net.Conn) {
 	<-done
 }
 
-// RequestToken is the bearer token r presents (Authorization: Bearer);
+// requestToken is the bearer token r presents (Authorization: Bearer);
 // header names where it was.
-func RequestToken(r *http.Request) (token, header string) {
+func requestToken(r *http.Request) (token, header string) {
 	auth := r.Header.Get("Authorization")
 	if len(auth) > len("Bearer ") && strings.EqualFold(auth[:len("Bearer ")], "Bearer ") {
 		return auth[len("Bearer "):], "Authorization"
@@ -356,7 +356,7 @@ func RequestToken(r *http.Request) (token, header string) {
 // ErrNoCredential: the request presents no key and no client certificate.
 var ErrNoCredential = errors.New("no credential")
 
-// RequestPrincipal authenticates the token r presents (RequestToken), else
+// RequestPrincipal authenticates the token r presents (an Authorization bearer), else
 // (none, or one no provider knows: a machine may send its own app's
 // bearer) its TLS client certificate, with a; err is ErrNoCredential when
 // it presents neither, else the provider chain's refusal
@@ -364,7 +364,7 @@ var ErrNoCredential = errors.New("no credential")
 // caller answers typed).
 func RequestPrincipal(a *identity.Authenticator, r *http.Request, c identity.Credential) (p identity.Principal, header string, err error) {
 	err = identity.ErrUnknownCredential
-	if c.Token, header = RequestToken(r); c.Token != "" {
+	if c.Token, header = requestToken(r); c.Token != "" {
 		if p, err = a.Authenticate(r.Context(), c); !errors.Is(err, identity.ErrUnknownCredential) {
 			return p, header, err
 		}

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"runtime"
 	"strings"
 	"testing"
@@ -28,7 +27,7 @@ func TestFirstMiddleware_Success(t *testing.T) {
 	ing := newTestIngress(&session.Core{Broker: b})
 
 	// Create a response with proper metadata
-	m := Metadata{
+	m := frontMetadata{
 		AgentID:             "agentID-1",
 		RequestAtHTTPServer: time.Now().UnixMilli(),
 		RequestAtAgent:      time.Now().UnixMilli(),
@@ -82,7 +81,7 @@ func TestFirstMiddleware_Timeout(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	ing := newTestIngress(&session.Core{Broker: b})
 
-	m := Metadata{AgentID: "agentID-1"}
+	m := frontMetadata{AgentID: "agentID-1"}
 	metadataBytes, _ := json.Marshal(m)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,64 +94,6 @@ func TestFirstMiddleware_Timeout(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
-}
-
-func TestGetAPIType(t *testing.T) {
-	viper.Set("http.api_type_prefixes", []string{"wapi", "ibap"})
-	defer viper.Reset()
-
-	type args struct {
-		r *http.Request
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: "Testing wapi",
-			args: args{
-				r: &http.Request{
-					URL: &url.URL{Path: "/wapi/users"},
-				},
-			},
-			want: "wapi",
-		},
-		{
-			name: "Testing ibap",
-			args: args{
-				r: &http.Request{
-					URL: &url.URL{Path: "/ibap/users"},
-				},
-			},
-			want: "ibap",
-		},
-		{
-			name: "Testing negative testcase for wapi",
-			args: args{
-				r: &http.Request{
-					URL: &url.URL{Path: "/wapier/users"},
-				},
-			},
-			want: "other",
-		},
-		{
-			name: "Testing negative testcase for ibap",
-			args: args{
-				r: &http.Request{
-					URL: &url.URL{Path: "/ibapier/users"},
-				},
-			},
-			want: "other",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := GetAPIType(tt.args.r); got != tt.want {
-				t.Errorf("GetAPIType() = %v, want %v", got, tt.want)
-			}
-		})
-	}
 }
 
 // TestSiteHostKeepsAgentCaching: every agent response is no-store, except a
@@ -174,7 +115,8 @@ func TestSiteHostKeepsAgentCaching(t *testing.T) {
 	}
 }
 
-// TestAPIType: the first path segment, as GetAPIType's split took it.
+// TestAPIType: the first path segment that is one of the prefixes
+// (--http.api_type_prefixes, default wapi,ibap), else "other".
 func TestAPIType(t *testing.T) {
 	prefixes := []string{"wapi", "ibap"}
 	for path, want := range map[string]string{
@@ -196,7 +138,7 @@ func TestAPIType(t *testing.T) {
 func TestFrontAllocBudget(t *testing.T) {
 	const budget = 18 // 78 allocs/op in BenchmarkFirstMiddleware before R2, 35 after R5; 17 before the forwarded headers
 	ing := newTestIngress(&session.Core{})
-	metadata, _ := json.Marshal(Metadata{AgentID: "a", RequestAtAgent: 1, ResponseAtAgent: 2})
+	metadata, _ := json.Marshal(frontMetadata{AgentID: "a", RequestAtAgent: 1, ResponseAtAgent: 2})
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(session.MetadataHeader, string(metadata))
 		w.WriteHeader(http.StatusOK)

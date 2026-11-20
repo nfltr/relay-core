@@ -49,7 +49,7 @@ func TestDispatchRefusesAStaleRecordOfThisReplica(t *testing.T) {
 }
 
 // A peer's forward arriving while the agent's session here registers is
-// served once it registered, not refused (Ingress.peer, ArriveB).
+// served once it registered, not refused (ingress.peer, ArriveB).
 func TestPeerForwardWaitsForAnArrivingAgent(t *testing.T) {
 	viper.Set("http.server.producers.cache_size", 10)
 	viper.Set("http.server.producers.cache_expiry", time.Minute)

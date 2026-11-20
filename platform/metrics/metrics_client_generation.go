@@ -22,7 +22,7 @@ var (
 	dataConnections = auto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: dispatcherNamespace,
 		Name:      "data_connections_total",
-		Help:      "TCP data-plane connections by the link wire version of their hello (1: refused, clients before v2.0.0) and kind (agent: the gRPC port; connect: tcp-connect's upgrade).",
+		Help:      "TCP data-plane connections by the link wire version of their hello (1: refused, clients before v2.0.0) and kind (connect: tcp-connect's upgrade; agent data connections are retired).",
 	}, []string{"version", "kind"})
 )
 

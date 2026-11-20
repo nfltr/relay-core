@@ -31,7 +31,7 @@ func TestLateChunkCancelsItsTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 	chunk := func(txn string, last bool) *testBrokerMessage {
 		h := map[string]*pb.HeaderValueList{}
 		chunking.SetChunkHeaders(h, 3, last)

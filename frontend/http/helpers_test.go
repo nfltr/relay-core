@@ -224,17 +224,17 @@ func (h *testHost) Registered(ctx context.Context, agentID string) bool {
 
 // newTestIngress is the ingress over c (its dispatchers as the test wires
 // them, also later: the ingress reads them per request).
-func newTestIngress(c *session.Core) *Ingress {
+func newTestIngress(c *session.Core) *ingress {
 	if c.Broker == nil {
 		c.Broker = broker.NewInMemoryMessageBroker()
 	}
-	return New(context.Background(), &testHost{core: c})
+	return newIngress(context.Background(), &testHost{core: c})
 }
 
 // prepareRequest is prepareAgentRequest of a proxy that knows the relay's
 // cookies.
 func prepareRequest(r *http.Request, agentID, transactionID string, deadline, at time.Time) (*pb.HTTPProxyRequest, io.ReadCloser, error) {
-	return (&Proxy{relayCookie: testRelayCookie}).prepareAgentRequest(r, agentID, transactionID, deadline, at)
+	return (&proxy{relayCookie: testRelayCookie}).prepareAgentRequest(r, agentID, transactionID, deadline, at)
 }
 
 type mockCache struct {

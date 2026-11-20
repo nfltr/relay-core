@@ -133,6 +133,9 @@ func callerIdentity(p identity.Principal) *pb.CallerIdentity {
 // Cross-pod (multi-pod SaaS):
 //
 //	Client --> Pod A TCPDispatcher --> replica link --> Pod B TCPDispatcher --> Agent
+//
+// Its methods are safe from any goroutine; the Configure methods and the
+// exported settings are set before it serves.
 type TCPDispatcher struct {
 	Mu      sync.RWMutex
 	Streams map[string]*tcpAgentStream // agentID -> its latest registered stream

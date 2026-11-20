@@ -22,7 +22,7 @@ func TestProxy_FanoutResponses_AckError(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -62,7 +62,7 @@ func TestProxy_fanoutResponse_DecodeError(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	// Bad message that can't be decoded
 	msg := &testBrokerMessage{payload: []byte("invalid-proto")}
@@ -78,7 +78,7 @@ func TestProxy_fanoutResponse_NoResponseChannel(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	// Valid message but no response channel registered
 	response := &pb.HTTPProxyResponse{
@@ -99,7 +99,7 @@ func TestProxy_fanoutResponse_NoRequestContext(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	response := &pb.HTTPProxyResponse{
 		Response:   &pb.HTTPResponse{TransactionId: "txn-not-registered", StatusCode: 200},
@@ -120,7 +120,7 @@ func TestProxy_fanoutResponse_Success(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	response := &pb.HTTPProxyResponse{
 		Response:   &pb.HTTPResponse{TransactionId: "txn-1", StatusCode: 200},
@@ -159,7 +159,7 @@ func TestFanoutResponses_AckError(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	p := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	p := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	// Build a valid HTTPProxyResponse message as broker payload
 	si := &pb.HTTPProxyResponse{
@@ -210,7 +210,7 @@ func TestFanoutResponses_FanoutError(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	p := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	p := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	// Bad payload to trigger decodeBrokerMessage error
 	ch := make(chan broker.Message, 1)
@@ -238,7 +238,7 @@ func TestProxy_FanoutResponses(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	podTopic := "pod-1"
 	_ = b.CreateTopic(podTopic, 0, true)

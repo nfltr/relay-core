@@ -59,7 +59,7 @@ func (u *upgradeRequest) close() {
 // whether the agent ended it (its last chunk), else the caller cancels the
 // agent's side. pending holds the chunks that came before chunk 0;
 // visitorDone closes when the visitor's bytes stopped reaching the agent.
-func (p *Proxy) bridge(w http.ResponseWriter, r *http.Request, u *upgradeRequest, first *pb.HTTPProxyResponse, pending map[int]*pb.HTTPProxyResponse,
+func (p *proxy) bridge(w http.ResponseWriter, r *http.Request, u *upgradeRequest, first *pb.HTTPProxyResponse, pending map[int]*pb.HTTPProxyResponse,
 	handle *txnregistry.TransactionHandle[*pb.HTTPProxyResponse], rctx context.Context, visitorDone <-chan publishError, timeout time.Duration,
 	agentID, transactionID string, logger *slog.Logger,
 ) bool {

@@ -146,7 +146,7 @@ func (r *Registry) Register(decl string, regs []string, ip net.IP, register bool
 			return identity.Principal{}, nil, status.Errorf(codes.InvalidArgument, "service %s: an address served with no account needs its registration proof for this relay (%s)", d.Name, agentservices.RegHeader)
 		}
 	}
-	src, id := Source(ip), AgentID(decls[0].NF1)
+	src, id := sourceOf(ip), AgentID(decls[0].NF1)
 	p := identity.Principal{Provider: Provider, Subject: id[len(agentPrefix):], AgentID: id, NotAfter: r.now().Add(r.s.Lifetime)}
 	if !register {
 		r.mu.Lock()
@@ -231,8 +231,8 @@ type event struct {
 	Why string `json:"why,omitempty"`
 }
 
-// Source is ip's source key: an IPv4 address, an IPv6 /64.
-func Source(ip net.IP) netip.Addr {
+// sourceOf is ip's source key: an IPv4 address, an IPv6 /64.
+func sourceOf(ip net.IP) netip.Addr {
 	a, _ := netip.AddrFromSlice(ip)
 	return connlimit.SourceKey(a)
 }

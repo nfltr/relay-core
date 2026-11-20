@@ -103,7 +103,7 @@ func (d *Dispatcher) ConnectTarget(ctx context.Context, reaches func(string) (bo
 		}
 		return agentID, port, nil
 	}
-	if !ValidPort(port) {
+	if !validPort(port) {
 		return refuse(relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT, "invalid port number")
 	}
 	if noTCP {
@@ -175,8 +175,8 @@ func SessionE2EEAnswer(e2ee bool, svc *agentservices.Decl, policy string, def bo
 	return 0, ""
 }
 
-// ValidPort reports whether s is a TCP port number (1-65535).
-func ValidPort(s string) bool {
+// validPort reports whether s is a TCP port number (1-65535).
+func validPort(s string) bool {
 	if s == "" || len(s) > 5 {
 		return false
 	}

@@ -80,7 +80,10 @@ type DispatcherConfig struct {
 }
 
 // Dispatcher manages connected agent streams, routes proxied HTTP and gRPC
-// requests to the correct agent, and handles heartbeat monitoring.
+// requests to the correct agent, and handles heartbeat monitoring. Its
+// exported fields are configuration, set before it serves (WireTCP sets
+// TCPDispatcher); its methods are safe from any goroutine (the gRPC
+// server calls them per stream).
 type Dispatcher struct {
 	pb.UnimplementedDispatcherServer
 

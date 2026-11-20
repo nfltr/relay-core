@@ -3,7 +3,7 @@
 
 // Static header and URL rewriting (Gap 10).
 //
-// HeaderPolicy applies per-server static transformations to HTTP requests and
+// headerPolicy applies per-server static transformations to HTTP requests and
 // responses before they are proxied to the agent.  Unlike ngrok's Traffic
 // Policy (CEL), this implementation uses static string substitutions
 // configured at server startup — no expression language required.
@@ -37,8 +37,8 @@ import (
 	"github.com/spf13/viper"
 )
 
-// HeaderPolicy holds the static header and URL rewrite configuration.
-type HeaderPolicy struct {
+// headerPolicy holds the static header and URL rewrite configuration.
+type headerPolicy struct {
 	addRequestHeaders     map[string]string
 	removeRequestHeaders  []string
 	addResponseHeaders    map[string]string
@@ -47,11 +47,11 @@ type HeaderPolicy struct {
 	urlRewriteReplacement string
 }
 
-// NewHeaderPolicyFromConfig reads the header/URL rewrite config from viper and
-// returns a ready-to-use HeaderPolicy.  Returns nil if all transforms are
+// newHeaderPolicyFromConfig reads the header/URL rewrite config from viper and
+// returns a ready-to-use headerPolicy.  Returns nil if all transforms are
 // disabled (zero-cost passthrough).
-func NewHeaderPolicyFromConfig(logger *slog.Logger) *HeaderPolicy {
-	p := &HeaderPolicy{
+func newHeaderPolicyFromConfig(logger *slog.Logger) *headerPolicy {
+	p := &headerPolicy{
 		addRequestHeaders:     viperStringMap("http.request_headers.add"),
 		removeRequestHeaders:  viper.GetStringSlice("http.request_headers.remove"),
 		addResponseHeaders:    viperStringMap("http.response_headers.add"),
@@ -75,7 +75,7 @@ func NewHeaderPolicyFromConfig(logger *slog.Logger) *HeaderPolicy {
 	return p
 }
 
-func (p *HeaderPolicy) isEmpty() bool {
+func (p *headerPolicy) isEmpty() bool {
 	return len(p.addRequestHeaders) == 0 &&
 		len(p.removeRequestHeaders) == 0 &&
 		len(p.addResponseHeaders) == 0 &&
@@ -85,7 +85,7 @@ func (p *HeaderPolicy) isEmpty() bool {
 
 // ApplyRequest mutates the incoming request according to the policy.
 // Safe to call concurrently — the policy is read-only after construction.
-func (p *HeaderPolicy) ApplyRequest(r *http.Request) {
+func (p *headerPolicy) ApplyRequest(r *http.Request) {
 	for _, name := range p.removeRequestHeaders {
 		r.Header.Del(name)
 	}
@@ -101,7 +101,7 @@ func (p *HeaderPolicy) ApplyRequest(r *http.Request) {
 }
 
 // ApplyResponse mutates the outgoing response headers according to the policy.
-func (p *HeaderPolicy) ApplyResponse(h http.Header) {
+func (p *headerPolicy) ApplyResponse(h http.Header) {
 	for _, name := range p.removeResponseHeaders {
 		h.Del(name)
 	}
@@ -114,7 +114,7 @@ func (p *HeaderPolicy) ApplyResponse(h http.Header) {
 // response headers before they are flushed.
 type headerRewriteResponseWriter struct {
 	http.ResponseWriter
-	policy      *HeaderPolicy
+	policy      *headerPolicy
 	headersSent bool
 }
 
@@ -160,9 +160,9 @@ func (rw *headerRewriteResponseWriter) Flush() {
 // Unwrap lets http.ResponseController reach the server's writer.
 func (rw *headerRewriteResponseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
 
-// HeaderRewriteMiddleware returns a middleware that applies p to every request
+// headerRewriteMiddleware returns a middleware that applies p to every request
 // and response.  If p is nil it returns next unchanged (zero cost).
-func HeaderRewriteMiddleware(p *HeaderPolicy, next http.Handler) http.Handler {
+func headerRewriteMiddleware(p *headerPolicy, next http.Handler) http.Handler {
 	if p == nil {
 		return next
 	}

@@ -79,7 +79,7 @@ func startGRPCHTTPHandler(t *testing.T, backend string) (http.Handler, agent.Age
 		SyncMapClearTimeout: time.Second, GRPCPort: 9090,
 	})
 	d.SingleTenant = true
-	proxy := NewProxy(ctx, logger, b, testRelayCookie)
+	proxy := newProxy(ctx, logger, b, testRelayCookie)
 	go func() { _ = proxy.FanoutResponses(ctx, podTopic, sub) }()
 	addr := serveDispatcherAs(t, d, measureAgentID)
 	a := agent.New(agent.Config{ServerAddr: addr, AgentID: measureAgentID, Retries: 1, Logger: logger,

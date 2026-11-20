@@ -39,7 +39,7 @@ import (
 // AuthUnaryInterceptor authenticates a call's key with auth.
 func AuthUnaryInterceptor(auth *identity.Authenticator) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		p, err := MetadataPrincipal(ctx, auth)
+		p, err := metadataPrincipal(ctx, auth)
 		if err != nil {
 			return nil, err
 		}
@@ -54,10 +54,10 @@ func AuthUnaryInterceptor(auth *identity.Authenticator) grpc.UnaryServerIntercep
 // the stream under the credential until it ends. A stream its credential's
 // revocation or expiry ended answers Unauthenticated, reason
 // ERROR_REASON_UNAUTHENTICATED; one its account's exhausted balance ended
-// answers BalanceExhaustedStatus.
+// answers FailedPrecondition, reason ERROR_REASON_BALANCE_EXHAUSTED.
 func AuthStreamInterceptor(auth *identity.Authenticator) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		p, err := MetadataPrincipal(ss.Context(), auth)
+		p, err := metadataPrincipal(ss.Context(), auth)
 		if err != nil {
 			return err
 		}
@@ -68,16 +68,16 @@ func AuthStreamInterceptor(auth *identity.Authenticator) grpc.StreamServerInterc
 		defer held.Release()
 		err = handler(srv, &wrappedStream{ServerStream: ss, ctx: held})
 		if cause := context.Cause(held); identity.Ended(cause) {
-			return CredentialEndedStatus(cause).Err()
+			return credentialEndedStatus(cause).Err()
 		}
 		return err
 	}
 }
 
-// MetadataPrincipal authenticates the incoming credential (with the
+// metadataPrincipal authenticates the incoming credential (with the
 // "x-agent-id" name and labels it asks for). No credential: a zero
 // principal, no error.
-func MetadataPrincipal(ctx context.Context, auth *identity.Authenticator) (identity.Principal, error) {
+func metadataPrincipal(ctx context.Context, auth *identity.Authenticator) (identity.Principal, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok || auth == nil {
 		return identity.Principal{}, nil
@@ -98,7 +98,7 @@ func MetadataPrincipal(ctx context.Context, auth *identity.Authenticator) (ident
 			c.Token = ""
 		}
 		if errors.Is(err, identity.ErrUnknownCredential) { // no bearer, or not one of ours
-			if c.PeerCerts = PeerCertificates(ctx); c.PeerCerts == nil {
+			if c.PeerCerts = peerCertificates(ctx); c.PeerCerts == nil {
 				return identity.Principal{}, nil
 			}
 			p, err = auth.Authenticate(ctx, c)
@@ -113,7 +113,7 @@ func MetadataPrincipal(ctx context.Context, auth *identity.Authenticator) (ident
 			return p, status.Error(codes.Unavailable, "credential store unavailable, retry")
 		}
 		if errors.Is(err, identity.ErrBalanceExhausted) {
-			return p, BalanceExhaustedStatus().Err()
+			return p, balanceExhaustedStatus().Err()
 		}
 		if errors.Is(err, identity.ErrMachineNotEnrolled) {
 			return p, relaystatus.New(codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED, err.Error()).Err() // says how to enrol
@@ -138,21 +138,21 @@ type wrappedStream struct {
 
 func (w *wrappedStream) Context() context.Context { return w.ctx }
 
-// CredentialEndedStatus is the typed answer of a connection its
+// credentialEndedStatus is the typed answer of a connection its
 // credential's revocation or expiry ended (identity.Ended), or its
-// account's exhausted balance (BalanceExhaustedStatus).
-func CredentialEndedStatus(cause error) *status.Status {
+// account's exhausted balance (FailedPrecondition, reason ERROR_REASON_BALANCE_EXHAUSTED).
+func credentialEndedStatus(cause error) *status.Status {
 	if errors.Is(cause, identity.ErrBalanceExhausted) {
-		return BalanceExhaustedStatus()
+		return balanceExhaustedStatus()
 	}
 	return relaystatus.New(codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED, cause.Error())
 }
 
-// BalanceExhaustedStatus is the answer to a credential whose account's
+// balanceExhaustedStatus is the answer to a credential whose account's
 // prepaid balance is exhausted (identity.ErrBalanceExhausted), at
 // admission and at the cut: FailedPrecondition with reason
 // ERROR_REASON_BALANCE_EXHAUSTED, which clients retry (slowly), never
 // Unauthenticated, which they stop on.
-func BalanceExhaustedStatus() *status.Status {
+func balanceExhaustedStatus() *status.Status {
 	return relaystatus.New(codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, identity.ErrBalanceExhausted.Error())
 }

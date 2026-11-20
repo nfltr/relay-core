@@ -37,9 +37,6 @@ const (
 	RedisStandalone  = "standalone"
 	RedisReplication = "replication"
 
-	// Git operations backends
-	GitOpsExec = "exec"
-
 	// Environment names
 	EnvLocal      = "local"
 	EnvStandalone = "standalone"
@@ -163,7 +160,6 @@ func SetDefaultFlags() {
 	_ = flag.Duration("rpc.agent.heartbeat.recvthreshold", 45*time.Second, "max time without a heartbeat from agent before disconnect")
 
 	// ── Git operations ────────────────────────────────────────────────────
-	_ = flag.String("gitops.type", GitOpsExec, "git operations backend: exec | ...")
 
 	// ── Cache & Redis ───────────────────────────────────────────────────
 	_ = flag.String("cache.type", RedisCache, "response cache backend: redis, inmemory, or nocache")

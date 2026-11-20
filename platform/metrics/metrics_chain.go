@@ -44,9 +44,9 @@ func RecordChainAnswer(path string, refused bool, code string, hops uint8, laten
 	chainAnswerSeconds.WithLabelValues(path).Observe(latency.Seconds())
 	switch path {
 	case "connect":
-		ObserveTransferOpen(PathConnect, latency)
+		observeTransferOpen(PathConnect, latency)
 	case "replica":
-		ObserveTransferOpen(PathReplica, latency)
+		observeTransferOpen(PathReplica, latency)
 	}
 }
 

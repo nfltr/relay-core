@@ -24,8 +24,8 @@ func TestRequestToken(t *testing.T) {
 		if tc.header != "" {
 			r.Header.Set(tc.header, tc.value)
 		}
-		if key, from := RequestToken(r); key != tc.key || from != tc.from {
-			t.Errorf("%s: RequestToken = %q, %q; want %q, %q", tc.name, key, from, tc.key, tc.from)
+		if key, from := requestToken(r); key != tc.key || from != tc.from {
+			t.Errorf("%s: requestToken = %q, %q; want %q, %q", tc.name, key, from, tc.key, tc.from)
 		}
 	}
 }

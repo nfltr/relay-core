@@ -27,7 +27,7 @@ func reapers() int {
 func TestIngressReaperEndsWithTheRelay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ing := New(ctx, &testHost{core: &session.Core{}})
+	ing := newIngress(ctx, &testHost{core: &session.Core{}})
 	before := reapers()
 	_, cleanup := ing.proxy.txnRegistry.Register("txn-lifetime", context.Background(), testLogger())
 	defer cleanup()

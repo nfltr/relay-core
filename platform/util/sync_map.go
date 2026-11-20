@@ -13,7 +13,7 @@ type SyncMap[K comparable, T any] struct {
 
 // Load returns key's value and whether it has one.
 func (m *SyncMap[K, T]) Load(key K) (T, bool) {
-	return Cast[T](m.m.Load(key))
+	return cast[T](m.m.Load(key))
 }
 
 // Store sets key's value.

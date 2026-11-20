@@ -8,19 +8,16 @@ package util
 
 import (
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
-	"github.com/nfltr/relay-core/internal/platform/logging"
 	"github.com/nfltr/relay/proto/pb"
-	"google.golang.org/protobuf/proto"
 )
 
-// Cast asserts x, found when ok, to T: the zero T and false when not found
+// cast asserts x, found when ok, to T: the zero T and false when not found
 // or not a T.
-func Cast[T any](x any, ok bool) (T, bool) {
+func cast[T any](x any, ok bool) (T, bool) {
 	if !ok {
 		var z T
 		return z, false
@@ -56,11 +53,6 @@ func CopyProtoHeadersToHTTPHeaders(headers map[string]*pb.HeaderValueList, resHe
 			resHeader.Add(h, v)
 		}
 	}
-}
-
-// NewLogger returns a logger instance with the log level set
-func NewLogger(level string) *slog.Logger {
-	return logging.New(level)
 }
 
 // GetListeners creates TCP listeners for the given ports, each bound to
@@ -101,20 +93,6 @@ func IsPortListening(port string) bool {
 	}
 	_ = conn.Close()
 	return true
-}
-
-// protoMarshal is a package-level variable to allow test injection of marshal failures.
-var protoMarshal = proto.Marshal
-
-// ProtoToTunnelFrame marshals m into a tunnel frame for agentID
-// (BytesToTunnelFrame).
-func ProtoToTunnelFrame(m proto.Message, messageType, agentID string, eof bool) (*pb.TunnelFrame, error) {
-	buf, err := protoMarshal(m)
-	if err != nil {
-		return nil, err
-	}
-
-	return BytesToTunnelFrame(buf, messageType, agentID, eof), nil
 }
 
 // BytesToTunnelFrame is a tunnel frame carrying buf, of messageType, routed

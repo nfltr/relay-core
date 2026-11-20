@@ -13,8 +13,8 @@ import (
 	"github.com/nfltr/relay/proto/wire/chunking"
 )
 
-// SkipHeaders is a map of headers that should not be forwarded to the agent
-var SkipHeaders = map[string]util.SkipHeaderIf{
+// skipHeaders is a map of headers that should not be forwarded to the agent
+var skipHeaders = map[string]util.SkipHeaderIf{
 	textproto.CanonicalMIMEHeaderKey(session.AgentIDKey):           util.SkipHeaderAlways,
 	textproto.CanonicalMIMEHeaderKey(session.TransactionIDHeader):  util.SkipHeaderAlways,
 	textproto.CanonicalMIMEHeaderKey(session.RequestAtProxyHeader): util.SkipHeaderAlways,

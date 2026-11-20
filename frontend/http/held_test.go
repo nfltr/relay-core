@@ -29,7 +29,7 @@ func TestChunkedProxyResponseEndsOnRevoke(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "alice")
-	proxy := NewProxy(t.Context(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(t.Context(), testLogger(), b, testRelayCookie)
 	// A key's short request carries its principal, as the relay's
 	// authMiddleware leaves it.
 	authn := identity.NewAuthenticator("keys")

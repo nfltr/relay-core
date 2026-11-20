@@ -12,13 +12,13 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Unit: HeaderPolicy.ApplyRequest
+// Unit: headerPolicy.ApplyRequest
 // ---------------------------------------------------------------------------
 
 func TestHeaderPolicy_AddRequestHeader(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.request_headers.add", map[string]any{"X-Tenant": "acme"})
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 	if p == nil {
 		t.Fatal("expected non-nil policy")
 	}
@@ -33,7 +33,7 @@ func TestHeaderPolicy_AddRequestHeader(t *testing.T) {
 func TestHeaderPolicy_RemoveRequestHeader(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.request_headers.remove", []string{"Authorization"})
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer secret")
@@ -47,7 +47,7 @@ func TestHeaderPolicy_URLRewrite(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.url_rewrite.pattern", `^/api/v1/(.*)`)
 	viper.Set("http.url_rewrite.replacement", "/v1/$1")
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
 	p.ApplyRequest(req)
@@ -60,7 +60,7 @@ func TestHeaderPolicy_URLRewrite_NoMatch(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.url_rewrite.pattern", `^/api/v1/(.*)`)
 	viper.Set("http.url_rewrite.replacement", "/v1/$1")
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/other/path", nil)
 	p.ApplyRequest(req)
@@ -70,13 +70,13 @@ func TestHeaderPolicy_URLRewrite_NoMatch(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Unit: HeaderPolicy.ApplyResponse
+// Unit: headerPolicy.ApplyResponse
 // ---------------------------------------------------------------------------
 
 func TestHeaderPolicy_AddResponseHeader(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.response_headers.add", map[string]any{"X-Server": "rpc"})
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 
 	h := http.Header{}
 	p.ApplyResponse(h)
@@ -88,7 +88,7 @@ func TestHeaderPolicy_AddResponseHeader(t *testing.T) {
 func TestHeaderPolicy_RemoveResponseHeader(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.response_headers.remove", []string{"Server"})
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 
 	h := http.Header{"Server": []string{"nginx"}}
 	p.ApplyResponse(h)
@@ -103,8 +103,8 @@ func TestHeaderPolicy_RemoveResponseHeader(t *testing.T) {
 
 func TestHeaderPolicy_Nil_IsNoop(t *testing.T) {
 	defer viper.Reset()
-	// No config set → NewHeaderPolicyFromConfig returns nil
-	p := NewHeaderPolicyFromConfig(testLogger())
+	// No config set → newHeaderPolicyFromConfig returns nil
+	p := newHeaderPolicyFromConfig(testLogger())
 	if p != nil {
 		t.Fatal("expected nil policy when no config is set")
 	}
@@ -118,7 +118,7 @@ func TestHeaderPolicy_InvalidPattern_NoURLRewrite(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.url_rewrite.pattern", "[invalid(")
 	viper.Set("http.request_headers.add", map[string]any{"X-Ok": "yes"})
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 	// Policy should still be non-nil (request header add is valid)
 	if p == nil {
 		t.Fatal("expected non-nil policy")
@@ -129,7 +129,7 @@ func TestHeaderPolicy_InvalidPattern_NoURLRewrite(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Integration: HeaderRewriteMiddleware end-to-end
+// Integration: headerRewriteMiddleware end-to-end
 // ---------------------------------------------------------------------------
 
 func TestHeaderRewriteMiddleware_NilPolicy(t *testing.T) {
@@ -138,7 +138,7 @@ func TestHeaderRewriteMiddleware_NilPolicy(t *testing.T) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := HeaderRewriteMiddleware(nil, next)
+	mw := headerRewriteMiddleware(nil, next)
 	// nil policy returns the original handler unchanged.
 	_ = mw
 
@@ -154,14 +154,14 @@ func TestHeaderRewriteMiddleware_Applies(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.request_headers.add", map[string]any{"X-Injected": "yes"})
 	viper.Set("http.response_headers.add", map[string]any{"X-Resp": "set"})
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 
 	var gotInjected string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotInjected = r.Header.Get("X-Injected")
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := HeaderRewriteMiddleware(p, next)
+	mw := headerRewriteMiddleware(p, next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rw := httptest.NewRecorder()
@@ -178,13 +178,13 @@ func TestHeaderRewriteMiddleware_Applies(t *testing.T) {
 func TestHeaderRewriteMiddleware_ResponseHeadersOnWrite(t *testing.T) {
 	defer viper.Reset()
 	viper.Set("http.response_headers.add", map[string]any{"X-Written": "1"})
-	p := NewHeaderPolicyFromConfig(testLogger())
+	p := newHeaderPolicyFromConfig(testLogger())
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Trigger via Write (no explicit WriteHeader call)
 		_, _ = w.Write([]byte("hello"))
 	})
-	mw := HeaderRewriteMiddleware(p, next)
+	mw := headerRewriteMiddleware(p, next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rw := httptest.NewRecorder()
@@ -199,8 +199,8 @@ func TestHeaderRewriteMiddleware_ResponseHeadersOnWrite(t *testing.T) {
 // are rewritten too. Before, the policy ran once, at the 1xx: a header it
 // removes, set on the final response, went out.
 func TestHeaderPolicyAppliesToTheFinalResponseAfter1xx(t *testing.T) {
-	p := &HeaderPolicy{removeResponseHeaders: []string{"Server"}}
-	srv := httptest.NewServer(HeaderRewriteMiddleware(p, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p := &headerPolicy{removeResponseHeaders: []string{"Server"}}
+	srv := httptest.NewServer(headerRewriteMiddleware(p, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusEarlyHints)
 		w.Header().Set("Server", "backend/1.0")
 		w.WriteHeader(http.StatusNotFound)

@@ -40,22 +40,22 @@ func (Frontend) Settings() []frontend.Setting { return nil }
 // Attach implements frontend.Frontend: it mounts the ingress on the
 // relay's HTTP server and replica link.
 func (Frontend) Attach(ctx context.Context, h frontend.Host) error {
-	h.MountHTTP(New(ctx, h).Mount())
+	h.MountHTTP(newIngress(ctx, h).Mount())
 	return nil
 }
 
-// Ingress carries requests to agents for one replica.
-type Ingress struct {
+// ingress carries requests to agents for one replica.
+type ingress struct {
 	core   *session.Core
 	logger *slog.Logger
 	// registered is the host's endpoint registry check (a known agent
 	// that is offline answers 503).
 	registered func(ctx context.Context, agentID string) bool
 
-	proxy  *Proxy      // ConnectHTTP, through the in-process broker
+	proxy  *proxy      // ConnectHTTP, through the in-process broker
 	link   *agentHTTP  // HTTP sessions; nil without TCP sessions
 	peers  *proxyCache // the peer replicas
-	policy *HeaderPolicy
+	policy *headerPolicy
 
 	peerLinkPort string
 	// apiTypes is http.api_type_prefixes, read once (apiType).
@@ -64,18 +64,18 @@ type Ingress struct {
 	loopbackURL *url.URL
 }
 
-// New makes the ingress over h's core, once its dispatchers are wired;
+// newIngress makes the ingress over h's core, once its dispatchers are wired;
 // what it runs in the background (the proxy's transaction reaper) ends with
 // ctx, the relay's run.
-func New(ctx context.Context, h frontend.Host) *Ingress {
+func newIngress(ctx context.Context, h frontend.Host) *ingress {
 	c, logger := h.Core(), h.Logger()
-	ing := &Ingress{
+	ing := &ingress{
 		core:         c,
 		logger:       logger,
 		registered:   h.Registered,
-		proxy:        NewProxy(ctx, logger.With("type", "proxy", "pod_id", c.PodID), c.Broker, h.RelayCookie),
+		proxy:        newProxy(ctx, logger.With("type", "proxy", "pod_id", c.PodID), c.Broker, h.RelayCookie),
 		peers:        newProxyCache(logger),
-		policy:       NewHeaderPolicyFromConfig(logger),
+		policy:       newHeaderPolicyFromConfig(logger),
 		peerLinkPort: viper.GetString("peer_link.port"),
 		apiTypes:     viper.GetStringSlice("http.api_type_prefixes"),
 		loopbackURL:  &url.URL{Scheme: "http", Host: "in-process"},
@@ -108,7 +108,7 @@ func New(ctx context.Context, h frontend.Host) *Ingress {
 // finding 46, Move.tla ArriveA, MovedForwards), else it is answered 503
 // Retry-After before it reaches any agent, which would run it after
 // MOVE_DONE with its answer lost (spec/README.md finding 20).
-func (ing *Ingress) peer(w http.ResponseWriter, r *http.Request) {
+func (ing *ingress) peer(w http.ResponseWriter, r *http.Request) {
 	agentID := r.Header.Get(session.AgentIDKey)
 	wentOn := r.Header.Get(peerHopHeader) != ""
 	r.Header.Del(peerHopHeader)
@@ -137,9 +137,9 @@ func (ing *Ingress) peer(w http.ResponseWriter, r *http.Request) {
 }
 
 // Mount is the ingress as the relay mounts it.
-func (ing *Ingress) Mount() frontend.AgentHTTP {
+func (ing *ingress) Mount() frontend.AgentHTTP {
 	return frontend.AgentHTTP{
-		Serve: ing.front(HeaderRewriteMiddleware(ing.policy, http.HandlerFunc(ing.dispatch))),
+		Serve: ing.front(headerRewriteMiddleware(ing.policy, http.HandlerFunc(ing.dispatch))),
 		Peer:  http.HandlerFunc(ing.peer),
 		Fanout: func(ctx context.Context) error {
 			return ing.proxy.FanoutResponses(ctx, ing.core.PodID, ing.core.PodIDTopicSubscriber)
@@ -149,6 +149,6 @@ func (ing *Ingress) Mount() frontend.AgentHTTP {
 }
 
 // peerHopHeader marks a peer's forward this replica sent on to the replica
-// the agent's record names (Ingress.peer): that replica serves it or
+// the agent's record names (ingress.peer): that replica serves it or
 // refuses it, never forwards it again.
 const peerHopHeader = "X-Nfltr-Peer-Hop"

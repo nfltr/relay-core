@@ -161,28 +161,16 @@ func BenchmarkBytesToMessage(b *testing.B) {
 	}
 }
 
-func BenchmarkProtoToMessage(b *testing.B) {
-	msg := &pb.HTTPProxyResponse{
-		Timestamps: &pb.Timestamps{
-			ResponseAtAgent: 12345,
-		},
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = ProtoToTunnelFrame(msg, "HTTPProxyResponse", "agentID-123", false)
-	}
-}
-
 // --- Cast benchmark ---
 
 func BenchmarkCast_Hit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		Cast[int](42, true)
+		cast[int](42, true)
 	}
 }
 
 func BenchmarkCast_Miss(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		Cast[int](nil, false)
+		cast[int](nil, false)
 	}
 }

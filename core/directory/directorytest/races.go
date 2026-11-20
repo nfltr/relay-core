@@ -26,8 +26,8 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Rounds is how many times each race runs.
-const Rounds = 200
+// rounds is how many times each race runs.
+const rounds = 200
 
 type deleter interface {
 	DeleteSession(ctx context.Context, agentID string, s directory.Session) error
@@ -70,7 +70,7 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 	// then one's delete racing the other's re-claim.
 	t.Run("two agents register one rid", func(t *testing.T) {
 		_, inv := open(t)
-		for r := range Rounds {
+		for r := range rounds {
 			rid := RID(r)
 			a, b := fmt.Sprintf("a%d", r), fmt.Sprintf("b%d", r)
 			var sa directory.Session
@@ -93,7 +93,7 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 	// session's claim never deletes the new record nor its index entry.
 	t.Run("delete races the next claim", func(t *testing.T) {
 		_, inv := open(t)
-		for r := range Rounds {
+		for r := range rounds {
 			rid, agent := RID(r), fmt.Sprintf("x%d", r)
 			old := claim(t, inv, agent, rid, t0)
 			var next directory.Session
@@ -117,7 +117,7 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 	// (ListAgentRecords; Directory.tla IndexComplete).
 	t.Run("podless prune races a claim", func(t *testing.T) {
 		c, inv := open(t)
-		for r := range Rounds {
+		for r := range rounds {
 			rid, agent := RID(r), fmt.Sprintf("v%d", r)
 			claim(t, inv, agent, rid, t0)
 			podless(t, c, agent)
@@ -134,7 +134,7 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 	// one store step.
 	t.Run("renewal races the next claim", func(t *testing.T) {
 		_, inv := open(t)
-		for r := range Rounds {
+		for r := range rounds {
 			rid, agent := RID(r), fmt.Sprintf("z%d", r)
 			old := claim(t, inv, agent, rid, t0)
 			var next directory.Session
@@ -152,7 +152,7 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 	// newer session's record.
 	t.Run("two claims race", func(t *testing.T) {
 		_, inv := open(t)
-		for r := range Rounds {
+		for r := range rounds {
 			rid, agent := RID(r), fmt.Sprintf("w%d", r)
 			var a, b directory.Session
 			race(func() { a = claim(t, inv, agent, rid, t0) }, func() { b = claim(t, inv, agent, rid, t0.Add(time.Second)) })
@@ -168,7 +168,7 @@ func RunIndexRaces(t *testing.T, newCache func(t *testing.T) directory.Cache) {
 	// that agent's new claim, never removes the live record's entry.
 	t.Run("prune races a claim", func(t *testing.T) {
 		c, inv := open(t)
-		for r := range Rounds {
+		for r := range rounds {
 			rid, agent := RID(r), fmt.Sprintf("y%d", r)
 			claim(t, inv, agent, rid, t0)
 			if _, err := c.Del(ctx, directory.GetDispatcherCacheKey(agent)); err != nil { // the record lapsed

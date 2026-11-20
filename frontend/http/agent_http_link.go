@@ -98,7 +98,7 @@ func newAgentHTTP(d *session.TCPDispatcher, logger *slog.Logger, relayCookie fun
 			out.URL.Host = hex.EncodeToString([]byte(st.agentID)) + "." + strconv.FormatUint(st.route, 10) + agentHTTPHost
 			// What the gRPC path never forwarded (prepareAgentRequest).
 			out.Header = withoutRelayCookies(out.Header, a.relayCookie)
-			for name, skip := range SkipHeaders {
+			for name, skip := range skipHeaders {
 				if skip(name) {
 					out.Header.Del(name)
 				}

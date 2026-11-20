@@ -19,7 +19,7 @@ import (
 // handshake, but each connection's TLS state, found below the listener's
 // wrappers (a NetConn chain, tlsbatch.Conn), becomes its peer's AuthInfo,
 // so a handler's context carries the client certificate
-// (PeerCertificates). A plaintext connection gets no TLS state.
+// (its tls.ConnectionState.PeerCertificates). A plaintext connection gets no TLS state.
 func TLSStateCredentials() credentials.TransportCredentials { return tlsStateCreds{} }
 
 type tlsStateCreds struct{}
@@ -63,9 +63,9 @@ func (c tlsStateCreds) Clone() credentials.TransportCredentials { return c }
 
 func (tlsStateCreds) OverrideServerName(string) error { return nil }
 
-// PeerCertificates is the TLS client certificate chain of the connection a
+// peerCertificates is the TLS client certificate chain of the connection a
 // gRPC call came on (nil: none, or not TLS).
-func PeerCertificates(ctx context.Context) []*x509.Certificate {
+func peerCertificates(ctx context.Context) []*x509.Certificate {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return nil

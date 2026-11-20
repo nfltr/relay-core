@@ -100,7 +100,7 @@ func TestProxyServeHTTP_Success(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "agentID-1")
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", strings.NewReader("body"))
 	req.Header.Set(session.AgentIDKey, "agentID-1")
@@ -167,7 +167,7 @@ func TestProxyServeHTTP_EmptyPayload(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "agentID-1")
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/custom.css", nil)
 	req.Header.Set(session.AgentIDKey, "agentID-1")
@@ -236,7 +236,7 @@ func TestProxyServeHTTP_PublishError(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 	// Close broker to cause publish errors
 	b.Close()
 
@@ -287,7 +287,7 @@ func TestProxyServeHTTP_MissingAgentID(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", nil)
 	w := httptest.NewRecorder()
@@ -304,7 +304,7 @@ func TestProxyServeHTTP_MissingRequestAtProxy(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", nil)
 	req.Header.Set(session.AgentIDKey, "agentID-1")
@@ -322,7 +322,7 @@ func TestProxyServeHTTP_InvalidRequestAtProxy(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", nil)
 	req.Header.Set(session.AgentIDKey, "agentID-1")
@@ -341,7 +341,7 @@ func TestProxyServeHTTP_MissingTransactionID(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", nil)
 	req.Header.Set(session.AgentIDKey, "agentID-1")
@@ -363,7 +363,7 @@ func TestProxyServeHTTP_Timeout(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "agentID-1")
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", strings.NewReader("body"))
 	req.Header.Set(session.AgentIDKey, "agentID-1")
@@ -386,7 +386,7 @@ func TestProxy_publishRequest(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "agentID-1")
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	agentReq := &pb.HTTPProxyRequest{
 		Request:    &pb.HTTPRequest{TransactionId: "txn-1"},
@@ -407,7 +407,7 @@ func TestNewProxy_ProducerEviction_OverflowCache(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
-	p := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	p := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	// Create 2 topics and producers (cache size=1, second evicts first)
 	topic1 := "agentID-evict-1"
@@ -432,7 +432,7 @@ func TestPublishRequest_SendError(t *testing.T) {
 
 	// Broker without auto-creation and without the topic → CreateProducer fails
 	b := broker.NewInMemoryMessageBroker()
-	p := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	p := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	agentReq := &pb.HTTPProxyRequest{
 		Request: &pb.HTTPRequest{
@@ -459,7 +459,7 @@ func TestProxy_ServeHTTP_BodyReadErrorStreaming(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "oph-req-err")
-	proxy := NewProxy(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)), b, testRelayCookie)
+	proxy := newProxy(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)), b, testRelayCookie)
 
 	// Body read error is now absorbed by ReadChunks (produces zero chunks);
 	// the request is published with empty payload and times out with no agent.
@@ -486,7 +486,7 @@ func TestProxy_ServeHTTP_PublishError(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
-	proxy := NewProxy(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)), b, testRelayCookie)
+	proxy := newProxy(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)), b, testRelayCookie)
 
 	// Inject a failing producer for the agentID so publishRequest fails on Send
 	agentID := "oph-pub-err"
@@ -517,7 +517,7 @@ func TestProxyServeHTTP_ChunkReordering(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "agentID-reorder")
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", nil)
 	req.Header.Set(session.AgentIDKey, "agentID-reorder")
@@ -625,7 +625,7 @@ func TestProxyServeHTTP_ChunkReorderingLastArrivesMid(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "agentID-mid")
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest("GET", "/resource", nil)
 	req.Header.Set(session.AgentIDKey, "agentID-mid")
@@ -701,7 +701,7 @@ func TestNewProxy_ProducerEviction(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	if proxy == nil {
 		t.Fatal("expected non-nil proxy")
@@ -735,7 +735,7 @@ func TestNewProxy(t *testing.T) {
 	defer viper.Reset()
 
 	b := broker.NewInMemoryMessageBroker()
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 	if proxy == nil {
 		t.Fatal("expected non-nil proxy")
 	}
@@ -745,7 +745,7 @@ func TestNewProxy(t *testing.T) {
 // for agent IDs plain and with every byte JSON escapes.
 func TestMetadataAppendJSONIsMarshal(t *testing.T) {
 	for _, id := range []string{"", "agent-1", "agent_x.y:z@w+v~", `a"b`, `a\b`, "a<b>&c", "a\nb\x00\x1f\x7f", "agént", " ", "\xff"} {
-		m := Metadata{AgentID: id, RequestAtHTTPServer: -1, RequestAtDispatcher: 1 << 62, RequestAtGRPCServer: 0,
+		m := frontMetadata{AgentID: id, RequestAtHTTPServer: -1, RequestAtDispatcher: 1 << 62, RequestAtGRPCServer: 0,
 			RequestAtAgent: 1760000000000, ResponseAtAgent: 42, ResponseAtGRPCServer: -9e15, ResponseAtDispatcher: 7, ResponseAtHTTPServer: 1}
 		want, err := json.Marshal(m)
 		if err != nil {

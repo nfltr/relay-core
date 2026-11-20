@@ -42,7 +42,7 @@ func authFor(keys tokens) *identity.Authenticator {
 }
 
 func validateTokenFromMetadata(ctx context.Context, keys tokens) (context.Context, error) {
-	p, err := MetadataPrincipal(ctx, authFor(keys))
+	p, err := metadataPrincipal(ctx, authFor(keys))
 	if err != nil || p.Subject == "" {
 		return ctx, err
 	}

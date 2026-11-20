@@ -34,8 +34,8 @@ func TestProxyStreamedHeadReachesClientBeforeBody(t *testing.T) {
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
 	standInAgent(t, b, "agent-head")
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
-	policy := &HeaderPolicy{addResponseHeaders: map[string]string{"X-Policy": "on"}}
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
+	policy := &headerPolicy{addResponseHeaders: map[string]string{"X-Policy": "on"}}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set(session.AgentIDKey, "agent-head")
@@ -43,7 +43,7 @@ func TestProxyStreamedHeadReachesClientBeforeBody(t *testing.T) {
 		r.Header.Set(session.TransactionIDHeader, "txn-head")
 		w = metrics.CountHTTP(w, r, metrics.PathHTTPGRPC, metrics.OpenMeter(metrics.PathHTTPGRPC, "", ""), time.Now())
 		w = util.NewResponseWriter(w, nil)
-		HeaderRewriteMiddleware(policy, proxy).ServeHTTP(w, r)
+		headerRewriteMiddleware(policy, proxy).ServeHTTP(w, r)
 	}))
 	defer srv.Close()
 

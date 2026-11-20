@@ -338,8 +338,8 @@ func TestListenHostBindsPrivatePortsToTheirAddress(t *testing.T) {
 	defer viper.Reset()
 
 	for port, want := range map[string]string{"8080": "", "9090": "", "8081": "127.0.0.1", "8082": "127.0.0.1"} {
-		if got := ListenHost(port); got != want {
-			t.Errorf("ListenHost(%s) = %q, want %q", port, got, want)
+		if got := listenHost(port); got != want {
+			t.Errorf("listenHost(%s) = %q, want %q", port, got, want)
 		}
 	}
 }

@@ -42,8 +42,8 @@ func TestTransferHotPathAllocs(t *testing.T) {
 		"begin/end":  func() { TransferEnd(p, TransferBegin(p)) },
 		"opened ok":  func() { TransferOpened(p, "ok") },
 		"bytes":      func() { AddTransferBytes(p, 10, 20) },
-		"stall":      func() { AddTransferStall(p, time.Millisecond) },
-		"open":       func() { ObserveTransferOpen(p, time.Millisecond) },
+		"stall":      func() { addTransferStall(p, time.Millisecond) },
+		"open":       func() { observeTransferOpen(p, time.Millisecond) },
 		"first byte": func() { ObserveTransferFirstByte(p, time.Millisecond) },
 		"observer":   func() { TransferObserver(p, true).CreditWait(time.Millisecond) },
 	} {

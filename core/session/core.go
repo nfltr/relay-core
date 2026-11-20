@@ -19,7 +19,9 @@ import (
 // Core is one replica's session core: its agents' sessions (Dispatcher,
 // TCPDispatcher), the replica directory and the replica link, presence and
 // the drain. Frontends open sessions through it (Open); the composition
-// (package compose) sets its fields and runs it.
+// (package compose) sets its fields and runs it. Its fields are set
+// before it serves and not changed after; its methods are safe from any
+// goroutine.
 type Core struct {
 	PodID string
 

@@ -134,7 +134,7 @@ func (c *Core) StopGRPC(logger *slog.Logger, s GRPCStopper, grace time.Duration,
 }
 
 // ServeAgents serves the agents' gRPC port (serve on l: the port's
-// listener, its busy agents' TCP data connections already taken off it by
+// listener, its agent-link connections already taken off it by
 // TCPDispatcher.DataPlaneListener, which the QUIC agent link needs first)
 // until ctx ends and the drain lets it stop (StopGRPC, s): the stale-agent
 // reaper runs while ctx lives, and fanout (HTTP ingress's; nil: none) hands

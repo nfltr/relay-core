@@ -1,6 +1,34 @@
 Incompatible changes:
-- ./platform/metrics.PathBlob: removed
+- ./compose.ListenHost: removed
+- ./compose.MergeListeners: removed
+- ./core/session/sessiontest.SetSessionStall: removed
 - ./core/session.(*TCPDispatcher).ServesHTTP: removed
+- ./core/session.ValidPort: removed
+- ./grpcauth.BalanceExhaustedStatus: removed
+- ./grpcauth.CredentialEndedStatus: removed
+- ./grpcauth.MetadataPrincipal: removed
+- ./grpcauth.PeerCertificates: removed
+- ./core/nf1anon.Source: removed
+- ./frontend/http.GetAPIType: removed
+- ./frontend/http.HeaderPolicy: removed
+- ./frontend/http.HeaderRewriteMiddleware: removed
+- ./frontend/http.Ingress: removed
+- ./frontend/http.Metadata: removed
+- ./frontend/http.New: removed
+- ./frontend/http.NewHeaderPolicyFromConfig: removed
+- ./frontend/http.NewProxy: removed
+- ./frontend/http.Proxy: removed
+- ./frontend/http.SkipHeaders: removed
+- ./core/directory/directorytest.Rounds: removed
+- ./keyfile.KeyListResponse: removed
+- ./frontend/connect.RequestToken: removed
+- ./platform/metrics.AddTransferStall: removed
+- ./platform/metrics.ObserveTransferOpen: removed
+- ./platform/metrics.PathBlob: removed
+- ./platform/util.Cast: removed
+- ./platform/util.NewLogger: removed
+- ./platform/util.ProtoToTunnelFrame: removed
+- ./platform/config.GitOpsExec: removed
 Compatible changes:
 - ./core/session.(*TCPDispatcher).DialHTTP: added
 - ./core/session.(*TCPDispatcher).HTTPRoute: added

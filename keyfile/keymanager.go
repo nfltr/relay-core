@@ -23,13 +23,9 @@ type KeyRecord struct {
 	CreatedAt time.Time          `json:"created_at,omitempty"` // its enrolment (zero: read from the file)
 }
 
-// KeyListResponse is returned when listing keys.
-type KeyListResponse struct {
-	Keys []KeyRecord `json:"keys"`
-}
-
 // KeyManager adds, persists and revokes the key file's machines. It
-// manages both the in-memory Store and the on-disk key file.
+// manages both the in-memory Store and the on-disk key file. It is safe for
+// concurrent use; its writes to the file are serialised.
 type KeyManager struct {
 	mu       sync.Mutex
 	store    *Store

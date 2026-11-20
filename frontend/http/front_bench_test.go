@@ -18,7 +18,7 @@ import (
 func BenchmarkFirstMiddleware(b *testing.B) {
 	ing := newTestIngress(&session.Core{})
 
-	m := Metadata{
+	m := frontMetadata{
 		AgentID:              "bench-agent-1",
 		RequestAtHTTPServer:  time.Now().UnixMilli(),
 		RequestAtDispatcher:  time.Now().UnixMilli(),

@@ -26,7 +26,8 @@ import (
 const DefaultMaxKeys = 100_000
 
 // Limiter rate-limits operations on a per-key basis using the token bucket
-// algorithm. Each key maintains an independent bucket.
+// algorithm. Each key maintains an independent bucket. A Limiter is safe
+// for concurrent use.
 type Limiter struct {
 	mu      sync.Mutex
 	buckets *simplelru.LRU[string, *bucket] // most recently used last

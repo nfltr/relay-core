@@ -54,7 +54,7 @@ func sniRouter(muxOnGRPC bool) bool {
 		!muxOnGRPC
 }
 
-// listenHostForKey is ListenHost by config key, for ports not yet known.
+// listenHostForKey is listenHost by config key, for ports not yet known.
 func listenHostForKey(key string) string {
 	switch key {
 	case "internal.port", "metrics.port":
@@ -130,7 +130,7 @@ func Listen(muxOnGRPC bool) (listeners map[string]net.Listener, forget func(), e
 			fixed = append(fixed, port)
 		}
 	}
-	listeners, err = util.GetListeners(fixed, ListenHost)
+	listeners, err = util.GetListeners(fixed, listenHost)
 	if err != nil {
 		closeAll()
 		return nil, nil, err
@@ -197,11 +197,6 @@ func listenOnExtraHosts(listeners map[string]net.Listener, keys []string) error 
 	}
 	return nil
 }
-
-// MergeListeners serves several listeners as one (Addr is the first's): the
-// relay's own service child dials a loopback listener of its own on the
-// gRPC port's server, which the idle exit does not count.
-func MergeListeners(all ...net.Listener) net.Listener { return newMultiListener(all) }
 
 // multiListener accepts from several listeners as one; Addr is the first's.
 type multiListener struct {
@@ -291,11 +286,11 @@ func PortNumbers(muxOnGRPC bool) []string {
 	return ports
 }
 
-// ListenHost is the bind address for port: internal.address for the internal
+// listenHost is the bind address for port: internal.address for the internal
 // and metrics ports (admin API, health, /metrics), the first listen.address entry (empty:
 // all interfaces) for the public proxy and gRPC listeners (Listen binds the
 // other entries too). The standalone deploy binds the first two to loopback.
-func ListenHost(port string) string {
+func listenHost(port string) string {
 	switch port {
 	case viper.GetString("internal.port"), viper.GetString("metrics.port"):
 		return viper.GetString("internal.address")

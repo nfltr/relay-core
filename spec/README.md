@@ -386,7 +386,7 @@ github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
 | action | Go |
 |---|---|
 | `Pick` | `dispatcherURL`: A while `RouteHere` gives a route lease, else the record |
-| `PickRemote`, `ArriveA` | a peer's `dispatcherURL` reading the record (A); the forward arriving at A: `Ingress.peer` takes `RouteHere` too; refused while the record names B's session, it goes on to B once (`peerHopHeader`, finding 46); else 503 `Retry-After`, the request reached no agent (the visitor's retry is `new` again) |
+| `PickRemote`, `ArriveA` | a peer's `dispatcherURL` reading the record (A); the forward arriving at A: `ingress.peer` takes `RouteHere` too; refused while the record names B's session, it goes on to B once (`peerHopHeader`, finding 46); else 503 `Retry-After`, the request reached no agent (the visitor's retry is `new` again) |
 | `Publish` | `Proxy.publishRequest` of a transaction's first message (on the consumer's channel, or `ErrNoConsumer`), then the lease's release |
 | `Unlease` | the lease ends with no message published: the visitor went away first, or the request went over the agent link (`dispatch.go`); it reached no agent here (`gone`) |
 | `Forward` | `relayRequestsToAgent`: the channel's next message onto the stream |
@@ -398,7 +398,7 @@ github.com/nfltr/relay `client/agent` (`move.go`, `connect.go`, `run.go`
 | `StartDrain`, `DrainBound` | `stopping`; `stopNow` (`moveBound` from `MOVE_RECONNECT`, disarmed once A stopped routing): the agent let go (`errServerRestarting`) |
 | `RecvA`, `EndA` | `receiveFromHTTPAgent`; the agent's EOF ends the session (`failInflight`, `failQueued`) |
 | `ServeB`, `FailB` | B serving a request that reached it (its own session, not modelled); B's new session ending after it took the record (MV-5) |
-| `PickB`, `ArriveB`, `RegisterB` | B's own `dispatcherURL` (B when B routes, else the record: A, or B itself); a request for B at B (B's own pick, or a peer's forward at `Ingress.peer`): `RouteArriving` waits while the record names B's session that has not registered; B's session registering (`d.Agents.Store` after `claimAgentRecord`, `dispatcher_subscribe.go`) (finding 45) |
+| `PickB`, `ArriveB`, `RegisterB` | B's own `dispatcherURL` (B when B routes, else the record: A, or B itself); a request for B at B (B's own pick, or a peer's forward at `ingress.peer`): `RouteArriving` waits while the record names B's session that has not registered; B's session registering (`d.Agents.Store` after `claimAgentRecord`, `dispatcher_subscribe.go`) (finding 45) |
 | `TCPSupersede`, `PlaceTCP` | `sendLoop`'s superseded renewal of the agent's TCP primary (`yield` when `movingAway`); `streamFor` placing a TCP session |
 | `RecvAgent`, `ConnectB`, `DialFails`, `Answer`, `CloseOld` | `processStream`, `moveConnect`, a handler's answer, `closeWhenAnswered` |
 | `Lose`, `RenewA`, `Expire` | the store restarting empty; `WatchAgentSession`'s `refresh` (`renewAgentInventory`, unthrottled every half TTL) and `reannounce` (`rewriteRecord`) while A routes, a move asked included (finding 49); the record's TTL |
@@ -2058,12 +2058,12 @@ Findings 16-22 come from an independent review of `Handoff.tla` and
     modelled** (spec weaker; low). `OnLinkOr`: `node.Open` may fail and
     the session attaches; `PlacedOnLive` holds (`WitnessFallback`).
 20. **Requests a peer replica forwarded skipped the route lease** (code;
-    medium; TLC, `peer-no-lease`). `Ingress.Mount`'s `Peer` was the proxy
+    medium; TLC, `peer-no-lease`). `ingress.Mount`'s `Peer` was the proxy
     itself: a forward whose ingress read the record before it moved
     published to A's topic with no lease and no "A still routes" check;
     after `MOVE_DONE` the agent ran it after `CloseSend` and the visitor got
     a 502 (a retry runs it twice: `RunOnce`). Finding 6 was open for
-    cross-replica traffic. **Fixed**: `Ingress.peer` takes `RouteHere`;
+    cross-replica traffic. **Fixed**: `ingress.peer` takes `RouteHere`;
     refused, it answers 503 `Retry-After` (`ERROR_REASON_AGENT_OFFLINE`)
     before any message is published. Guard
     `TestPeerForwardAfterMoveIsRefusedRetryable`.
@@ -2423,7 +2423,7 @@ relay link connection never outlives every primary holding its token.
     `<loopback>:<peer link port>`, B's own replica link, and failed (the
     replica's certificate names its pod address, not the loopback one:
     "no route; try again"); a peer's forward arriving at B in the same
-    moment was refused by `Ingress.peer` (503). The VM log read as a drain
+    moment was refused by `ingress.peer` (503). The VM log read as a drain
     ordering gap (the draining replica's link stopped early); it is not:
     A routes until the record names B (`WaitAgentsMoved` before `Leave`).
     `Move.tla` modelled B as `ServeB` alone; it now has B's claim and
@@ -2454,12 +2454,12 @@ relay link connection never outlives every primary holding its token.
     rolling-drain e2e: 1 site visit answered offline in 4,960). A visitor's
     replica read the record naming A and forwarded the request; A stopped
     routing the moment the record named B (`stopRouting`), and
-    `Ingress.peer` answered the forward 503 `Retry-After` although the
+    `ingress.peer` answered the forward 503 `Retry-After` although the
     agent was connected to B. `Move.tla` let `ArriveA` refuse it ("the
     visitor sends it again"): `NoLoss` held, a visitor still saw a 503.
     Now `ArriveA` sends it on to B (`toB`, then `ArriveB`) while the record
     names B's session, `MovedForwards` (`refA = {}`), mutant
-    `peer-refuses-moved` (8 states deep). Fixed: `Ingress.peer`, refused,
+    `peer-refuses-moved` (8 states deep). Fixed: `ingress.peer`, refused,
     reads the record once: this replica: `RouteArriving` (finding 45);
     another replica: the request goes on there, once (`peerHopHeader`
     marks it; that replica serves it or refuses it, never forwards it

@@ -48,7 +48,7 @@ func TestProxyStuckBrowserDoesNotHoldTheFanoutWorker(t *testing.T) {
 
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 	proxy.txnRegistry.Stall = 50 * time.Millisecond
 
 	// The agent's topic: every stalled chunk sends a cancel frame from a

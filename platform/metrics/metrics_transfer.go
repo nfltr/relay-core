@@ -177,8 +177,8 @@ func TransferEnd(p Path, began time.Time) {
 	p.series().duration.Observe(time.Since(began).Seconds())
 }
 
-// ObserveTransferOpen observes a session's open-to-answer time on p.
-func ObserveTransferOpen(p Path, d time.Duration) { p.series().open.Observe(d.Seconds()) }
+// observeTransferOpen observes a session's open-to-answer time on p.
+func observeTransferOpen(p Path, d time.Duration) { p.series().open.Observe(d.Seconds()) }
 
 // ObserveTransferFirstByte observes a session's open-to-first-byte time on p.
 func ObserveTransferFirstByte(p Path, d time.Duration) {
@@ -216,8 +216,8 @@ func AddTransferBytes(p Path, toAgent, fromAgent int) {
 	}
 }
 
-// AddTransferStall counts a sender's wait for credit on p.
-func AddTransferStall(p Path, d time.Duration) {
+// addTransferStall counts a sender's wait for credit on p.
+func addTransferStall(p Path, d time.Duration) {
 	transfers.stallsN[p].Add(1)
 	transfers.stallNanos[p].Add(int64(d))
 }
@@ -268,7 +268,7 @@ type transferObserver struct {
 
 func (o transferObserver) CreditWait(d time.Duration) {
 	if o.creditWaits {
-		AddTransferStall(o.p, d)
+		addTransferStall(o.p, d)
 	}
 }
 

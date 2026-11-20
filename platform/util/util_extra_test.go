@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/nfltr/relay/proto/pb"
-	"google.golang.org/protobuf/proto"
 )
 
 // --- SyncMap tests ---
@@ -88,7 +87,7 @@ func TestSyncMap_Range_StopEarly(t *testing.T) {
 
 func TestCast_OK(t *testing.T) {
 	var x any = "hello"
-	v, ok := Cast[string](x, true)
+	v, ok := cast[string](x, true)
 	if !ok || v != "hello" {
 		t.Fatalf("expected (hello, true), got (%s, %v)", v, ok)
 	}
@@ -96,7 +95,7 @@ func TestCast_OK(t *testing.T) {
 
 func TestCast_NotOK(t *testing.T) {
 	var x any = "hello"
-	v, ok := Cast[string](x, false)
+	v, ok := cast[string](x, false)
 	if ok {
 		t.Fatal("expected false")
 	}
@@ -182,20 +181,6 @@ func TestWorkerPool_Run_NoConcurrency(t *testing.T) {
 }
 
 // --- Remaining util.go gaps ---
-
-func TestNewLogger_ValidLevel(t *testing.T) {
-	logger := NewLogger("debug")
-	if logger == nil {
-		t.Fatal("expected non-nil logger")
-	}
-}
-
-func TestNewLogger_InvalidLevel(t *testing.T) {
-	logger := NewLogger("bogus")
-	if logger == nil {
-		t.Fatal("expected non-nil logger")
-	}
-}
 
 func TestGetListeners(t *testing.T) {
 	listeners, err := GetListeners([]string{"0"}, nil)
@@ -346,48 +331,6 @@ func TestBytesToMessage_NoEom(t *testing.T) {
 	msg := BytesToTunnelFrame([]byte("data"), "type-2", "agentID-2", false)
 	if msg.Eom {
 		t.Fatal("expected Eom=false")
-	}
-}
-
-func TestProtoToMessage_Success(t *testing.T) {
-	innerMsg := &pb.TunnelFrame{Payload: []byte("inner"), MessageType: "test"}
-	msg, err := ProtoToTunnelFrame(innerMsg, "outer-type", "agentID-3", true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if msg == nil {
-		t.Fatal("expected non-nil message")
-	}
-	if msg.Routing.AgentId != "agentID-3" {
-		t.Fatalf("expected agentID-3, got %s", msg.Routing.AgentId)
-	}
-}
-
-// --- NewLogger for all known levels ---
-
-func TestNewLogger_AllLevels(t *testing.T) {
-	levels := []string{"debug", "info", "warn", "error"}
-	for _, lvl := range levels {
-		logger := NewLogger(lvl)
-		if logger == nil {
-			t.Fatalf("expected non-nil logger for level %s", lvl)
-		}
-	}
-}
-
-// --- ProtoToMessage marshal error path ---
-
-func TestProtoToMessage_MarshalError(t *testing.T) {
-	origMarshal := protoMarshal
-	defer func() { protoMarshal = origMarshal }()
-
-	protoMarshal = func(m proto.Message) ([]byte, error) {
-		return nil, errors.New("forced marshal error")
-	}
-
-	_, err := ProtoToTunnelFrame(&pb.TunnelFrame{Payload: []byte("x")}, "t", "o", true)
-	if err == nil || err.Error() != "forced marshal error" {
-		t.Fatalf("expected forced marshal error, got %v", err)
 	}
 }
 

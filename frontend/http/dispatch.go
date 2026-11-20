@@ -37,7 +37,7 @@ const directoryUnavailableMessage = "The relay cannot route this request right n
 // process when the agent is connected here (on an HTTP session, else as
 // ConnectHTTP messages), over the replica link to the replica holding it,
 // else 503 for a registered endpoint and 404 for an unknown one.
-func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
+func (ing *ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	UUID := r.Header.Get(session.TransactionIDHeader)
 	logger := logging.With(ing.logger, "type", "proxy", "transaction_id", UUID)
@@ -146,7 +146,7 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 // request's first message is on the agent's topic: session.RouteHere),
 // else the replica holding it, named by its pod IP and replica link port
 // (the peer reverse proxies' link dialer carries it).
-func (ing *Ingress) dispatcherURL(ctx context.Context, agentID string) (u *url.URL, release func(), err error) {
+func (ing *ingress) dispatcherURL(ctx context.Context, agentID string) (u *url.URL, release func(), err error) {
 	logger := logging.With(ing.logger, "AgentID", agentID)
 	if release, ok := ing.core.Dispatcher.RouteHere(agentID); ok {
 		// agent is connected to current pod: served in process (dispatch)
@@ -175,7 +175,7 @@ func (ing *Ingress) dispatcherURL(ctx context.Context, agentID string) (u *url.U
 }
 
 // peerURL names the replica at podIP by its replica link port.
-func (ing *Ingress) peerURL(podIP string) (*url.URL, error) {
+func (ing *ingress) peerURL(podIP string) (*url.URL, error) {
 	return url.Parse(fmt.Sprintf("http://%s:%s", podIP, ing.peerLinkPort))
 }
 

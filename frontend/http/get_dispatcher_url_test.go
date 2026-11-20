@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-func newURLTestServer(t *testing.T, inv directory.IPInventory) *Ingress {
+func newURLTestServer(t *testing.T, inv directory.IPInventory) *ingress {
 	t.Helper()
 	viper.Set("peer_link.port", 7443)
 	t.Cleanup(viper.Reset)

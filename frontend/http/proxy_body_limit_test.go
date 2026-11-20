@@ -49,7 +49,7 @@ func TestProxyRequestBodyLimitEdge(t *testing.T) {
 			b := broker.NewInMemoryMessageBroker()
 			_ = b.SetTopicAutoCreation("ns", true)
 			standInAgent(t, b, "agentID-1")
-			proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+			proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 			txn := "txn-limit-" + strings.ReplaceAll(tc.name, " ", "-")
 			req := httptest.NewRequest(http.MethodPost, "/upload", tc.body)
@@ -96,7 +96,7 @@ func TestProxyNeverForwardsAShortBodyAsComplete(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	b := broker.NewInMemoryMessageBroker()
 	_ = b.SetTopicAutoCreation("ns", true)
-	proxy := NewProxy(context.Background(), testLogger(), b, testRelayCookie)
+	proxy := newProxy(context.Background(), testLogger(), b, testRelayCookie)
 
 	req := httptest.NewRequest(http.MethodPost, "/upload", io.MultiReader(strings.NewReader("abc"), errReader{io.ErrUnexpectedEOF}))
 	req.ContentLength = 1000

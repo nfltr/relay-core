@@ -18,11 +18,10 @@ import (
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/platform/metrics"
 	"github.com/nfltr/relay-core/platform/util"
-	"github.com/spf13/viper"
 )
 
-// Metadata carries timing information across the HTTP proxy pipeline.
-type Metadata struct {
+// frontMetadata carries timing information across the HTTP proxy pipeline.
+type frontMetadata struct {
 	AgentID string `json:"a"`
 
 	RequestAtHTTPServer  int64 `json:"j"` // request at proxy http server
@@ -37,7 +36,7 @@ type Metadata struct {
 
 // front starts a request to an agent: its transaction ID and arrival time,
 // no caching of agent content, and the latency metrics once answered.
-func (ing *Ingress) front(next http.Handler) http.Handler {
+func (ing *ingress) front(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Agent content is never cached, except a site host's: public
 		// static pages whose agent sets their caching.
@@ -68,7 +67,7 @@ func (ing *Ingress) front(next http.Handler) http.Handler {
 			ing.logger.Debug("request not answered by an agent", "type", "proxy", "transaction_id", UUID, "status_code", statusCode)
 			return
 		}
-		var m Metadata
+		var m frontMetadata
 		if err := json.Unmarshal([]byte(metadata), &m); err != nil {
 			ing.logger.Error("failed to parse metadata", "type", "proxy", "transaction_id", UUID, "error", err)
 			return
@@ -127,14 +126,8 @@ func setForwardedHeaders(r *http.Request) {
 // slice for every request: a literal per call was an allocation).
 var frontRemovedHeaders = []string{session.MetadataHeader}
 
-// GetAPIType returns the API type from the request URL path.
-// The recognized prefixes are configurable via --http.api_type_prefixes (default: wapi,ibap).
-func GetAPIType(r *http.Request) string {
-	return apiType(r.URL.Path, viper.GetStringSlice("http.api_type_prefixes"))
-}
-
 // apiType is the prefix of prefixes that is path's first segment, else
-// "other". front passes Ingress.apiTypes, read once: a viper read and a
+// "other". front passes ingress.apiTypes, read once: a viper read and a
 // split of the path per request were 6 of front's allocations
 // (docs/performance.md R5).
 func apiType(path string, prefixes []string) string {

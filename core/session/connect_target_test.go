@@ -11,8 +11,8 @@ func TestValidPort(t *testing.T) {
 		"0": false, "65536": false, "99999": false, "100000": false, "": false,
 		"abc": false, "-1": false, "22.5": false, "22/tcp": false,
 	} {
-		if got := ValidPort(in); got != want {
-			t.Errorf("ValidPort(%q) = %v, want %v", in, got, want)
+		if got := validPort(in); got != want {
+			t.Errorf("validPort(%q) = %v, want %v", in, got, want)
 		}
 	}
 }

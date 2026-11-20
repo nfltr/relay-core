@@ -8,7 +8,6 @@ package sessiontest
 import (
 	"log/slog"
 	"slices"
-	"time"
 
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay/proto/pb"
@@ -44,10 +43,6 @@ func SetSingleTenant(d *session.Dispatcher, v bool) { d.SingleTenant = v }
 func FanoutTxn(d *session.Dispatcher, txn string, f *pb.TunnelFrame, logger *slog.Logger) error {
 	return d.TxnRegistry.Fanout(txn, f, logger)
 }
-
-// SetSessionStall sets how long a TCP session's frame waits on a stuck agent
-// stream before the session is reset (session.TCPSessionStall by default).
-func SetSessionStall(d *session.TCPDispatcher, v time.Duration) { d.SessionStall = v }
 
 // AgentSessionCount is the number of sessions on agentID's streams here.
 func AgentSessionCount(d *session.TCPDispatcher, agentID string) int {

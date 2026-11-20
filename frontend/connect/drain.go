@@ -33,7 +33,8 @@ const drainedGeneration = 3
 
 // Clients are the data connections of clients served here: the
 // composition drains them as the relay leaves (Drain) and waits for that
-// (Drained, WaitDrained).
+// (Drained, WaitDrained). Its methods are safe from any goroutine; a second
+// Drain drains the connections left (none, once the first returned).
 type Clients struct {
 	mu       sync.Mutex
 	conns    map[*dataplane.Mux]struct{}

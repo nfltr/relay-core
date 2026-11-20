@@ -38,9 +38,9 @@ import (
 	"github.com/nfltr/relay/proto/pb"
 )
 
-// Proxy forwards HTTP requests to the appropriate connected agent via the
+// proxy forwards HTTP requests to the appropriate connected agent via the
 // broker, matching each response by transaction ID.
-type Proxy struct {
+type proxy struct {
 	logger *slog.Logger
 	broker broker.MessageBroker
 
@@ -58,15 +58,15 @@ type Proxy struct {
 	dispatcher *session.Dispatcher
 }
 
-// NewProxy creates a Proxy, starts the transaction-registry reaper, and wires
+// newProxy creates a Proxy, starts the transaction-registry reaper, and wires
 // the provided broker for agent-bound message delivery.
-func NewProxy(ctx context.Context, logger *slog.Logger, msgBroker broker.MessageBroker, relayCookie func(name string) bool) *Proxy {
+func newProxy(ctx context.Context, logger *slog.Logger, msgBroker broker.MessageBroker, relayCookie func(name string) bool) *proxy {
 	txnReg := txnregistry.NewTransactionRegistry[*pb.HTTPProxyResponse]()
 	txnReg.StartReaper(ctx, 30*time.Second, logger, func(size int) {
 		metrics.SetTxnRegistrySize(size)
 	})
 
-	proxy := &Proxy{
+	proxy := &proxy{
 		logger:      logger,
 		broker:      msgBroker,
 		txnRegistry: txnReg,
@@ -96,7 +96,7 @@ func NewProxy(ctx context.Context, logger *slog.Logger, msgBroker broker.Message
 // fanout workers a single transient ack failure (broker restart, network
 // blip) would otherwise cancel all workers via errgroup and close the
 // gRPC stream, causing EOF errors at every connected agent.
-func (p *Proxy) FanoutResponses(ctx context.Context, podID string, podIDTopicConsumer broker.Consumer) error {
+func (p *proxy) FanoutResponses(ctx context.Context, podID string, podIDTopicConsumer broker.Consumer) error {
 	consumerCh := podIDTopicConsumer.Chan()
 	pool := util.NewWorkerPool(consumerCh, viper.GetInt("http.server.fanout_workers"), func(ctx context.Context, cmsg broker.Message) error {
 		now := time.Now()
@@ -119,7 +119,7 @@ func (p *Proxy) FanoutResponses(ctx context.Context, podID string, podIDTopicCon
 	return pool.Run(ctx)
 }
 
-func (p *Proxy) fanoutResponse(msg broker.Message, receivedAt time.Time) error {
+func (p *proxy) fanoutResponse(msg broker.Message, receivedAt time.Time) error {
 	response, err := broker.DecodeBrokerMessage(msg, &pb.HTTPProxyResponse{})
 	if err != nil {
 		metrics.RegisterBrokerMessageDecodeError()
@@ -177,7 +177,7 @@ func (p *Proxy) fanoutResponse(msg broker.Message, receivedAt time.Time) error {
 
 // ServeHTTP handles an inbound HTTP request by publishing it to the agent's
 // broker topic and streaming the response back to the caller.
-func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestAtDispatcher := time.Now()
 	agentID := r.Header.Get(session.AgentIDKey)
 	if len(agentID) == 0 {
@@ -734,7 +734,7 @@ type publishError struct {
 }
 
 func copyMetadataHeaderToResponse(w http.ResponseWriter, agentID string, requestAtDispatcher, responseAtDispatcher int64, timestamps *pb.Timestamps) error {
-	m := Metadata{AgentID: agentID, RequestAtDispatcher: requestAtDispatcher, ResponseAtDispatcher: responseAtDispatcher}
+	m := frontMetadata{AgentID: agentID, RequestAtDispatcher: requestAtDispatcher, ResponseAtDispatcher: responseAtDispatcher}
 	if timestamps != nil {
 		m.RequestAtAgent = timestamps.RequestAtAgent
 		m.ResponseAtAgent = timestamps.ResponseAtAgent
@@ -756,7 +756,7 @@ func copyMetadataHeaderToResponse(w http.ResponseWriter, agentID string, request
 // reflection cost every response 4 allocations (docs/performance.md R6;
 // TestMetadataAppendJSONIsMarshal). An agent ID with a byte that JSON
 // escapes goes through json.Marshal.
-func (m *Metadata) appendJSON(b []byte) ([]byte, error) {
+func (m *frontMetadata) appendJSON(b []byte) ([]byte, error) {
 	b = append(b, `{"a":`...)
 	plain := true
 	for i := 0; i < len(m.AgentID) && plain; i++ {
@@ -787,7 +787,7 @@ func (m *Metadata) appendJSON(b []byte) ([]byte, error) {
 
 // ackChunk tells the agent chunk index of transactionID reached the client,
 // which lets it send one more (chunking.ResponseWindow).
-func (p *Proxy) ackChunk(ctx context.Context, agentID, transactionID string, index int, logger *slog.Logger) {
+func (p *proxy) ackChunk(ctx context.Context, agentID, transactionID string, index int, logger *slog.Logger) {
 	if err := p.publishRequest(ctx, agentID, chunking.AckRequest(agentID, transactionID, index)); err != nil {
 		logger.Debug("ack frame not delivered", "chunk", index, "error", err)
 	}
@@ -807,7 +807,7 @@ func stillSending(r *pb.HTTPResponse) bool {
 // cancelAgentRequest tells the agent to stop sending transactionID's
 // response: its caller is gone. Best effort; the request context is already
 // done, so it gets a short context of its own.
-func (p *Proxy) cancelAgentRequest(agentID, transactionID string, logger *slog.Logger) {
+func (p *proxy) cancelAgentRequest(agentID, transactionID string, logger *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := p.publishRequest(ctx, agentID, chunking.CancelRequest(agentID, transactionID)); err != nil {
@@ -816,11 +816,11 @@ func (p *Proxy) cancelAgentRequest(agentID, transactionID string, logger *slog.L
 }
 
 // publishFirst publishes a request's first message (spec/Move.tla Publish).
-func (p *Proxy) publishFirst(rctx context.Context, agentID string, agentReq *pb.HTTPProxyRequest) error {
+func (p *proxy) publishFirst(rctx context.Context, agentID string, agentReq *pb.HTTPProxyRequest) error {
 	return tracehook.Publish(p.dispatcher, agentID, agentReq.Request.TransactionId, func() error { return p.publishRequest(rctx, agentID, agentReq) })
 }
 
-func (p *Proxy) publishRequest(rctx context.Context, agentID string, agentReq *pb.HTTPProxyRequest) error {
+func (p *proxy) publishRequest(rctx context.Context, agentID string, agentReq *pb.HTTPProxyRequest) error {
 	logger := logging.With(p.logger, "AgentID", agentID, "transaction_id", agentReq.Request.TransactionId)
 	now := time.Now()
 	producer, release, err := p.producers.Get(agentID, p.broker, broker.ProducerOptions{
@@ -844,12 +844,12 @@ func (p *Proxy) publishRequest(rctx context.Context, agentID string, agentReq *p
 // body. The caller streams r.Body directly through ReadChunks so the full
 // payload is never buffered in memory. The returned io.ReadCloser is the
 // request body; the caller must close it when done.
-func (p *Proxy) prepareAgentRequest(r *http.Request, agentID string, transactionID string, deadline, requestAtProxyHTTPServer time.Time) (*pb.HTTPProxyRequest, io.ReadCloser, error) {
+func (p *proxy) prepareAgentRequest(r *http.Request, agentID string, transactionID string, deadline, requestAtProxyHTTPServer time.Time) (*pb.HTTPProxyRequest, io.ReadCloser, error) {
 	agentURL := strings.TrimPrefix(r.URL.String(), "/")
 	req := &pb.HTTPProxyRequest{
 		Request: &pb.HTTPRequest{
 			Deadline:      deadline.UnixMilli(),
-			Headers:       util.HeadersToProto(withoutRelayCookies(r.Header, p.relayCookie), SkipHeaders),
+			Headers:       util.HeadersToProto(withoutRelayCookies(r.Header, p.relayCookie), skipHeaders),
 			Method:        r.Method,
 			Payload:       nil,
 			TransactionId: transactionID,

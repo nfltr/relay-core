@@ -10,6 +10,33 @@ changes listed (from the first tag on).
 
 ## [Unreleased] (v0.18.0: the API changes since v0.17.0)
 
+### Removed (the v1 API review, lane RCAPI: docs/v1-api-review.md)
+
+No consumer (relay-server, nfltr, hosted, send, pipe at their mains) names
+any of these; each was used only inside its own package or by nothing.
+
+- Unexported (used only by their own package): `compose.ListenHost`,
+  `core/session.ValidPort`, `core/nf1anon.Source`,
+  `core/directory/directorytest.Rounds`, `frontend/connect.RequestToken`,
+  `grpcauth.BalanceExhaustedStatus`, `CredentialEndedStatus`,
+  `MetadataPrincipal`, `PeerCertificates`, `platform/metrics.AddTransferStall`,
+  `ObserveTransferOpen`, `platform/util.Cast`, and the HTTP ingress's
+  internals `frontend/http.New`, `Ingress`, `NewProxy`, `Proxy`,
+  `HeaderPolicy`, `NewHeaderPolicyFromConfig`, `HeaderRewriteMiddleware`,
+  `Metadata`, `SkipHeaders` (the package's API is `Frontend`, `Shares`,
+  `NewShareVerified`). Migration: none needed by a current consumer; a
+  frontend is attached with `frontend/http.Frontend`.
+- Deleted (no caller outside tests): `compose.MergeListeners`,
+  `frontend/http.GetAPIType` (the request's API type is still read from
+  `--http.api_type_prefixes` once per ingress), `keyfile.KeyListResponse`,
+  `platform/util.NewLogger` (use `slog` with your own handler),
+  `platform/util.ProtoToTunnelFrame` (marshal, then `BytesToTunnelFrame`),
+  `core/session/sessiontest.SetSessionStall`, and
+  `platform/config.GitOpsExec` with its config key `gitops.type`, which
+  nothing read (a relay started with `--gitops.type` now refuses the flag).
+- 51 doc comments named unexported helpers or names that no longer exist;
+  `TestDocsNameNoGhosts` (internal/repocheck) fails on a new one.
+
 ### Added (the gRPC health check, lane CLIUX3)
 
 - Every gRPC server `grpcfactory.NewGRPCServer` builds (the agent port)

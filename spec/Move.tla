@@ -98,7 +98,7 @@ PickRemote(r) ==
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
     /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
-\* The forwarded request reaches A (Ingress.peer): it takes a route lease
+\* The forwarded request reaches A (ingress.peer): it takes a route lease
 \* (RouteHere) as A's own ingress does. Refused (A no longer routes to the
 \* agent) while the record names B's live session, it goes on to B, once
 \* (ArriveB: B serves it or waits for its registration; finding 46): no
@@ -171,7 +171,7 @@ PickB(r) ==
     /\ UNCHANGED <<rel, routes, conn, rec, ag, exec, infl, cq, chA, upA, drn, lg>>
     /\ UNCHANGED tcpVars /\ UNCHANGED bVars /\ UNCHANGED rw
 
-\* A request for B at B (its own ingress, or a peer's forward: Ingress.peer):
+\* A request for B at B (its own ingress, or a peer's forward: ingress.peer):
 \* served once B routes the agent; while the record names B's live session
 \* the design waits (not enabled), the bug refuses it; B's session ended
 \* (Bgone): 503 Retry-After before any agent ran it.

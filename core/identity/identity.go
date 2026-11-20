@@ -122,6 +122,7 @@ type cacheKey struct {
 // knows a credential decides. It namespaces owners, enforces the names a
 // credential may take and its expiry, caches answers for their CacheTTL,
 // and holds and revokes the connections credentials open (Hold, Revoke).
+// It is safe for concurrent use.
 type Authenticator struct {
 	mu        sync.Mutex // a cache insert against Revoke's drop (Authenticate)
 	providers []Provider
