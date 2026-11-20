@@ -6,7 +6,6 @@ package session
 import (
 	"context"
 	"errors"
-	"github.com/nfltr/relay-core/core/session/sessiontest/fake"
 	"io"
 	"log/slog"
 	"net"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/link/peerlink"
+	"github.com/nfltr/relay-core/core/session/sessiontest/fake"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -53,7 +53,7 @@ func chainPair(t *testing.T) (opener, accepter *link.Session) {
 	m := link.NewMux(c)
 	t.Cleanup(func() { _ = m.Close() })
 	go func() { _ = m.Serve(nil) }()
-	if opener, err = m.Open(nil); err != nil {
+	if opener, err = m.Open(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	select {

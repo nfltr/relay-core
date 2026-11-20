@@ -239,7 +239,4 @@ func (s *wsSession) PathLen() uint8                 { return 0 }
 func (s *wsSession) Refuse(code uint32, msg string) error {
 	return s.AbortWith(&link.Abort{Refused: true, Code: code, Msg: msg})
 }
-func (s *wsSession) Abort(code uint32, msg string) error {
-	return s.AbortWith(&link.Abort{Code: code, Msg: msg})
-}
 func (s *wsSession) AbortWith(a *link.Abort) error { return s.end(wsCloseCode(a)) }

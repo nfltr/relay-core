@@ -202,10 +202,6 @@ func (s *inbandIn) Refuse(code uint32, msg string) error {
 	return s.AbortWith(&link.Abort{Refused: true, Code: code, Msg: msg})
 }
 
-func (s *inbandIn) Abort(code uint32, msg string) error {
-	return s.AbortWith(&link.Abort{Code: code, Msg: msg})
-}
-
 func (s *inbandIn) AbortWith(a *link.Abort) error {
 	if !a.Refused || !s.answered.CompareAndSwap(false, true) {
 		return s.Session.Reset()
@@ -294,7 +290,6 @@ func (s *inbandOut) readAnswer(ctx context.Context) error {
 func (s *inbandOut) Accept() error               { return nil }
 func (s *inbandOut) AcceptPath(uint8) error      { return nil }
 func (s *inbandOut) Refuse(uint32, string) error { return s.Session.Reset() }
-func (s *inbandOut) Abort(uint32, string) error  { return s.Session.Reset() }
 func (s *inbandOut) AbortWith(*link.Abort) error { return s.Session.Reset() }
 func (s *inbandOut) Chain() link.Chain           { return link.Chain{} }
 func (s *inbandOut) PathLen() uint8              { return 0 }
