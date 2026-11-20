@@ -474,7 +474,7 @@ func loadFlags(v *viper.Viper, fs *flag.FlagSet) {
 var renamedKeys = []string{"rpc.server.enable", "http.server.enable", "internal.enable", "metrics.enable",
 	"profiling.enable", "rpc.agent.heartbeat.enable", "tls.enable", "security.audit.enable", "ratelimit.enable"}
 
-// CheckRenamed refuses a renamed key (renamedKeys, and a binary's own in
+// CheckRenamed refuses a renamed key (the core's nine, and a binary's own in
 // more) still set in the environment: viper ignores an env name no key has,
 // so TLS_ENABLE=true would start the relay with plain listeners. A flag of
 // the old name is refused by the flag parser already. Remove after v1.0.0,
