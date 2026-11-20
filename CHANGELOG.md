@@ -10,6 +10,14 @@ changes listed (from the first tag on).
 
 ## [Unreleased]
 
+### Removed (agent data connections retired, lane LINKV013)
+
+- Agent data connections (`x-nfltr-tcp-data`): the dispatcher no longer
+  offers them and refuses a link hello on the gRPC port; agents ride the
+  agent link or auxiliary gRPC streams. `tcpAgentStream.DC` is gone
+  (apidiff lists it; it had no use outside the package). Migration: none
+  (nfltr docs/decisions/link-data-connections-retired-2026-11-20.md).
+
 ### Changed (the key vocabulary after the API key cut, lane L4S3)
 
 - The gRPC token carrier is `x-nfltr-token` (was `x-api-key`): a token a
