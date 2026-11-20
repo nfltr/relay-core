@@ -65,7 +65,7 @@ var (
 
 // ObserveHTTPRequest counts a served request and its duration. The caller
 // bounds route and statusClass (route patterns, status classes); method is
-// bounded here (httpMethod).
+// bounded here (a method net/http does not name counts as "other").
 func ObserveHTTPRequest(route, method, statusClass string, d time.Duration) {
 	method = httpMethod(method)
 	httpRequests.WithLabelValues(route, method, statusClass).Inc()

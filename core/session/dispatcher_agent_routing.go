@@ -374,7 +374,7 @@ func a2aFrameDeadlineExpired(msg *pb.TunnelFrame, now time.Time) bool {
 }
 
 // OwnerForAgent is the account owning agentID ("" unknown): the owner of
-// the principal it connected here with (registerAgent), else the account
+// the principal it connected here with, else the account
 // its directory record names (an agent on another replica, or one with
 // only a ConnectTCP stream here). A record an older replica wrote names
 // none, nor does an in-process agent's. A directory it could not read

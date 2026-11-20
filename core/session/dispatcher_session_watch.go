@@ -46,9 +46,9 @@ func (d *Dispatcher) runSession(eg *errgroup.Group, ctx context.Context, stop fu
 
 // WatchAgentSession returns when the session must end: ctx is done, the
 // receive loop ended (its error from received), no heartbeat arrived within
-// the receive threshold (when heartbeats are on: errNoHeartbeat, and the
+// the receive threshold (when heartbeats are on: "no heartbeat received from agent", and the
 // agent's inventory entry is removed), or the relay is stopping (an agent
-// that moves is asked to at once; another gets errServerRestarting after a
+// that moves is asked to at once; another gets "server restarting" after a
 // random jitter up to half the graceful shutdown timeout, so the fleet's
 // reconnects spread out). Until then it renews the
 // agent's inventory entry every half receive threshold, also while the

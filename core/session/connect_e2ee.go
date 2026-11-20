@@ -69,7 +69,7 @@ func ServiceE2EE(d agentservices.Decl, policy string, def bool) bool {
 }
 
 // ResolveServicesE2EE returns decls with each tcp service's E2EE stated
-// (serviceE2EE): the declaration the relay accepts and echoes, so the
+// (agentservices.Decl.E2EE): the declaration the relay accepts and echoes, so the
 // agent knows (and shows) the mode of every service.
 func ResolveServicesE2EE(decls []agentservices.Decl, policy string, def bool) []agentservices.Decl {
 	if decls == nil {

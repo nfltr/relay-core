@@ -10,7 +10,7 @@ package services
 
 // CallerHeader carries the owner the relay authenticated for a request it
 // carries to a service agent: the partition key of everything the service
-// stores. The relay drops any copy a client sent (stripClientAssertedIdentityHeaders)
+// stores. The relay drops any copy a client sent
 // and sets it on every request it forwards; a service trusts it because only
 // its own owner's principals can open a session to it (the core's reach
 // rule) and the operator holds that owner's credentials.

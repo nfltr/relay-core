@@ -47,7 +47,7 @@ const tcpAgentStreamsHeader = "x-nfltr-tcp-streams"
 const tcpAgentStreams = 4
 
 // TCPBindHeader carries the token that binds an auxiliary connection to an
-// agent's primary stream (the agent SDK's tcpBindHeader). The relay sends a
+// agent's primary stream (x-nfltr-tcp-bind). The relay sends a
 // random token in a stream's response header; an agent that knows the
 // header opens its further streams each on a connection of its own and
 // presents the token in the ConnectTCP request metadata; the relay echoes
@@ -470,8 +470,8 @@ func (d *TCPDispatcher) enterRotation(agentID string, as *tcpAgentStream) {
 // connection, bound with token to one of its streams (the primary). It
 // carries sessions like any other stream of the agent but is not an agent
 // session of its own: nothing else about the agent is registered, and it
-// ends when the primary ends or after it idled (tcpAuxIdle). An unknown
-// token, one of another agent, or one past the primary's tcpAgentStreams-1
+// ends when the primary ends or after it idled 30 s. An unknown
+// token, one of another agent, or one past the primary's 3
 // auxiliary streams is refused.
 func (d *TCPDispatcher) RegisterAuxStream(agentID, token string, stream pb.Dispatcher_ConnectTCPServer) error {
 	var as *tcpAgentStream

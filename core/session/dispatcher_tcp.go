@@ -49,7 +49,7 @@ const tcpSessionQueueBytes = 1 << 20
 // credit waits on a session whose queue is full while its client takes
 // nothing; then the session is reset (tcpSession.deliver) and the stream's
 // other sessions go on. A client still reading frees room with every write it takes, which
-// restarts the wait: a client taking under tcpWriteBatch per tcpSessionStall
+// restarts the wait: a client taking under 256 KiB per TCPSessionStall
 // (about 26 KB/s) while its agent sends faster is reset too.
 const TCPSessionStall = 10 * time.Second
 
@@ -137,14 +137,14 @@ type TCPDispatcher struct {
 	Mu      sync.RWMutex
 	Streams map[string]*tcpAgentStream // agentID -> its latest registered stream
 	// All holds every registered stream of an agent that opened several
-	// (the agent SDK's tcpStreamsHeader); new sessions are spread over them.
+	// (x-nfltr-tcp-streams); new sessions are spread over them.
 	All      map[string][]*tcpAgentStream
 	nextPick atomic.Uint64
 	// nextRoute numbers the primary streams (tcpAgentStream.route).
 	nextRoute atomic.Uint64
 	// bound maps a primary stream's token to it (tcpBindHeader).
 	bound   map[string]*tcpAgentStream
-	AuxIdle time.Duration // tcpAuxIdle; tests shorten it
+	AuxIdle time.Duration // 30 s; tests shorten it
 	// SessionStall is TCPSessionStall; tests shorten it (sessiontest).
 	SessionStall time.Duration
 	// Link is the agent link (agent_link.go), made by DataPlaneListener.
@@ -242,7 +242,7 @@ func (d *TCPDispatcher) ConfigureDrain(leaving <-chan struct{}, window time.Dura
 	d.leaving, d.drainWindow = leaving, window
 }
 
-// ConnectedAgentIDs returns the agentIDs of all agents with active TCP streams.
+// ConnectedAgentIDs returns the agent IDs of all agents with active TCP streams.
 func (d *TCPDispatcher) ConnectedAgentIDs() []string {
 	d.Mu.RLock()
 	defer d.Mu.RUnlock()
@@ -448,7 +448,7 @@ func (d *TCPDispatcher) pumpToAgent(conn net.Conn, as *tcpAgentStream, sessionID
 }
 
 // RouteConnection routes a pre-accepted TCP connection to the named agent.
-// Unlike handleConn, the caller already knows the agentID (e.g. from SNI
+// Unlike a TCP listener's connection, the caller already knows the agentID (e.g. from SNI
 // extraction) — there is no static TCPEndpoint.  The target_addr sent to the
 // agent is "__e2ee__" signaling E2EE TLS passthrough mode.
 //
@@ -684,7 +684,7 @@ func (d *TCPDispatcher) OnwardWithRetry(ctx context.Context, ep TCPEndpoint, max
 // terminal handler or SSH proxy). Cancelling ctx ends the session.
 //
 // When the agent is on a different replica, DialAgent opens a session on
-// the replica link (as handleConn does for TCP listeners): the returned
+// the replica link (as a TCP listener's connection does): the returned
 // net.Conn is that session.
 func (d *TCPDispatcher) DialAgent(ctx context.Context, agentID, targetAddr string) (net.Conn, error) {
 	s, release, err := d.onward(ctx, TCPEndpoint{AgentID: agentID, TargetAddr: targetAddr})

@@ -42,7 +42,7 @@ type Target struct {
 	Service string // a service the agent declared, or a port
 	E2EE    bool   // the caller's TLS ends at the agent, opaque to the relay
 	Answer  bool   // the agent answers the open once it reached its target
-	// Hold: an offline agent's open is held up to offlineHold for the agent
+	// Hold: an offline agent's open is held up to 500 ms for the agent
 	// to register (a client's held open: the connect sidecar's); without
 	// it the offline answer comes at once (a route that tries the next
 	// agent).
@@ -144,7 +144,7 @@ type Opened struct {
 // *DialError (ErrRefused, ErrOffline, ErrUnknownService, ErrDraining,
 // ErrReplicaUnreachable).
 // A service by name (<service>@<group>) is opened on one instance, another
-// picked while one fails before its answer (openService).
+// picked while one fails before its answer.
 func (c *Core) Open(ctx context.Context, caller identity.Principal, t Target) (Opened, error) {
 	if c.TCPDispatcher == nil || c.Reach == nil {
 		return Opened{}, &Refusal{Reason: relayv1.ErrorReason_ERROR_REASON_FEATURE_UNSUPPORTED, Msg: "TCP tunneling is not enabled (set tcp.enabled=true)", AgentID: t.Agent}

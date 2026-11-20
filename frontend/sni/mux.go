@@ -3,7 +3,7 @@
 
 // SNI Multiplexer (E2EE + gRPC on a single port)
 //
-// muxListener wraps a raw TCP net.Listener and inspects TLS ClientHello
+// The multiplexer wraps a raw TCP net.Listener and inspects TLS ClientHello
 // SNI to multiplex connections:
 //
 //   - SNI matching the E2EE base domain suffix → routed to the agent via

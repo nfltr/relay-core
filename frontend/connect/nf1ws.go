@@ -28,10 +28,11 @@ import (
 // GET NF1WebSocketPath with subprotocol NF1Subprotocol; its first message
 // is the address's rid (binary, agentservices.RIDSize bytes), and from
 // then on each binary message carries the session's bytes, both ways. The
-// session is the anonymous nf1 open of a data connection (serveNF1Session:
-// the same caps, refusals, metering and agent session), so the agent
-// cannot tell a browser from the CLI. A refusal is the close code
-// (wsCloseCode); the relay sends nothing else of its own. The Origin and
+// session is the anonymous nf1 open of a data connection (the
+// same caps, refusals, metering and agent session), so the agent
+// cannot tell a browser from the CLI. A refusal is a close code
+// (4003 not served, 4004 refused, 4009 balance spent, 1013 try later, 1011
+// aborted); the relay sends nothing else of its own. The Origin and
 // User-Agent are logged, never trusted: the WebSocket carries no
 // credential, and any page holding an address could open it anyway.
 const (

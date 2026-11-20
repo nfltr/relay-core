@@ -23,7 +23,7 @@ const addAttempts = 50
 // returns the first one's "no such file or directory" (fsnotify v1.10.1
 // still), so a sqlite journal beside the machines file failed the
 // file's watch. It retries then, while dir itself exists, at most
-// addAttempts times. Every directory watch in the relay goes through it.
+// 50 times. Every directory watch in the relay goes through it.
 func Add(w *fsnotify.Watcher, dir string) error {
 	var err error
 	for range addAttempts {

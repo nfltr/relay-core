@@ -37,7 +37,7 @@ import (
 // (e.g. worker/agent) so both sides stay in sync.
 //
 // The server's EnforcementPolicy.MinTime must be ≤ the client's ping
-// interval.  iter-61 sCCC9 pings every 30 s, so MinTime is 25 s (5 s slack).
+// interval. The relay SDK's agents ping every 30 s, so MinTime is 25 s (5 s slack).
 const (
 	// RelayKeepaliveMinTime is the minimum interval the server requires
 	// between successive client pings (EnforcementPolicy.MinTime).

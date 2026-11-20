@@ -61,7 +61,7 @@ type PeerSession = peerlink.Session
 var ErrPeerLinkOff = status.Error(codes.Unavailable, "replica link: not configured on this relay (peer_link.port and its CA): the agent is on another replica")
 
 // PeerLinkCaller marks a stream context of a verified replica link peer
-// (authorizeRelayTunnelCaller).
+// (a RelayTunnel caller the relay admitted as a replica).
 type PeerLinkCaller struct{}
 
 // ReplicaLink is the replica link as the inventory epoch and the HTTP
@@ -109,6 +109,7 @@ func PassCloseWrite(c net.Conn) error {
 }
 
 // ErrPeerUnreachable: a session refused without a dial, a dial to the
-// peer having failed slowly less than peerUnreachableFor ago: a retry
+// peer having failed slowly a moment ago (the replica link's back-off, relay-server
+// core/replicas): a retry
 // toward it waits for nothing new (DialAgentWithRetry stops).
 var ErrPeerUnreachable = errors.New("replica link: peer unreachable")

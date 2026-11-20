@@ -19,7 +19,8 @@ import (
 )
 
 // portKeys returns the config keys of the ports a relay listens on (proxy,
-// gRPC, internal, metrics, the SNI router's), in PortNumbers order. Peers
+// gRPC, internal, metrics, the SNI router's), in PortNumbers order (proxy, gRPC,
+// internal, metrics, SNI router). Peers
 // reach this replica's agents over the replica link (peer_link.port, its
 // own listener). muxOnGRPC: the binary's SNI frontend sits in front of the
 // gRPC port's TLS (frontend.Host.WrapGRPCListener), so it binds no port of
@@ -78,7 +79,7 @@ func publicListenHosts() []string {
 	return hosts
 }
 
-// Listen binds every relay port on its listen host (muxOnGRPC: portKeys). A port configured as "0"
+// Listen binds every relay port on its listen host (muxOnGRPC: the SNI frontend shares the gRPC port). A port configured as "0"
 // binds a kernel-chosen port and the config is set to that port before
 // anything else reads it, so the servers, /ready-ports and BoundPorts all see
 // the bound port. A launcher that needs free ports passes 0 and reads them
@@ -280,7 +281,8 @@ func BoundPorts(muxOnGRPC bool) map[string]string {
 	return ports
 }
 
-// PortNumbers are the ports a relay listens on, in portKeys order.
+// PortNumbers are the ports a relay listens on, in this order: proxy, gRPC, internal,
+// metrics, the SNI router's (each only when enabled).
 func PortNumbers(muxOnGRPC bool) []string {
 	var ports []string
 	for _, key := range portKeys(muxOnGRPC) {

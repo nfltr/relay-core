@@ -11,7 +11,7 @@ import (
 )
 
 // RunStaleAgentReaper periodically evicts gRPC upstream agents that have not
-// sent inbound messages within staleAgentMaxIdle. It ticks only while an
+// sent inbound messages within 180 s. It ticks only while an
 // agent other than the relay's own in-process ones is connected (a gRPC
 // agent's registration wakes it): an idle relay's reaper holds no timer.
 func (d *Dispatcher) RunStaleAgentReaper(ctx context.Context) {

@@ -41,16 +41,16 @@ import (
 // Heartbeat Design (Bidirectional):
 //   - Server sends heartbeats to agents every HeartbeatSendDuration (5s default),
 //     skipping one right after other outbound data, via:
-//   - sendGRPCHeartbeats(): Sends empty TunnelFrame to gRPC agent streams
-//   - relayRequestsToAgent(): Sends empty HTTPProxyRequest to HTTP agents
+//   - an empty TunnelFrame to gRPC agent streams
+//   - an empty HTTPProxyRequest to HTTP agents
 //   - The accept headers state the interval (agentwire.HeartbeatKey); an agent
 //     ends a connection silent for three of them (agentwire.SilenceLimit).
 //   - Agents echo the heartbeats; the server ends an agent silent for
-//     HeartbeatRecvThreshold (45s default) with errNoHeartbeat
+//     HeartbeatRecvThreshold (45s default) ("no heartbeat received from agent")
 //   - rpcclient agents also send their own heartbeats while idle, ahead of
 //     large outbound payloads
 //   - Last-seen and session-hook renewals (Renew) ride the heartbeat at most every
-//     heartbeatBookkeepingEvery (15s)
+//     15s
 type DispatcherConfig struct {
 	ConnectedAgentsThreshold int
 	HeartbeatRecvThreshold   time.Duration
@@ -106,7 +106,7 @@ type Dispatcher struct {
 	// RelayID is which relay this is (directory.RelayID: one per
 	// directory), sent in the Welcome (grpcfactory.WithRelayID); a connect
 	// naming it among the relays its agent holds is refused
-	// ALREADY_ATTACHED before it claims anything (refuseAttached). "":
+	// ALREADY_ATTACHED before it claims anything. "":
 	// none, no connect refused for it.
 	RelayID string
 
@@ -168,9 +168,9 @@ type Dispatcher struct {
 
 	// DurableRegistration reports whether agentID already holds a registry
 	// row not marked ephemeral; such an id cannot become ephemeral.
-	// onEphemeralAgentGone removes an ephemeral agent's registry row once its
-	// stream has closed. ephemeralMu orders that removal against a reconnect
-	// of the same id registering it again (agent_lifetime.go).
+	// OnEphemeralAgentGone removes an ephemeral agent's registry row once its
+	// stream has closed, ordered against a reconnect of the same id
+	// registering it again (agent_lifetime.go).
 	DurableRegistration  func(agentID string) bool
 	OnEphemeralAgentGone func(agentID string)
 	ephemeralMu          sync.Mutex
@@ -183,7 +183,7 @@ type Dispatcher struct {
 	tcpAgents atomic.Pointer[TCPDispatcher]
 
 	// PodDialer opens RelayTunnel streams to peer replicas on the replica
-	// link (dialPeerStream); Replicas is the rest of the seam (replicas.go).
+	// link; Replicas is the rest of the seam (replicas.go).
 	PodDialer PodDialer
 	Replicas
 	// ClusterRelayPeers marks RelayTunnel callers as cluster-internal pods
@@ -195,9 +195,9 @@ type Dispatcher struct {
 	SingleTenant bool
 
 	// AgentOwners holds the owner of each agent connected here (its
-	// principal's, recorded by registerAgent), so A2A routing reads it
+	// principal's, recorded when it registers), so A2A routing reads it
 	// without a store round trip; an agent elsewhere's is in its record
-	// (ownerForAgent).
+	// (OwnerForAgent).
 	AgentOwners *util.SyncMap[string, string]
 
 	// Policy is the reach policy Reach asks (agent_reach.go); nil refuses
@@ -213,7 +213,7 @@ type Dispatcher struct {
 	// PrimaryProvider is the Authenticator's primary provider, whose
 	// owners are unqualified (identity.Authenticator.Owner): the provider
 	// an A2A source's principal is stated with when its owner has no
-	// "<provider>:" (agentPrincipal). "": none stated (a Policy that
+	// "<provider>:". "": none stated (a Policy that
 	// decides by provider refuses it).
 	PrimaryProvider string
 	// agentStateMu orders registerAgent's writes of the state an agent's
@@ -538,8 +538,8 @@ func newHeartbeatState(recvThreshold time.Duration) (heartbeats chan proto.Messa
 // agent's sessions share: its owner (its principal's owner, "" none: an
 // in-process agent).
 // A session calls it only once it holds the agent (stored in agents or
-// upstreams), so the teardown of a session it replaced, which runs
-// forgetAgent, leaves what it records.
+// upstreams), so the teardown of a session it replaced, which removes the
+// shared state, leaves what it records.
 func (d *Dispatcher) RegisterAgent(agentID, owner, tlsFingerprint string) {
 	d.NumberOfAgentsConnected.Add(1)
 	d.Logger.Debug("number of agents connected", "AgentID", agentID, "count", d.NumberOfAgentsConnected.Load())
@@ -555,7 +555,8 @@ func (d *Dispatcher) RegisterAgent(agentID, owner, tlsFingerprint string) {
 
 // DeregisterAgent ends ConnectHTTP session s of agentID: it uncounts the
 // session, logs why it ended and removes it from agents. Only the session
-// agents still holds goes on to forgetAgent; a replaced session's teardown
+// agents still holds removes the state the agent's sessions share; a
+// replaced session's teardown
 // touches nothing of the session that replaced it.
 func (d *Dispatcher) DeregisterAgent(agentID string, s *HTTPStream, streamCtxErr error) {
 	if streamCtxErr != nil {
@@ -876,7 +877,7 @@ func (d *Dispatcher) GetAllUpstreamAgentInfo() []AgentInfo {
 	return infos
 }
 
-// GetTCPAgentAgentIDs returns the agentIDs of all agents with active TCP streams.
+// GetTCPAgentAgentIDs returns the agent IDs of all agents with active TCP streams.
 func (d *Dispatcher) GetTCPAgentAgentIDs() []string {
 	if d.TCPDispatcher == nil {
 		return nil

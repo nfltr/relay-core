@@ -100,7 +100,7 @@ func (l *InternalAgentLoopback) AgentSide() AgentTunnelSide {
 
 // AgentTunnelSide is the agent-half interface — identical in shape to
 // rpcclient.AgentTunnel but declared here to avoid an import cycle. The
-// agent half is satisfied by *internalAgentLoopbackAgentSide and can be
+// agent half is what InternalAgentLoopback.AgentSide returns and can be
 // passed to rpcclient.NewAgent via an adapter constructed in cmd/server
 // (where the rpcclient import is allowed).
 type AgentTunnelSide interface {

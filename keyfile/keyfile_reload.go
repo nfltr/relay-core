@@ -21,7 +21,7 @@ import (
 // OnRevoke runs for it (the relay ends its connections) after its old key
 // stopped validating and before a new key of it validates, so the cut never
 // takes a connection of the new key. The manager writes the file
-// atomically (writeFileAtomic), so a file without keys (empty, or comments
+// atomically (a temporary file renamed over it), so a file without keys (empty, or comments
 // only) is meant: every key is revoked. A file that does not load
 // (missing, unreadable, malformed, a machine twice) or that changes a
 // kept machine's account (fixed at generate: spec/KeyAccount.tla

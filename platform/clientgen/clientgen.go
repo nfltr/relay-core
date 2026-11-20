@@ -31,7 +31,7 @@ func Min() int { return max(viper.GetInt(Key), 0) }
 
 // Admit reports whether a client of generation gen is taken under min. A
 // client below agentwire.Generation is counted (refused, or taken on transport:
-// "grpc", "http") and logged at most once per logEvery. It reads no store:
+// "grpc", "http") and logged at most once a minute. It reads no store:
 // the refusal path stays cheap for old clients that retry.
 func Admit(min, gen int, transport, client string) bool {
 	if gen >= agentwire.Generation && gen >= min {

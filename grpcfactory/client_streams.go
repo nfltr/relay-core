@@ -67,7 +67,7 @@ func welcome(relayID string) metadata.MD {
 }
 
 // ProtocolOptions are the server options of the protocol v1 handshake
-// (helloRequired, the Welcome header) refusing clients below
+// (a Hello required, the Welcome header) refusing clients below
 // minGeneration (0: none), first of every server's interceptor chain:
 // NewGRPCServer's, and a test server's that serves v1 clients. Its
 // Welcome names no relay id (NewGRPCServer's names WithRelayID's).

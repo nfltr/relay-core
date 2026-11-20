@@ -17,7 +17,7 @@ import (
 // the RedisCache's semantics on maps in this process, no server, no
 // connection, no goroutine. Expired keys are dropped when read and, so
 // keys nobody reads again (an agent's session counter) do not pile up, by
-// one sweep of the whole map at most every memorySweepEvery, run by a
+// one sweep of the whole map at most every minute, run by a
 // write: an idle relay does nothing.
 type MemoryCache struct {
 	mu        sync.Mutex

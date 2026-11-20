@@ -31,7 +31,7 @@ import (
 // /connect data connection: what it queues for one session's client at most, and so how much the
 // agent may send it unacknowledged. A session moves at most a window per
 // round trip of the whole pipeline (agent -> relay -> client conn); 1 MiB
-// (tcpSessionQueueBytes) measured iperf -P1 at -24% in docker, where the
+// (the gRPC path's queue bound) measured iperf -P1 at -24% in docker, where the
 // 1-CPU containers' scheduling stretches that round trip.
 const TCPDataWindow = 4 << 20
 

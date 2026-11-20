@@ -17,7 +17,8 @@ import (
 
 // PodDialer opens a RelayTunnel stream (HTTP-agent and agent-to-agent
 // calls, fleet invokes) to the replica holding an agent. A multi-replica
-// relay's is a linkPodDialer; nil on a single relay.
+// relay's dials the replica link (relay-server core/replicas); nil on a
+// single relay.
 type PodDialer interface {
 	DialRelay(ctx context.Context, agentID string, logger *slog.Logger) (*PodRelayStream, error)
 }
