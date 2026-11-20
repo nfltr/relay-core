@@ -5,6 +5,7 @@ package compose
 
 import (
 	"errors"
+	"math/rand/v2"
 	"net"
 	"slices"
 	"strconv"
@@ -64,12 +65,7 @@ func TestListenBindsZeroPortsItselfAndReportsThem(t *testing.T) {
 
 // A pinned port is bound as configured next to ephemeral ones.
 func TestListenKeepsPinnedPorts(t *testing.T) {
-	pin, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pinned := strconv.Itoa(pin.Addr().(*net.TCPAddr).Port)
-	_ = pin.Close()
+	pinned := strconv.Itoa(pinnablePort(t))
 	viper.Set("http.server.enable", true)
 	viper.Set(config.ProxyServerPort, pinned)
 	viper.Set("rpc.server.enable", false)
@@ -90,6 +86,23 @@ func TestListenKeepsPinnedPorts(t *testing.T) {
 	if bound := BoundPorts(false); bound[config.ProxyServerPort] != pinned || bound["metrics.port"] == "0" || listeners[pinned] == nil || len(listeners) != 2 {
 		t.Fatalf("bound=%v listeners=%d", bound, len(listeners))
 	}
+}
+
+// pinnablePort is a port free on every interface and below every kernel's
+// ephemeral range (Linux 32768+, macOS 49152+): no Listen(":0") anywhere is
+// given it between this probe and the test's bind, unlike a probed ephemeral
+// port a parallel package can take first.
+func pinnablePort(t *testing.T) int {
+	t.Helper()
+	for range 100 {
+		p := 20000 + rand.IntN(12000)
+		if ln, err := net.Listen("tcp", ":"+strconv.Itoa(p)); err == nil {
+			_ = ln.Close()
+			return p
+		}
+	}
+	t.Fatal("no free port in 20000-31999")
+	return 0
 }
 
 // listen.address binds the proxy and gRPC ports on that address only (a
