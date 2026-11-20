@@ -4,6 +4,7 @@
 package sharecode
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -13,13 +14,10 @@ import (
 // answer is deterministic, an accepted code is either the 26-char base32
 // form or the word-pair + 32-hex form, and generated codes validate.
 func FuzzValidCode(f *testing.F) {
-	for _, seed := range []string{
-		"", "-", "fresh-crest", "fresh-crest-a1b2c3", New(),
-		"fresh-crest-" + strings.Repeat("0", legacyHexLen),
-		"fresh-crest-" + strings.Repeat("A", legacyHexLen),
+	for _, seed := range slices.Concat(validCodes, invalidCodes, []string{
+		"fresh-crest", New(), strings.ToUpper(New()), New() + "=",
 		"-" + strings.Repeat("0", legacyHexLen),
-		strings.ToUpper(New()), New() + "=",
-	} {
+	}) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, code string) {
