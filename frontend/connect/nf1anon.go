@@ -23,7 +23,8 @@ var errAccountRequired = &link.Abort{Code: dataplane.AbortCode(nf1anon.Reason), 
 // Relay, Cut, TimeCut): past either, or past the leg's time limit, both
 // legs are aborted with ERROR_REASON_ACCOUNT_REQUIRED. An account's leg
 // (leg nil) is out itself: never budgeted, spliced as before. A budgeted
-// leg hides out's concrete type, so the join copies through it.
+// leg hides out's concrete type, so the join copies through it, but passes
+// its end on (endLeg: lane QUICEND, TestSessionWrappersPassTheEndOn).
 func budgeted(in, out peerlink.Session, leg *nf1anon.Leg) peerlink.Session {
 	if leg == nil {
 		return out
@@ -34,6 +35,9 @@ func budgeted(in, out peerlink.Session, leg *nf1anon.Leg) peerlink.Session {
 			b.cut()
 		}
 	})
+	if e, ok := out.(endLeg); ok {
+		return &budgetEndLeg{endLeg: e, b: b}
+	}
 	if c, ok := out.(peerlink.ChainSession); ok {
 		return &budgetChainLeg{ChainSession: c, b: b}
 	}
@@ -123,3 +127,31 @@ type budgetChainLeg struct {
 func (l *budgetChainLeg) Read(p []byte) (int, error)  { return l.b.read(p) }
 func (l *budgetChainLeg) Write(p []byte) (int, error) { return l.b.write(p) }
 func (l *budgetChainLeg) Close() error                { l.b.close(); return l.ChainSession.Close() }
+
+// endLeg is a link or quiclink session: every end method a joint uses
+// (peerlink: EndAcker, endSyncer, receiptSyncer). Hidden behind
+// budgetChainLeg, an anonymous nf1 leg's joint half-closed it without
+// waiting for the far end and never held its end (lane QUICEND).
+type endLeg interface {
+	peerlink.ChainSession
+	peerlink.EndAcker
+	CloseWriteSync() error
+	CloseWriteSyncReceived(received func()) error
+}
+
+type budgetEndLeg struct {
+	endLeg
+	b *budget
+}
+
+func (l *budgetEndLeg) Read(p []byte) (int, error)  { return l.b.read(p) }
+func (l *budgetEndLeg) Write(p []byte) (int, error) { return l.b.write(p) }
+func (l *budgetEndLeg) Close() error                { l.b.close(); return l.endLeg.Close() }
+
+// Done is the leg's Done channel (peerlink's doneOf), nil when it has none.
+func (l *budgetEndLeg) Done() <-chan struct{} {
+	if d, ok := l.endLeg.(interface{ Done() <-chan struct{} }); ok {
+		return d.Done()
+	}
+	return nil
+}
