@@ -759,6 +759,7 @@ claim first and falls back to the next when a dial finds the agent gone.
 | `Prune(a)` | `NF1Agents`'s prune (`ipInventory.prune`, `Cache.DelIf` on no record) |
 | `Snap`, `Read(a)` | `NF1Agents`: `SInter` of the set, then `Get` of each member |
 | `Decide`, `Next1`, `Dial` | `NF1Agents` orders the members read newest claim (`Session.Since`) first; `openNF1`: no member, not served; else `AgentServices` and `OnwardWithRetry` in that order, the next on a failed dial |
+| `Answer` | `nf1Leg`'s `Answered`: the agent's own answer, or, its leg's link refusal or the connection's end, `NF1NotServed` (lane PIPERESET2) |
 | `Reset` | the open answered; the next open |
 
 Invariants (`NF1Claim.cfg`, two holders, one address holder, five claims,
