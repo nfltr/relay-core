@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/quic-go"
 	"github.com/nfltr/relay-core/core/directory"
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/grpcfactory"
@@ -72,6 +73,7 @@ const (
 	agentOneConn                       // every stream on its one connection, as agents before round 4
 	agentLinkFails                     // the agent link's connection cannot be opened (an HTTPS proxy)
 	agentQUIC                          // the agent link over QUIC (the relay listens on UDP too)
+	agentQUICCut                       // agentQUIC on one socket whose next write tunnelHarness.cutQUIC fails
 )
 
 // older reports whether ag stands for an agent from before per-session
@@ -90,7 +92,7 @@ func (s connectTCPStub) ConnectTCP(st pb.Dispatcher_ConnectTCPServer) error {
 		delete(md, dataplane.CreditHeader)
 		st = ctxStream{st, metadata.NewIncomingContext(st.Context(), md)}
 	}
-	if s.ag != agentCurrent && s.ag != agentLinkFails && s.ag != agentQUIC {
+	if s.ag != agentCurrent && s.ag != agentLinkFails && s.ag != agentQUIC && s.ag != agentQUICCut {
 		// Older agents never ask for the agent link.
 		md, _ := metadata.FromIncomingContext(st.Context())
 		md = md.Copy()
@@ -186,6 +188,10 @@ type tunnelHarness struct {
 	endPrimary chan struct{}
 	srv        *grpc.Server // the relay's gRPC server: its GracefulStop closes the port, as a drain does
 	stopQUIC   func()       // ends the QUIC agent link's serve ctx (Run's ctx: the drain's start)
+	// cutQUIC fails the agent's next QUIC write (agentQUICCut): quic-go
+	// drops that connection without a word to the relay, and the agent's
+	// link dials another.
+	cutQUIC func()
 }
 
 // startHarness starts the relay and the agent (run), and routes each
@@ -213,7 +219,7 @@ func startHarness(tb testing.TB, rtt time.Duration, old harnessRelay, ag harness
 		lis = d.DataPlaneListener(lis) // as server_run.go
 	}
 	var serveQUIC func(context.Context) error
-	if ag == agentQUIC {
+	if ag == agentQUIC || ag == agentQUICCut {
 		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
 			tb.Fatal(err)
@@ -241,8 +247,18 @@ func startHarness(tb testing.TB, rtt time.Duration, old harnessRelay, ag harness
 	case agentLinkFails:
 		dial.Data = func(context.Context) (net.Conn, error) { return nil, errors.New("proxied") }
 		dial.GRPC = dialRelay
-	case agentQUIC:
+	case agentQUIC, agentQUICCut:
 		dial.QUIC = &agent.QUICDialer{Host: "127.0.0.1", TLS: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // test-only self-signed relay cert
+		if ag == agentQUICCut {
+			pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+			if err != nil {
+				tb.Fatal(err)
+			}
+			cut := &cutPacketConn{PacketConn: pc}
+			h.cutQUIC = func() { cut.cut.Store(true) }
+			dial.QUIC.Transport = &quic.Transport{Conn: cut}
+			tb.Cleanup(func() { _ = dial.QUIC.Transport.Close() })
+		}
 		dial.Transport = agent.TransportQUIC
 		fallthrough
 	case agentCurrent, agentNoLink:
@@ -302,6 +318,19 @@ func startHarness(tb testing.TB, rtt time.Duration, old harnessRelay, ag harness
 		return len(h.d.All) > 0
 	}, func() string { return "the agent registered no stream" })
 	return h
+}
+
+// cutPacketConn fails its next write once cut.
+type cutPacketConn struct {
+	net.PacketConn
+	cut atomic.Bool
+}
+
+func (c *cutPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if c.cut.CompareAndSwap(true, false) {
+		return 0, errors.New("cut")
+	}
+	return c.PacketConn.WriteTo(p, addr)
 }
 
 func waitUntil(tb testing.TB, ok func() bool, msg func() string) {

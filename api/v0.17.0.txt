@@ -1,2 +1,6 @@
 Incompatible changes:
 - ./platform/metrics.PathBlob: removed
+- ./core/session.(*TCPDispatcher).ServesHTTP: removed
+Compatible changes:
+- ./core/session.(*TCPDispatcher).DialHTTP: added
+- ./core/session.(*TCPDispatcher).HTTPRoute: added

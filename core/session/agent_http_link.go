@@ -5,6 +5,7 @@ package session
 
 import (
 	"context"
+	"net"
 
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -23,11 +24,33 @@ func httpSessions(ctx context.Context) string {
 	return ""
 }
 
-// ServesHTTP reports whether agentID's primary TCP stream on this replica
-// serves HTTP sessions.
-func (d *TCPDispatcher) ServesHTTP(agentID string) bool {
+// HTTPRoute names the route of agentID's HTTP sessions here: its newest
+// primary stream's number (no other primary of this relay has it), 0 when
+// that primary serves no HTTP sessions or the agent has none here. A newer
+// primary changes it: the HTTP pool's key (spec/HTTPPool.tla Key).
+func (d *TCPDispatcher) HTTPRoute(agentID string) uint64 {
 	d.Mu.RLock()
 	defer d.Mu.RUnlock()
-	as := d.Streams[agentID]
-	return as != nil && as.http != ""
+	if as := d.Streams[agentID]; as != nil && as.http != "" {
+		return as.route
+	}
+	return 0
+}
+
+// DialHTTP opens an HTTP session to agentID. Its Route() is the route it
+// rides: the primary it was placed on (HTTPRoute's number then), 0 when
+// the agent has no stream here (the session goes to its replica).
+func (d *TCPDispatcher) DialHTTP(ctx context.Context, agentID string) (net.Conn, error) {
+	ep := TCPEndpoint{AgentID: agentID, TargetAddr: dataplane.HTTPSessionTarget}
+	as := d.agentStream(agentID)
+	if as == nil {
+		return d.DialAgent(ctx, agentID, ep.TargetAddr)
+	}
+	s, release, err := d.onwardLocal(ctx, ep, as)
+	if err != nil {
+		return nil, err
+	}
+	c := newDialedSession(ctx, s, release)
+	c.route = primaryOf(as).route
+	return c, nil
 }

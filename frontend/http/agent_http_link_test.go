@@ -77,8 +77,8 @@ func startAgentHTTPLeaf(t testing.TB, backend string, ag harnessAgent) (*tunnelH
 func TestAgentHTTPLinkServesRequests(t *testing.T) {
 	backend := startLinkHTTPBackend(t)
 	h, url := startAgentHTTPLink(t, backend.URL)
-	if !h.d.ServesHTTP(harnessAgentID) || slices.Contains(h.d.ConnectedAgentIDs(), harnessAgentID) {
-		t.Fatalf("serves http %v, tcp agents %v", h.d.ServesHTTP(harnessAgentID), h.d.ConnectedAgentIDs())
+	if !(h.d.HTTPRoute(harnessAgentID) != 0) || slices.Contains(h.d.ConnectedAgentIDs(), harnessAgentID) {
+		t.Fatalf("serves http %v, tcp agents %v", (h.d.HTTPRoute(harnessAgentID) != 0), h.d.ConnectedAgentIDs())
 	}
 	req, _ := http.NewRequest(http.MethodPost, url+"/echo", strings.NewReader("hello"))
 	req.Header.Set("Cookie", "rpc_session=secret; app=1")

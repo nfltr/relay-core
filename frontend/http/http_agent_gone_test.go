@@ -49,7 +49,7 @@ func linkLeaf(ag harnessAgent) goneLeaf {
 			context.AfterFunc(alive, stop)
 			_ = agent.RunTunnel(ctx, client, dial, ctx, agent.Tunnel{HTTP: handler}, logger)
 		}, func(context.Context, *session.TCPDispatcher, net.Conn) {})
-		waitUntil(t, func() bool { return h.d.ServesHTTP(harnessAgentID) }, func() string { return "the agent serves no HTTP sessions" })
+		waitUntil(t, func() bool { return (h.d.HTTPRoute(harnessAgentID) != 0) }, func() string { return "the agent serves no HTTP sessions" })
 		leaf := newAgentHTTP(h.d, slog.New(slog.DiscardHandler), testRelayCookie)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			r.Header.Set(session.AgentIDKey, harnessAgentID)

@@ -10,6 +10,26 @@ changes listed (from the first tag on).
 
 ## [Unreleased] (v0.18.0: the API changes since v0.17.0)
 
+### Changed (the HTTP pool follows a replaced primary or QUIC connection, lane HTTPPOOL)
+
+- `TCPDispatcher.ServesHTTP(agentID) bool` is replaced by
+  `HTTPRoute(agentID) uint64` (0: no HTTP sessions here; otherwise the
+  agent's newest primary's number); migration: `ServesHTTP(id)` is
+  `HTTPRoute(id) != 0`. New: `DialHTTP(ctx, agentID)`, an HTTP session
+  whose `Route()` names the primary it rides.
+- The relay's HTTP keep-alive pool is one per route, not per agent: after
+  a newer primary of the agent registers (a restart, a takeover), the next
+  request goes to it, never on a pooled session of the one it replaced; a
+  session dialled across the change is closed after its request.
+- A QUIC agent-link connection retires the token's older QUIC
+  connections (closed, `agent_link_connections_total{result="replaced"}`):
+  the agent holds one, so an older one is gone on its side; its sessions,
+  pooled HTTP ones too, end at once instead of at its 15 s liveness. Not
+  while the relay drains; TCP connections grow side by side as before.
+  spec/HTTPPool.tla (mutants `pool-by-agent`, `no-retire`,
+  `no-single-use`, `retire-any`); `TestAgentHTTPLinkNewPrimaryTakesTheNextRequest`,
+  `TestAgentHTTPLinkQUICReplacedTakesTheNextRequest` (both failed before).
+
 ### Changed (end acknowledgements on QUIC, lane ENDACKTRUTH)
 
 - The QUIC agent link offers `quiclink.ALPNEndAck` first: with an agent

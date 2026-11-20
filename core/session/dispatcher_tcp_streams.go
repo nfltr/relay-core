@@ -122,6 +122,9 @@ type tcpAgentStream struct {
 	// stream (dataplane.HTTPSessionsHeader): "" none, "1" beside raw TCP,
 	// "only" (agent.HTTPSessionsOnly) without (agent_http_link.go).
 	http string
+	// route names a primary stream on this relay, no other's
+	// (HTTPRoute: the HTTP pool's key).
+	route uint64
 	// answers: the agent answers opens that ask (dataplane.AnswerHeader),
 	// set at registration of a primary stream.
 	answers bool
@@ -396,6 +399,7 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 	as.shares = sharesEnforcedBy(stream.Context())
 	as.moves = advertisesMove(stream.Context())
 	as.http = httpSessions(stream.Context())
+	as.route = d.nextRoute.Add(1)
 	as.answers = firstIncoming(stream.Context(), dataplane.AnswerHeader) == "1"
 	as.endAck = asksEndAck(stream.Context())
 	as.cr = grpcCredit(stream.Context(), as.enqueue)

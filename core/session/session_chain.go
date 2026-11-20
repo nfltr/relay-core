@@ -351,7 +351,11 @@ type dialedSession struct {
 	once    sync.Once
 	release func()
 	stop    func() bool
+	route   uint64 // DialHTTP's: the primary it rides
 }
+
+// Route is the route the session rides (DialHTTP); 0: none named.
+func (d *dialedSession) Route() uint64 { return d.route }
 
 func newDialedSession(ctx context.Context, s peerlink.Session, release func()) *dialedSession {
 	d := &dialedSession{SessionConn: SessionConn{Session: s}, release: release}

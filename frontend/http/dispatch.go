@@ -109,7 +109,7 @@ func (ing *Ingress) dispatch(w http.ResponseWriter, r *http.Request) {
 		// The agent's owner pays for the request, whoever sent it; a
 		// share's visit is metered under the share too (frontend.Share).
 		share := frontend.Share(r.Context())
-		if ing.link != nil && ing.core.TCPDispatcher.ServesHTTP(agentID) {
+		if ing.link != nil && ing.core.TCPDispatcher.HTTPRoute(agentID) != 0 {
 			metrics.RecordAgentHTTPRequest("link")
 			meter := ing.core.Dispatcher.OpenShareMeter(metrics.PathHTTPLink, agentID, share)
 			defer meter.End()

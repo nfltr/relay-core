@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/http/httputil"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,17 +28,20 @@ import (
 	"github.com/nfltr/relay-core/core/frontend"
 	"github.com/nfltr/relay-core/core/session"
 	"github.com/nfltr/relay-core/platform/httpbody"
-	"github.com/nfltr/relay/proto/wire/dataplane"
 	"github.com/spf13/viper"
 )
 
-// agentHTTPHost is the transport's host for an agent: one keep-alive pool
-// per agent, whatever characters its id has.
+// agentHTTPHost ends the transport's host for an agent's route,
+// <hex(agent id)>.<route>.agent: one keep-alive pool per route
+// (TCPDispatcher.HTTPRoute), whatever characters the id has, so a session
+// of a primary the agent replaced is never taken again
+// (spec/HTTPPool.tla Key).
 const agentHTTPHost = ".agent"
 
 // agentHTTP is the leaf that serves a request to an agent on an HTTP
 // session.
 type agentHTTP struct {
+	d      *session.TCPDispatcher
 	rp     *httputil.ReverseProxy
 	logger *slog.Logger
 	// maxBody is http.server.max_request_body_size, read once.
@@ -49,7 +53,11 @@ type agentHTTP struct {
 // agentHTTPState is a request's state between ServeHTTP and the proxy's
 // hooks.
 type agentHTTPState struct {
-	agentID  string
+	agentID string
+	// route is the agent's route the request read (HTTPRoute), its pool's
+	// key; conn the session it got (GotConn).
+	route    uint64
+	conn     net.Conn
 	at       time.Time
 	idle     *time.Timer
 	timeout  time.Duration
@@ -66,13 +74,14 @@ func newAgentHTTP(d *session.TCPDispatcher, logger *slog.Logger, relayCookie fun
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			host, _, _ := net.SplitHostPort(addr)
-			id, err := hex.DecodeString(strings.TrimSuffix(host, agentHTTPHost))
+			idHex, _, _ := strings.Cut(host, ".")
+			id, err := hex.DecodeString(idHex)
 			if err != nil {
 				return nil, err
 			}
 			// The session outlives the dial: it is the pool's keep-alive
 			// connection, closed by the transport.
-			return d.DialAgent(context.WithoutCancel(ctx), string(id), dataplane.HTTPSessionTarget)
+			return d.DialHTTP(context.WithoutCancel(ctx), string(id))
 		},
 		MaxIdleConnsPerHost: 64,
 		// Below the agent's idle timeout (agent e2eeIdleTimeout, 120 s): the
@@ -80,13 +89,13 @@ func newAgentHTTP(d *session.TCPDispatcher, logger *slog.Logger, relayCookie fun
 		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: true,
 	}
-	a := &agentHTTP{logger: logger, maxBody: viper.GetInt64("http.server.max_request_body_size"), relayCookie: relayCookie}
+	a := &agentHTTP{d: d, logger: logger, maxBody: viper.GetInt64("http.server.max_request_body_size"), relayCookie: relayCookie}
 	a.rp = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			st := pr.In.Context().Value(agentHTTPStateKey{}).(*agentHTTPState)
 			out := pr.Out
 			out.URL.Scheme = "http"
-			out.URL.Host = hex.EncodeToString([]byte(st.agentID)) + agentHTTPHost
+			out.URL.Host = hex.EncodeToString([]byte(st.agentID)) + "." + strconv.FormatUint(st.route, 10) + agentHTTPHost
 			// What the gRPC path never forwarded (prepareAgentRequest).
 			out.Header = withoutRelayCookies(out.Header, a.relayCookie)
 			for name, skip := range SkipHeaders {
@@ -153,7 +162,8 @@ func (a *agentHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	timeout := viper.GetDuration("default.request.timeout")
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	st := &agentHTTPState{agentID: r.Header.Get(session.AgentIDKey), at: time.Now(), timeout: timeout}
+	agentID := r.Header.Get(session.AgentIDKey)
+	st := &agentHTTPState{agentID: agentID, route: a.d.HTTPRoute(agentID), at: time.Now(), timeout: timeout}
 	// timeout bounds each wait for the agent (its response to start, or
 	// its next body read), as on the gRPC path, not the whole response.
 	st.idle = time.AfterFunc(timeout, func() {
@@ -168,10 +178,14 @@ func (a *agentHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// holds to a slow backend: each grant of the session is progress
 	// (TestUploadDrainToSlowBackendIsProgressLink).
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		st.mu.Lock()
+		st.conn = info.Conn
+		st.mu.Unlock()
 		if g, ok := info.Conn.(interface{ OnGrant(func(int)) bool }); ok {
 			g.OnGrant(st.granted)
 		}
 	}})
+	defer st.closeOffRoute()
 	r = r.WithContext(context.WithValue(ctx, agentHTTPStateKey{}, st))
 	if a.maxBody > 0 && r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, a.maxBody)
@@ -199,6 +213,18 @@ func (st *agentHTTPState) respond() {
 	st.mu.Lock()
 	st.responded = true
 	st.mu.Unlock()
+}
+
+// closeOffRoute closes the request's session when it rides another route
+// than its pool's key (its dial raced a newer primary): it is never pooled
+// under a key it does not ride (spec/HTTPPool.tla Respond).
+func (st *agentHTTPState) closeOffRoute() {
+	st.mu.Lock()
+	c := st.conn
+	st.mu.Unlock()
+	if r, ok := c.(interface{ Route() uint64 }); ok && r.Route() != st.route {
+		_ = c.Close()
+	}
 }
 
 func (st *agentHTTPState) didTimeOut() bool {

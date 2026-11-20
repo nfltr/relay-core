@@ -105,6 +105,7 @@ type agentLink struct {
 	Mu       sync.Mutex
 	Conns    map[string]map[io.Closer]linkConn // by token: each connection, its transport and generation
 	sessions map[string]int                    // by token: the sessions open on its link (carriesSessions)
+	draining bool                              // drain began: a bind retires no connection
 	grace    map[string]*linkGrace             // by token: the live connections of an ended, unresumed primary (primaryEnded)
 	graceFor time.Duration                     // agentLinkResumeGrace; a test's own
 	offer    metadata.MD                       // the response header's offer, made at the first ask
@@ -127,11 +128,12 @@ func (l *agentLink) drain() {
 			deadline = l.d.DrainBy()
 		}
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
-		var wg sync.WaitGroup
-		wg.Go(func() { _ = l.tcp.Drain(ctx) })
 		l.Mu.Lock()
 		q := l.quic
+		l.draining = true // before any GOAWAY: an agent redials on one
 		l.Mu.Unlock()
+		var wg sync.WaitGroup
+		wg.Go(func() { _ = l.tcp.Drain(ctx) })
 		if q != nil {
 			wg.Go(func() { _ = q.Drain(ctx) })
 		}
@@ -311,7 +313,13 @@ func (l *agentLink) verify(token string) (*tcpAgentStream, error) {
 var errAgentLinkEnded = errors.New("the agent link's primary stream ended")
 
 // bind records an accepted connection of token's primary and returns its
-// name on the Link; it wakes the sessions waiting for the link.
+// name on the Link; it wakes the sessions waiting for the link. A QUIC
+// connection retires the token's other QUIC connections: the agent holds
+// one (its quiclink Node dials another only once its own is unusable), so
+// an older one is gone on the agent's side, its end unseen here (a closed
+// socket, a lost close); closing it ends its sessions, the HTTP pool's
+// idle ones too, now rather than at its liveness (spec/HTTPPool.tla Bind).
+// TCP connections of a token grow side by side; a drain retires nothing.
 func (l *agentLink) bind(token string, c io.Closer, transport string) (string, error) {
 	l.d.Mu.RLock()
 	p := l.d.bound[token]
@@ -334,6 +342,14 @@ func (l *agentLink) bind(token string, c io.Closer, transport string) (string, e
 		m = map[io.Closer]linkConn{}
 		l.Conns[token] = m
 	}
+	var retired []io.Closer
+	if transport == dataplane.AgentLinkQUIC && !l.draining {
+		for o, oc := range m {
+			if oc.Transport == dataplane.AgentLinkQUIC {
+				retired = append(retired, o) // its end unbinds it (quicPeer)
+			}
+		}
+	}
 	m[c] = linkConn{Transport: transport}
 	if traceOn && len(m) == 1 {
 		traceHConn(token, true)
@@ -341,6 +357,11 @@ func (l *agentLink) bind(token string, c io.Closer, transport string) (string, e
 	asked, count := u.asked, u.asked != "" && !u.counted
 	u.counted = true
 	l.Mu.Unlock()
+	for _, o := range retired {
+		_ = o.Close()
+		metrics.RecordAgentLinkConnection(transport, "replaced")
+		l.d.logger.Info("agent link: a new QUIC connection replaced the agent's older one", "agent_id", p.agent)
+	}
 	metrics.RecordAgentLinkConnection(transport, "bound")
 	if count {
 		metrics.RecordAgentLinkTransport(asked, transport)

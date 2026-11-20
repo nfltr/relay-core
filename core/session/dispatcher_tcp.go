@@ -140,6 +140,8 @@ type TCPDispatcher struct {
 	// (the agent SDK's tcpStreamsHeader); new sessions are spread over them.
 	All      map[string][]*tcpAgentStream
 	nextPick atomic.Uint64
+	// nextRoute numbers the primary streams (tcpAgentStream.route).
+	nextRoute atomic.Uint64
 	// bound maps a primary stream's token to it (tcpBindHeader).
 	bound   map[string]*tcpAgentStream
 	AuxIdle time.Duration // tcpAuxIdle; tests shorten it
