@@ -18,7 +18,7 @@ import (
 // observability plan names (nfltr's data-path guard reads it too).
 func TestTransferPathsClosed(t *testing.T) {
 	want := []string{"http_link", "http_grpc", "sni", "connect", "ssh", "tcp_link", "tcp_quic", "tcp_dataconn",
-		"tcp_grpc", "a2a", "replica", "p2p_relay", "mailbox", "blob", "accounts"}
+		"tcp_grpc", "a2a", "replica", "p2p_relay", "mailbox", "", "accounts"}
 	if got := PathNames(); !slices.Equal(got, want) {
 		t.Fatalf("PathNames() = %v, want %v", got, want)
 	}
@@ -26,6 +26,10 @@ func TestTransferPathsClosed(t *testing.T) {
 		if p.String() != want[p] {
 			t.Errorf("Path(%d) = %q, want %q", p, p, want[p])
 		}
+	}
+	// A retired path ("") has no series.
+	if n, all := testutil.CollectAndCount(transfers), 6*(len(want)-1); n != all {
+		t.Errorf("the scrape-time families have %d series, want %d (6 per path that is not retired)", n, all)
 	}
 }
 

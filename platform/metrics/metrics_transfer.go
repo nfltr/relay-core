@@ -40,20 +40,20 @@ const (
 	PathReplica                 // a session another replica carries
 	PathP2PRelay                // p2p relayed through the relay
 	PathMailbox                 // the mailbox service
-	PathBlob                    // the blob service
+	_                           // retired with the blob service (lane BLOBREST): no symbol, no label; kept, the order is append only
 	PathAccounts                // the accounts service
 	numPaths
 )
 
 var pathNames = [numPaths]string{
 	"http_link", "http_grpc", "sni", "connect", "ssh", "tcp_link", "tcp_quic", "tcp_dataconn",
-	"tcp_grpc", "a2a", "replica", "p2p_relay", "mailbox", "blob", "accounts",
+	"tcp_grpc", "a2a", "replica", "p2p_relay", "mailbox", "", "accounts",
 }
 
-// String is the path's label value.
+// String is the path's label value ("" for a retired path, which has no series).
 func (p Path) String() string { return pathNames[p] }
 
-// PathNames is every Path's label value, in order.
+// PathNames is every Path's label value, in order ("" for a retired path).
 func PathNames() []string { return pathNames[:] }
 
 // The errors after open (TransferError's reason).
@@ -305,6 +305,9 @@ func (c *transferCollector) Collect(ch chan<- prometheus.Metric) {
 	metered := meteredBytes()
 	for p := range numPaths {
 		name := pathNames[p]
+		if name == "" {
+			continue // retired
+		}
 		s := st[p]
 		to := float64(c.bytesN[p][0].Load() + s.BytesOut + metered[p][0])
 		from := float64(c.bytesN[p][1].Load() + s.BytesIn + metered[p][1])

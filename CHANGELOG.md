@@ -8,7 +8,20 @@ and every such change is listed here with its migration; a patch version
 (v0.N.M) does not change it. `make check-api` holds each release to the
 changes listed (from the first tag on).
 
-## [Unreleased]
+## [Unreleased] (v0.18.0: the API changes since v0.17.0)
+
+### Removed (the blob service's leftovers, lane BLOBREST)
+
+- The `blob_store.*` and `blobs.*` settings (`blobs.service`,
+  `blobs.command`): the blob service left relay-server (lane BLOBDEL). A
+  relay started with one of these flags refuses the unknown flag; drop it
+  (an environment variable such as `BLOB_STORE_TYPE` is ignored).
+- `metrics.PathBlob`: its slot in the `Path` order stays (append only), with
+  no label and no series. `PathNames()` holds `""` for it. Migration: none
+  (no caller outside the module; relay-server's `usagemeter.Units()` skips
+  a `""` path).
+
+## [v0.5.0 - v0.17.0] (released; not yet split by tag)
 
 ### Removed (agent data connections retired, lane LINKV013)
 

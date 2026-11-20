@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package services holds what the relay and its service agents share: a
-// stored feature (blobs, ...)
-// runs as its own process, connected to the relay as an ordinary agent, and
+// stored feature (the mailbox, accounts) runs as its own process, connected to the relay as an ordinary agent, and
 // the relay carries a route's requests to it over a session it opens with
 // Core.Open. The service never sees the caller's credential: the relay
 // authenticates it and asserts its owner in CallerHeader.

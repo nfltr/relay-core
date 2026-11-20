@@ -178,24 +178,6 @@ func SetDefaultFlags() {
 	_ = flag.String("redis.endpoint", "", "external Redis hostname (overrides cache.redis_url)")
 	_ = flag.String("redis.port", "6379", "external Redis port (used with redis.endpoint)")
 
-	// ── Blob store (nfltr.blob.v1: /api/v1/blobs) ────────────────────────
-	// The blob service holds the blobs: the
-	// relay runs it as its own child process with these blob_store.*
-	// settings (blobs.command), or (blobs.service) carries the routes to
-	// service agents that run apart.
-	_ = flag.String("blob_store.type", "", "blob store backend: filesystem (single relay) or s3 (replicas sharing a bucket); the relay runs the blob service as its own child process on it; unset: no child (see blobs.service)")
-	_ = flag.String("blob_store.dir", "", "filesystem blob store directory (blob_store.type=filesystem)")
-	_ = flag.String("blob_store.s3.endpoint", "", "S3-compatible endpoint host[:port] (blob_store.type=s3)")
-	_ = flag.String("blob_store.s3.bucket", "", "S3 bucket holding blobs; created when absent")
-	_ = flag.String("blob_store.s3.region", "", "S3 region (optional)")
-	_ = flag.String("blob_store.s3.access_key", "", "S3 access key; set via BLOB_STORE_S3_ACCESS_KEY; empty uses the AWS/MinIO env and instance-metadata chain")
-	_ = flag.String("blob_store.s3.secret_key", "", "S3 secret key; set via BLOB_STORE_S3_SECRET_KEY, never on the command line")
-	_ = flag.Bool("blob_store.s3.insecure", false, "use plain HTTP to the S3 endpoint (in-cluster MinIO only)")
-	_ = flag.Int64("blob_store.max_object_bytes", 0, "largest blob an upload may declare; 0 keeps the default (1 GiB). Uploads travel in parts of at most 64 MiB regardless")
-	_ = flag.Duration("blob_store.retention", 7*24*time.Hour, "how long a blob is kept after its owner last put it, and the longest read grant; must be positive")
-	_ = flag.String("blobs.service", "", "the relay: blob service agents the /api/v1/blobs routes go to, <owner>/<agent>[,<owner>/<agent>...] (each declares the tcp service blobs); excludes blob_store.type")
-	_ = flag.String("blobs.command", "nfltr-blobs", "the blob service binary the relay runs as its child (blob_store.type): a path, or a name looked up next to this binary, then on PATH")
-
 	// ── TLS ─────────────────────────────────────────────────────────────
 	_ = flag.Bool("tls.enable", false, "enable TLS on all external listeners (gRPC, HTTP proxy)")
 	_ = flag.String("tls.cert_file", "", "path to PEM-encoded TLS certificate")

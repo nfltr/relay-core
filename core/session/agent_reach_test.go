@@ -321,7 +321,7 @@ func TestOpenTellsTheAgentItsCaller(t *testing.T) {
 }
 
 // TestServiceConnReachesItsAgent: the relay's own session to a service
-// agent (ServiceConn: the mailbox, blob and accounts routes) is the
+// agent (ServiceConn: the mailbox and accounts routes) is the
 // agent's machine of its owner's account, which reaches its own agents
 // under any policy that keeps a machine's own group; a ref the directory
 // records no owner for reaches nothing.

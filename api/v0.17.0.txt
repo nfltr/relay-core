@@ -1,0 +1,2 @@
+Incompatible changes:
+- ./platform/metrics.PathBlob: removed
