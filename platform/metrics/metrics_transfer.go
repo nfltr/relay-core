@@ -34,7 +34,7 @@ const (
 	PathSSH                     // nfltr ssh-proxy / shell
 	PathTCPLink                 // a session on the agent link over link/TCP
 	PathTCPQUIC                 // a session on the agent link over QUIC
-	PathTCPDataConn             // a session on a link data connection
+	PathTCPDataConn             // retired with agent data connections (lane LINKV013): never recorded; kept, the order is append only
 	PathTCPGRPC                 // a session on the agent's gRPC frame streams
 	PathA2A                     // an agent-to-agent call
 	PathReplica                 // a session another replica carries

@@ -21,7 +21,7 @@ import (
 // where the directory points: the new connection). Before: the stream ended
 // at its next renewal and cut every open session.
 func TestTCPTakeoverOnAnotherReplicaLetsOpenSessionsFinish(t *testing.T) {
-	for name, ag := range map[string]harnessAgent{"agent link": agentCurrent, "data connections": agentDataConns, "one connection": agentOneConn} {
+	for name, ag := range map[string]harnessAgent{"agent link": agentCurrent, "data connections": agentNoLink, "one connection": agentOneConn} {
 		t.Run(name, func(t *testing.T) { testTCPTakeoverOnAnotherReplica(t, ag) })
 	}
 }

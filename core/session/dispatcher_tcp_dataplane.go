@@ -3,19 +3,17 @@
 
 package session
 
-// The thin data plane (internal/platform/dataplane): a busy agent's further
-// TCP tunnel streams on connections of their own that carry session frames
-// without gRPC or HTTP/2. They arrive on the gRPC port, are told apart from
-// gRPC connections by their first bytes, and are bound to the agent's
-// primary ConnectTCP stream with its token (tcpBindHeader), as auxiliary
-// gRPC connections are.
+// The gRPC port's sniff: a connection's first bytes tell the agent link
+// (dataplane.AgentLinkMagic) from gRPC. Agent data connections (a link
+// hello here, bound to a primary with its token) were retired in lane
+// LINKV013 (nfltr docs/decisions/link-data-connections-retired-2026-11-20.md):
+// a link hello is refused (refuseDataConn).
 
 import (
 	"context"
 	"crypto/tls"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -29,13 +27,8 @@ import (
 	"github.com/nfltr/relay-core/platform/metrics"
 )
 
-// A ConnectTCP response header says the relay takes data connections, one
-// value per version (dataplane.Header, dataplane.Versions: "2" only since
-// link v0.5.0 dropped version 1). An agent that speaks none of them binds
-// auxiliary gRPC connections.
-
-// TCPDataWindow is the relay's window per session on a data connection:
-// what it queues for one session's client at most, and so how much the
+// TCPDataWindow is the relay's window per session on the agent link and a
+// /connect data connection: what it queues for one session's client at most, and so how much the
 // agent may send it unacknowledged. A session moves at most a window per
 // round trip of the whole pipeline (agent -> relay -> client conn); 1 MiB
 // (tcpSessionQueueBytes) measured iperf -P1 at -24% in docker, where the
@@ -50,26 +43,24 @@ const TCPDataWindow = 4 << 20
 const tcpGRPCWindow = 8 << 20
 
 // DataPlaneSniffTimeout bounds the TLS handshake and first bytes of a
-// connection to the gRPC port before it is handed to gRPC or served as a
-// data connection.
+// connection to the gRPC port before it is handed to gRPC or the agent
+// link.
 const DataPlaneSniffTimeout = 20 * time.Second
 
 // tcpFrameStream is what the dispatcher needs of an agent stream: a
-// ConnectTCP gRPC stream or a data connection.
+// ConnectTCP gRPC stream.
 type tcpFrameStream interface {
 	Send(*pb.TCPData) error
 	Recv() (*pb.TCPData, error)
 }
 
 // DataPlaneListener wraps the gRPC listener: gRPC connections come out of
-// Accept as before, data connections are served by d. From then on d offers
-// agents the data plane (dataplane.Header).
+// Accept as before, agent-link connections are served by d.
 func (d *TCPDispatcher) DataPlaneListener(inner net.Listener) net.Listener {
 	l := &dataPlaneListener{Listener: inner, d: d, conns: make(chan net.Conn), done: make(chan struct{})}
 	d.Link = newAgentLink(d, inner.Addr())
 	go func() { _ = d.Link.tcp.Serve(refuseAgentSessions) }()
 	go l.acceptLoop()
-	d.dataPlane.Store(true)
 	return l
 }
 
@@ -110,9 +101,9 @@ func (l *dataPlaneListener) acceptLoop() {
 	}
 }
 
-// route reads a connection's first bytes: a data connection's Magic, or
-// anything else (an HTTP/2 preface), which goes to gRPC with the bytes
-// replayed.
+// route reads a connection's first bytes: the agent link's magic, a link
+// hello (refused), or anything else (an HTTP/2 preface), which goes to
+// gRPC with the bytes replayed.
 func (l *dataPlaneListener) route(c net.Conn) {
 	_ = c.SetReadDeadline(time.Now().Add(DataPlaneSniffTimeout))
 	head := make([]byte, len(dataplane.Magic))
@@ -121,7 +112,7 @@ func (l *dataPlaneListener) route(c net.Conn) {
 		return
 	}
 	if link.IsHello(head) {
-		l.d.serveDataConn(&PrefixConn{Conn: c, Prefix: head})
+		l.d.refuseDataConn(&PrefixConn{Conn: c, Prefix: head})
 		return
 	}
 	if string(head) == dataplane.AgentLinkMagic {
@@ -140,85 +131,29 @@ func (l *dataPlaneListener) route(c net.Conn) {
 	}
 }
 
-// serveDataConn binds a data connection, whose Magic c replays, to the
-// primary stream its token names, and serves it as an auxiliary stream of
-// that agent until it ends. It speaks link version 2, with the agent's
-// liveness; a version-1 hello (an agent before nfltr v2.0.0) gets the
-// version reply and is counted (data_connections_total). The token
-// is the connection's only credential: it is random, sent only in the
-// primary's response header to the authenticated agent, and valid while
-// the primary lives. Everything about the agent (identity, share policies)
-// comes from the primary.
-func (d *TCPDispatcher) serveDataConn(c net.Conn) {
+// refuseDataConn answers a link hello, whose magic c replays, with link's
+// refusal (reply status 1, the dialer's ErrRefused) and closes it: agent
+// data connections are retired, and the relay never offers them.
+func (d *TCPDispatcher) refuseDataConn(c net.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), DataPlaneSniffTimeout)
 	defer cancel()
-	lc, id, err := link.Server(ctx, c, link.Config{
-		Window: TCPDataWindow, Auth: bindTokens{d}, Hop: true, // its sessions are joined to agents': an end is acknowledged once the agent's side took it
-		Observer: dataConnObserver{Observer: metrics.TransferObserver(metrics.PathTCPDataConn, false), logger: d.logger},
-	})
-	if err != nil {
-		var ve *link.VersionError
-		if errors.Is(err, link.ErrVersion) && !errors.As(err, &ve) { // a version-1 hello
-			metrics.RecordDataConnection(1, "agent")
-		}
-		d.logger.Debug("tcp data connection refused", "remote", c.RemoteAddr(), "error", err)
-		_ = c.Close()
-		return
-	}
-	metrics.RecordDataConnection(lc.Version(), "agent")
-	defer metrics.TrackTransferConn(metrics.PathTCPDataConn, lc.Stats)()
-	dc := dataplane.Wrap(lc)
-	defer dc.Close() //nolint:errcheck
-	// Bound once the reply went out: a session placed here meanwhile would
-	// find no connection. A primary that ended meanwhile, or took its last
-	// auxiliary stream, ends this one.
-	as, err := d.bindAux(id.Subject, id.Method, dc, dc.Credit(), false)
-	if err != nil {
-		d.logger.Debug("tcp data connection not bound", "agent_id", id.Subject, "error", err)
-		return
-	}
-	d.logger.Debug("agent bound a tcp data connection", "agent_id", id.Subject, "version", dc.Version())
-	_ = d.serveAux(id.Subject, as, dc)
+	_, _, err := link.Server(ctx, c, link.Config{Auth: retiredDataConns{}})
+	d.logger.Debug("tcp data connection refused", "remote", c.RemoteAddr(), "error", err)
+	_ = c.Close()
 }
 
-// bindTokens verifies a data connection's bind token: one a primary
-// stream of this relay issued. The identity carries the agent (Subject)
-// and the token (Method) for bindAux.
-type bindTokens struct{ d *TCPDispatcher }
+// retiredDataConns refuses every data connection's credential.
+type retiredDataConns struct{}
 
-func (bindTokens) Hello(context.Context, tls.ConnectionState) (byte, []byte, error) {
-	return 0, nil, errors.New("the relay does not dial data connections")
+func (retiredDataConns) Hello(context.Context, tls.ConnectionState) (byte, []byte, error) {
+	return 0, nil, errDataConnsRetired
 }
 
-func (b bindTokens) Verify(_ context.Context, _ tls.ConnectionState, method byte, payload []byte) (link.Identity, error) {
-	if method != link.MethodToken {
-		return link.Identity{}, errors.New("a data connection binds with a token")
-	}
-	b.d.Mu.RLock()
-	defer b.d.Mu.RUnlock()
-	p := b.d.bound[string(payload)]
-	if p == nil {
-		return link.Identity{}, errors.New("no tcp stream of this agent to bind to")
-	}
-	if p.aux >= tcpAgentStreams-1 {
-		return link.Identity{}, errors.New("the agent binds no more auxiliary tcp connections")
-	}
-	return link.Identity{Method: string(payload), Subject: p.agent}, nil
+func (retiredDataConns) Verify(context.Context, tls.ConnectionState, byte, []byte) (link.Identity, error) {
+	return link.Identity{}, errDataConnsRetired
 }
 
-// dataConnObserver logs and counts a data connection the link ended
-// because its agent fell silent (version 2 liveness).
-type dataConnObserver struct {
-	link.Observer // its ABORTs (its credit waits are in its Stats)
-	logger        *slog.Logger
-}
-
-func (o dataConnObserver) ConnDown(id link.Identity, err error) {
-	if errors.Is(err, link.ErrDeadPeer) {
-		o.logger.Warn("tcp data connection: agent silent past its liveness", "agent_id", id.Subject)
-		metrics.TransferError(metrics.PathTCPDataConn, metrics.TransferDeadPeer)
-	}
-}
+var errDataConnsRetired = errors.New("data connections are retired: update nfltr")
 
 // grpcCredit is a gRPC stream's per-session credit when its agent asked
 // for it (dataplane.CreditHeader in its request metadata, its window), nil
@@ -254,8 +189,8 @@ func grpcCreditFrame(cr *link.Credit, f *pb.TCPData) error {
 	return nil
 }
 
-// isSessionData reports whether f carries a session's data, which a data
-// connection sends only on credit (control frames carry none).
+// isSessionData reports whether f carries a session's data, which a
+// stream with credit sends only on credit (control frames carry none).
 func isSessionData(f *pb.TCPData) bool {
 	return len(f.GetData()) > 0 && !strings.HasPrefix(f.GetSessionId(), "_")
 }

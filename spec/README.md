@@ -24,8 +24,10 @@ The agent half is read from relay `client/agent` (`tcp.go`,
 recorder there (`TraceHandoffAgent.tla`, "Agent-side Handoff traces").
 
 Out of scope, each covered elsewhere: the bytes of a session on the agent
-link or on a data connection (link's own `spec/Link.tla`: a data
-connection is a link v2 connection, `dataplane.Conn`); the replicas and
+link (link's own `spec/Link.tla`; agent data connections, link v2
+connections too, were retired in lane LINKV013, nfltr
+`docs/decisions/link-data-connections-retired-2026-11-20.md`: no spec
+modelled more of them than link's guarantees); the replicas and
 the directory across replicas (relay-server `spec/Replicas.tla`; the
 records' own semantics are `Directory.tla` here); revocation (relay-server
 `spec/Revocation.tla`); `client/handoff`, which hands a gRPC-only loop's
@@ -212,7 +214,6 @@ sessions in three places and models them only by these guarantees:
 | where | which guarantees | spec |
 |---|---|---|
 | sessions on the agent link (`agentLink.open`, `ServeLinkTCP`, `peerlink.Join`) | a connection's end ends its sessions `lost` (`GConn`: Handoff's `cut`); an open either opens or is refused before any byte (`GSessions`); a dead link connection is detected within Interval + Timeout + 2 x Late, a live one never (link `Liveness.tla`: Handoff's `Silent`) | `Handoff.tla` (`LinkDrop`, `Silent`) |
-| bytes of a session on a data connection (`dataplane.Conn`, link v2) | ordered, credited, half close, typed ends (`GWrites`, `GReads`, `GEnds`) | none here: link's |
 | AgentLink's frame streams | none: a frame stream is gRPC, not a link session; it uses link's `Credit` (modelled in `AgentLink.tla`'s `cr`, `Thr`: the same algorithm as link's `Link.tla`) | `AgentLink.tla` refines the interface (below) |
 
 `AgentLink.tla` does not run on link sessions: it builds sessions of its
@@ -1676,8 +1677,8 @@ acknowledgement, and `inproc-enqueue-blocks`).
      acked session's id), sent only on a gRPC frame stream whose both
      sides announced it in `EndAckHeader` (`x-nfltr-tcp-end-ack: 1`): the
      agent in its ConnectTCP request metadata, the relay in its response
-     header (`RegisterStream`, `RegisterAuxStream`). A data connection or
-     the agent link never carries it: link ends its sessions itself
+     header (`RegisterStream`, `RegisterAuxStream`). The agent link never
+     carries it: link ends its sessions itself
      (link `spec/Link.tla`).
    - Ordering: a side that takes the peer's half close of a session it
      has not closed whole (relay `Dispatch` -> `peerClosedWrite`, agent
@@ -1909,8 +1910,9 @@ acknowledgement, and `inproc-enqueue-blocks`).
     for a normal `inProcConn.Close`, which the agent could not tell apart.
     Wire: `TCPData.abort` (field 11, github.com/nfltr/relay proto): a
     whole close that says the session failed; on a link leg it is link's
-    reset (`SendReset`, CLOSE code 2), which `dataplane.Conn.Recv` reads
-    back as `abort`. The relay sets it when the client's connection fails
+    reset (CLOSE code 2), which the link peer reads back as a reset (the
+    agent data connection's `dataplane.Conn.Recv`, retired in lane
+    LINKV013, read it as `abort`). The relay sets it when the client's connection fails
     to read or write (`handleLocalConn`, `pumpToAgent`) and on a stall
     reset (`resetSession`); `inProcConn.Close` stays a close. The agent
     (`closeFrame`) resets its target after what is queued (an RST, also
@@ -1923,7 +1925,7 @@ acknowledgement, and `inproc-enqueue-blocks`).
     (in `make spec`; 110,149 distinct states with `Refines`), mutant
     `relay-abort-as-eof`, witness `WitnessRelayAbort`. Guards: relay
     `TestTCPTunnelRelayAbortResetsTarget` (client/agent),
-    `TestFramesRoundTripV2` (dataplane), relay-core
+    relay-core
     `TestTCPTunnelClientResetAbortsAgentSession`.
 
 Findings 16-22 come from an independent review of `Handoff.tla` and

@@ -66,7 +66,7 @@ func TestTransferFamiliesPerTransport(t *testing.T) {
 	}{
 		{"tcp_link", relayCurrent, agentCurrent, []string{"tcp_link"}},
 		{"tcp_quic", relayCurrent, agentQUIC, []string{"tcp_quic"}},
-		{"tcp_dataconn", relayCurrent, agentDataConns, []string{"tcp_dataconn", "tcp_grpc"}},
+		{"tcp_dataconn", relayCurrent, agentNoLink, []string{"tcp_dataconn", "tcp_grpc"}},
 		{"tcp_grpc", relayStreamsOnly, agentCurrent, []string{"tcp_grpc"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

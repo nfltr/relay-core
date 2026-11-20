@@ -52,7 +52,7 @@ func TestTransferHotPathAllocs(t *testing.T) {
 // TestTransferConnCountersNeverGoBack: a tracked connection's bytes and
 // credit waits stay counted after it ends; its queued bytes do not.
 func TestTransferConnCountersNeverGoBack(t *testing.T) {
-	p := PathTCPDataConn
+	p := PathTCPLink
 	before := scrape(t, p)
 	st := link.ConnStats{BytesIn: 100, BytesOut: 200, CreditWaits: 3, CreditWait: time.Second, QueuedBytes: 50}
 	done := TrackTransferConn(p, func() link.ConnStats { return st })

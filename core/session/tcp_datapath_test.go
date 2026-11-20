@@ -28,7 +28,7 @@ import (
 // its gRPC stream: with concurrent Send (unsafe in grpc-go) the sessions
 // deadlocked in the transport's write quota. Run it under -race too.
 func TestTCPTunnelConcurrentSessionsIntact(t *testing.T) {
-	h := startTunnelHarnessWith(t, startTarget(t), nil, "", 0, relayCurrent, agentDataConns)
+	h := startTunnelHarnessWith(t, startTarget(t), nil, "", 0, relayCurrent, agentNoLink)
 	payload := bytes.Repeat([]byte("0123456789abcdef"), 16<<10) // 256 KiB
 	done := make(chan error, 1)
 	go func() {
@@ -51,20 +51,16 @@ func TestTCPTunnelConcurrentSessionsIntact(t *testing.T) {
 		t.Fatal("concurrent sessions on one agent stream stalled")
 	}
 	// Concurrent sessions made the agent open the tcpAgentStreams the relay
-	// asked for, each on a connection of its own (the further ones data
-	// connections); new sessions take the data connections in turn.
+	// asked for, each on a connection of its own (auxiliary gRPC
+	// connections); new sessions take the streams in turn.
 	h.WaitStreams(t, tcpAgentStreams)
 	h.WaitConns(t, tcpAgentStreams)
 	seen := map[*tcpAgentStream]bool{}
-	for range tcpAgentStreams - 1 {
-		as := h.D.agentStream(harnessAgentID)
-		if as.DC == nil {
-			t.Fatal("a new session of a busy agent went to its gRPC stream, not a data connection")
-		}
-		seen[as] = true
+	for range tcpAgentStreams {
+		seen[h.D.agentStream(harnessAgentID)] = true
 	}
-	if len(seen) != tcpAgentStreams-1 {
-		t.Fatalf("%d sessions used %d data connections, want %d", tcpAgentStreams-1, len(seen), tcpAgentStreams-1)
+	if len(seen) != tcpAgentStreams {
+		t.Fatalf("%d sessions used %d streams, want %d", tcpAgentStreams, len(seen), tcpAgentStreams)
 	}
 }
 
@@ -74,7 +70,7 @@ func TestTCPTunnelConcurrentSessionsIntact(t *testing.T) {
 // that idled (tcpAuxIdle), and a busy agent opens it again.
 func TestTCPTunnelIdleAgentKeepsOneStream(t *testing.T) {
 	shortAuxIdle(t)
-	h := startTunnelHarnessWith(t, startTarget(t), nil, "", 0, relayCurrent, agentDataConns)
+	h := startTunnelHarnessWith(t, startTarget(t), nil, "", 0, relayCurrent, agentNoLink)
 	for range 3 {
 		if err := echo(h, t, []byte("one at a time")); err != nil {
 			t.Fatal(err)
@@ -145,7 +141,7 @@ func TestTCPTunnelStreamsOnOneConnWithoutBinding(t *testing.T) {
 // the agent closes the connections, and nothing of the agent is left to
 // route a new session to.
 func TestTCPTunnelAuxConnsEndWithPrimary(t *testing.T) {
-	h := startTunnelHarnessWith(t, startTarget(t), nil, "", 0, relayCurrent, agentDataConns)
+	h := startTunnelHarnessWith(t, startTarget(t), nil, "", 0, relayCurrent, agentNoLink)
 	var held []net.Conn
 	for range 2 * tcpAgentStreams { // sessions on every stream, held open
 		c := h.Dial(t)

@@ -17,24 +17,14 @@ import (
 )
 
 // TestProtectedShareOnAuxStreams guards the share gate over auxiliary gRPC
-// and data connections: an auxiliary stream enforces what its primary
+// connections: an auxiliary stream enforces what its primary
 // declared, never what its own request metadata claims. A protected share is refused for an
 // agent whose primary did not declare it (on every stream, auxiliary ones
 // included) and is routed over the auxiliary streams of one whose primary
 // did.
 func TestProtectedShareOnAuxStreams(t *testing.T) {
-	for name, data := range map[string]bool{"grpc": false, "data connections": true} {
-		t.Run(name, func(t *testing.T) { testProtectedShareOnAuxStreams(t, data) })
-	}
-}
-
-func testProtectedShareOnAuxStreams(t *testing.T, data bool) {
 	const share = "swift-bay"
 	d := NewTCPDispatcher(slog.New(slog.DiscardHandler), nil, nil)
-	dataAddr := ""
-	if data {
-		dataAddr, _ = startDataPlane(t, d)
-	}
 	declares := metadata.NewIncomingContext(context.Background(), metadata.Pairs(tcpSharePolicyHeader, share))
 
 	// connect registers agentID's primary (declaring the share or not) and
@@ -47,12 +37,6 @@ func testProtectedShareOnAuxStreams(t *testing.T, data bool) {
 		waitStreamsOf(t, d, agentID, 1)
 		token := primary.SentHeader().Get(TCPBindHeader)[0]
 		for range tcpAgentStreams - 1 {
-			if dataAddr != "" { // a data connection carries no metadata at all
-				if _, _, err := dialData(t, dataAddr, token); err != nil {
-					t.Fatal(err)
-				}
-				continue
-			}
 			aux := &fake.EndableStream{End: make(chan struct{}), Ctx: declares}
 			go func() { _ = d.RegisterAuxStream(agentID, token, aux) }()
 		}

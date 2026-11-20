@@ -78,7 +78,7 @@ func traced(a *tcpAgentStream) bool { return a.tr != nil }
 // names a directory.
 func traceUp(a *tcpAgentStream) {
 	dir := os.Getenv("RELAYTRACE")
-	if dir == "" || a.cr == nil || a.DC != nil {
+	if dir == "" || a.cr == nil {
 		return
 	}
 	name := strings.NewReplacer("/", "_", ":", "_").Replace(a.agent)

@@ -28,7 +28,7 @@ func TestTCPTunnelHalfClose(t *testing.T) {
 	}{
 		{"link-tcp", agentCurrent, "tcp"},
 		{"link-quic", agentQUIC, "quic"},
-		{"data-conns", agentDataConns, ""},
+		{"data-conns", agentNoLink, ""},
 		{"aux-grpc", agentAuxOnly, ""},
 		{"one-grpc", agentOneConn, ""},
 	} {

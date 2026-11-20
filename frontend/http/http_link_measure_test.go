@@ -278,8 +278,8 @@ func startMeasureBackend(t *testing.T) *measureBackend {
 }
 
 // startLinkHTTPPath is the phase-4 path: the relay's reverse proxy dials a
-// session to the agent (DialAgent to dataplane.HTTPSessionTarget), on its link
-// data connection once it has one; the agent serves it with net/http and a
+// session to the agent (DialAgent to dataplane.HTTPSessionTarget), on its agent
+// link; the agent serves it with net/http and a
 // reverse proxy to the backend.
 func startLinkHTTPPath(t *testing.T, backend string) (string, func()) {
 	bu, _ := url.Parse(backend)
@@ -302,7 +302,7 @@ func startLinkHTTPPath(t *testing.T, backend string) (string, func()) {
 	}
 	srv := httptest.NewServer(rp)
 	t.Cleanup(srv.Close)
-	warm := func() { // two sessions at once make the agent bind its data connections, which new sessions take first
+	warm := func() { // sessions at once warm the agent link and the backend
 		var wg sync.WaitGroup
 		for range 3 {
 			wg.Go(func() {
@@ -314,9 +314,7 @@ func startLinkHTTPPath(t *testing.T, backend string) (string, func()) {
 			})
 		}
 		wg.Wait()
-		waitUntil(t, func() bool { return h.dataStreams() >= 1 }, func() string { return "no data connection" })
 		tr.CloseIdleConnections()
-		t.Logf("link: %d data connections", h.dataStreams())
 	}
 	return srv.URL, warm
 }

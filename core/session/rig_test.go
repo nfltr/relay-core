@@ -31,14 +31,13 @@ const (
 	relayCurrent     = tcprig.RelayCurrent
 	relayOneStream   = tcprig.RelayOneStream
 	relayStreamsOnly = tcprig.RelayStreamsOnly
-	relayNoDataPlane = tcprig.RelayNoDataPlane
-	relayLinkV1      = tcprig.RelayLinkV1
+	relayNoCredit    = tcprig.RelayNoCredit
 
 	agentCurrent   = tcprig.AgentCurrent
-	agentDataConns = tcprig.AgentDataConns
+	agentNoLink    = tcprig.AgentNoLink
 	agentAuxOnly   = tcprig.AgentAuxOnly
 	agentOneConn   = tcprig.AgentOneConn
-	agentDataFails = tcprig.AgentDataFails
+	agentLinkFails = tcprig.AgentLinkFails
 	agentQUIC      = tcprig.AgentQUIC
 )
 
@@ -61,16 +60,10 @@ var rigOptions = tcprig.Options[*TCPDispatcher]{
 	RouteConnection: func(ctx context.Context, d *TCPDispatcher, c net.Conn, agentID string) {
 		d.RouteConnection(ctx, c, agentID, "", "")
 	},
-	Streams: func(d *TCPDispatcher, agentID string) (total, data int) {
+	Streams: func(d *TCPDispatcher, agentID string) int {
 		d.Mu.RLock()
 		defer d.Mu.RUnlock()
-		for _, as := range d.All[agentID] {
-			total++
-			if as.DC != nil {
-				data++
-			}
-		}
-		return total, data
+		return len(d.All[agentID])
 	},
 	AnyStream: func(d *TCPDispatcher) bool {
 		d.Mu.RLock()

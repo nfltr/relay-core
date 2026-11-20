@@ -26,7 +26,7 @@ func TestTCPTunnelStreamLossCutsSessions(t *testing.T) {
 		name string
 		ag   harnessAgent
 	}{
-		{"data-conns", agentDataConns},
+		{"data-conns", agentNoLink},
 		{"aux-grpc", agentAuxOnly},
 		{"one-grpc", agentOneConn},
 	} {

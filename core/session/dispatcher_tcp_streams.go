@@ -94,11 +94,8 @@ type tcpAgentStream struct {
 	// auxiliary stream.
 	silent     chan struct{}
 	silentOnce sync.Once
-	// DC is the data connection an auxiliary stream runs on; nil on a
-	// gRPC stream (dispatcher_tcp_dataplane.go).
-	DC *dataplane.Conn
-	// cr is the stream's per-session credit: dc's, or a gRPC stream's
-	// whose agent asked for it (grpcCredit); nil without.
+	// cr is the stream's per-session credit, a gRPC stream's whose agent
+	// asked for it (grpcCredit); nil without.
 	cr *link.Credit
 	// tr is the stream's trace (-tags relaytrace, trace_on.go); no room
 	// without.
@@ -161,19 +158,11 @@ func (a *tcpAgentStream) enqueue(f *pb.TCPData) { a.enqueueUnless(f, nil) }
 // in-process session's end: spec/README.md finding 3); it reports false
 // then, the frame not sent.
 func (a *tcpAgentStream) enqueueUnless(f *pb.TCPData, stop <-chan struct{}) bool {
-	if a.DC != nil {
-		// Written inline, or with other sessions' frames when a write is
-		// in flight (dataplane.Conn): no hand-off to the sender.
-		if a.DC.Send(f) != nil || a.DC.Flush() != nil {
-			_ = a.DC.Close()
-		}
-		return true
-	}
 	if traceOn && traced(a) {
 		return traceEnqueue(a, f, stop)
 	}
 	select {
-	case a.SendCh <- f: // a data connection's bytes are its link connection's (serveDataConn)
+	case a.SendCh <- f:
 		metrics.AddTransferBytes(metrics.PathTCPGRPC, len(f.GetData()), 0)
 	case <-a.Done:
 	case <-stop:
@@ -416,12 +405,8 @@ func (d *TCPDispatcher) RegisterStream(agentID string, stream pb.Dispatcher_Conn
 	as.silent = make(chan struct{})
 	// Ask the agent for tcpAgentStreams streams in all, on connections
 	// bound with the token; one that does not know the headers keeps its
-	// one stream, or opens the rest on its one connection. With the data
-	// plane on, the further connections may be data connections.
+	// one stream, or opens the rest on its one connection.
 	md := metadata.Pairs(tcpAgentStreamsHeader, strconv.Itoa(tcpAgentStreams), TCPBindHeader, as.token)
-	if d.dataPlane.Load() {
-		md.Set(dataplane.Header, dataplane.Versions...)
-	}
 	if as.cr != nil {
 		md.Set(dataplane.CreditHeader, strconv.Itoa(tcpGRPCWindow))
 	}
@@ -488,7 +473,7 @@ func (d *TCPDispatcher) RegisterAuxStream(agentID, token string, stream pb.Dispa
 	var as *tcpAgentStream
 	cr := grpcCredit(stream.Context(), func(f *pb.TCPData) { as.enqueue(f) }) // grants follow pops: as is set
 	endAck := asksEndAck(stream.Context())
-	as, err := d.bindAux(agentID, token, nil, cr, endAck)
+	as, err := d.bindAux(agentID, token, cr, endAck)
 	if err != nil {
 		return err
 	}
@@ -510,7 +495,7 @@ func (d *TCPDispatcher) RegisterAuxStream(agentID, token string, stream pb.Dispa
 
 // bindAux adds an auxiliary stream bound with token to agentID's primary
 // stream to the agent's rotation; serveAux serves it.
-func (d *TCPDispatcher) bindAux(agentID, token string, dc *dataplane.Conn, cr *link.Credit, endAck bool) (*tcpAgentStream, error) {
+func (d *TCPDispatcher) bindAux(agentID, token string, cr *link.Credit, endAck bool) (*tcpAgentStream, error) {
 	d.Mu.Lock()
 	defer d.Mu.Unlock()
 	p := d.bound[token]
@@ -522,7 +507,7 @@ func (d *TCPDispatcher) bindAux(agentID, token string, dc *dataplane.Conn, cr *l
 	}
 	p.aux++
 	as := NewTCPAgentStream()
-	as.agent, as.primary, as.drained, as.DC, as.cr, as.endAck = agentID, p, make(chan struct{}), dc, cr, endAck
+	as.agent, as.primary, as.drained, as.cr, as.endAck = agentID, p, make(chan struct{}), cr, endAck
 	d.All[agentID] = append(d.All[agentID], as)
 	return as, nil
 }
@@ -706,7 +691,7 @@ func (d *TCPDispatcher) sendLoop(agentID string, as *tcpAgentStream, stream tcpF
 	}
 	var tick, idle, renew, leave, replaced, replacedBound <-chan time.Time
 	var leaving, renewNow <-chan struct{}
-	if d.heartbeatInterval > 0 && (as.DC == nil || as.DC.Version() < 2) { // a version-2 link pings itself, as does the agent link (LinkUp)
+	if d.heartbeatInterval > 0 { // the agent link pings itself (LinkUp)
 		ticker := time.NewTicker(d.heartbeatInterval)
 		defer ticker.Stop()
 		tick = ticker.C
@@ -849,10 +834,8 @@ func (d *TCPDispatcher) recvFrame(as *tcpAgentStream, frame *pb.TCPData, onContr
 	// dispatched to sessions.  They carry protocol-level signals such
 	// as certificate rotation notifications.
 	sid := frame.GetSessionId()
-	if as.DC == nil {
-		metrics.AddTransferBytes(metrics.PathTCPGRPC, 0, len(frame.GetData()))
-	}
-	if as.DC == nil && as.cr != nil { // a gRPC stream with credit: grants and charges here
+	metrics.AddTransferBytes(metrics.PathTCPGRPC, 0, len(frame.GetData()))
+	if as.cr != nil { // a gRPC stream with credit: grants and charges here
 		if err := grpcCreditFrame(as.cr, frame); err != nil {
 			return err
 		}
@@ -870,7 +853,7 @@ func (d *TCPDispatcher) recvFrame(as *tcpAgentStream, frame *pb.TCPData, onContr
 	if as.Dispatch(frame, d.SessionStall) {
 		d.logger.Warn("tcp session reset: its client took none of its bytes",
 			"agent_id", as.agent, "session", frame.GetSessionId(), "stall", d.SessionStall)
-		metrics.TransferError(streamPath(as), metrics.TransferStalled)
+		metrics.TransferError(metrics.PathTCPGRPC, metrics.TransferStalled)
 	}
 	return nil
 }
@@ -912,26 +895,19 @@ func (d *TCPDispatcher) agentStreamOrSignal(agentID string) (*tcpAgentStream, <-
 		return nil, d.registered
 	}
 	all := d.All[agentID]
-	n, data := 0, 0
+	n := 0
 	for _, as := range all {
 		if primaryOf(as) == cur {
 			n++
-			if as.DC != nil {
-				data++
-			}
 		}
 	}
 	if n <= 1 {
 		return cur, nil
 	}
-	// Data connections first: no HTTP/2, and per-session credit.
 	pick := d.nextPick.Add(1)
 	k := int(pick % uint64(n)) // #nosec G115 -- k < n, a slice length
-	if data > 0 {
-		k = int(pick % uint64(data)) // #nosec G115 -- k < data, a slice length
-	}
 	for _, as := range all {
-		if primaryOf(as) != cur || data > 0 && as.DC == nil {
+		if primaryOf(as) != cur {
 			continue
 		}
 		if k == 0 {
@@ -1156,12 +1132,3 @@ var errTCPSessionAborted = status.Error(codes.Aborted, "tcp session reset by the
 // errTCPSessionStalled ends a session reset because its client took none of
 // its bytes for the stall bound (tcpSessionStall).
 var errTCPSessionStalled = status.Error(codes.ResourceExhausted, "tcp session reset: its client took none of its bytes")
-
-// streamPath is the transfer path of a session on as: its data
-// connection's, or the gRPC frame streams'.
-func streamPath(as *tcpAgentStream) metrics.Path {
-	if as.DC != nil {
-		return metrics.PathTCPDataConn
-	}
-	return metrics.PathTCPGRPC
-}

@@ -308,7 +308,7 @@ func TestTCPTunnelClientResetResetsTargetEndToEnd(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		ag   harnessAgent
-	}{{"link-tcp", agentCurrent}, {"link-quic", agentQUIC}, {"data-conns", agentDataConns}, {"frame-streams", agentAuxOnly}} {
+	}{{"link-tcp", agentCurrent}, {"link-quic", agentQUIC}, {"data-conns", agentNoLink}, {"frame-streams", agentAuxOnly}} {
 		t.Run(tc.name, func(t *testing.T) {
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {

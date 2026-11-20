@@ -206,9 +206,9 @@ type Options[D Relay] struct {
 	// with a TCP endpoint); RouteConnection as an E2EE vhost session.
 	HandleConn      func(ctx context.Context, d D, conn net.Conn, agentID, target string)
 	RouteConnection func(ctx context.Context, d D, conn net.Conn, agentID string)
-	// Streams is how many streams agentID has registered, and how many of
-	// them are data connections; AnyStream whether any agent has one.
-	Streams   func(d D, agentID string) (total, data int)
+	// Streams is how many streams agentID has registered; AnyStream
+	// whether any agent has one.
+	Streams   func(d D, agentID string) int
 	AnyStream func(d D) bool
 }
 
@@ -236,19 +236,18 @@ const (
 	RelayCurrent     HarnessRelay = iota
 	RelayOneStream                // no header, as relays before multi-stream (round 2)
 	RelayStreamsOnly              // streams but no bind token, as round 2-3 relays
-	RelayNoDataPlane              // bind token, no data connections, as round 4 relays
-	RelayLinkV1                   // data connections of link version 1 only, no credit on gRPC streams, as relays before link phase 1b
+	RelayNoCredit                 // no credit on gRPC streams, as relays before link phase 1b
 )
 
 // HarnessAgent selects what further connections the agent opens.
 type HarnessAgent int
 
 const (
-	AgentCurrent   HarnessAgent = iota // the agent link where offered (agent_link.go), else as AgentDataConns
-	AgentDataConns                     // data connections where offered, else auxiliary gRPC ones, as agents before the agent link
+	AgentCurrent   HarnessAgent = iota // the agent link where offered (agent_link.go), else as AgentNoLink
+	AgentNoLink                        // auxiliary gRPC connections with credit, as agents before the agent link
 	AgentAuxOnly                       // auxiliary gRPC connections only, as round 4 agents
 	AgentOneConn                       // every stream on its one connection, as agents before round 4
-	AgentDataFails                     // a data connection cannot be opened (an HTTPS proxy)
+	AgentLinkFails                     // the agent link's connection cannot be opened (an HTTPS proxy)
 	AgentQUIC                          // the agent link over QUIC (the relay listens on UDP too)
 )
 
@@ -270,10 +269,7 @@ func (s connectTCPStub) ConnectTCP(st pb.Dispatcher_ConnectTCPServer) error {
 		delete(md, dataplane.EndAckHeader) // newer still
 		st = ctxStream{st, metadata.NewIncomingContext(st.Context(), md)}
 	}
-	if s.old == RelayLinkV1 {
-		st = linkV1Stream{st}
-	}
-	if s.ag != AgentCurrent && s.ag != AgentDataFails && s.ag != AgentQUIC {
+	if s.ag != AgentCurrent && s.ag != AgentLinkFails && s.ag != AgentQUIC {
 		// Older agents never ask for the agent link.
 		md, _ := metadata.FromIncomingContext(st.Context())
 		md = md.Copy()
@@ -311,17 +307,6 @@ type ctxStream struct {
 
 // Context: the replaced one. allow:wrapper
 func (s ctxStream) Context() context.Context { return s.ctx }
-
-// linkV1Stream advertises data connections of link version 1 only.
-type linkV1Stream struct{ pb.Dispatcher_ConnectTCPServer }
-
-func (s linkV1Stream) SendHeader(md metadata.MD) error {
-	if len(md.Get(dataplane.Header)) > 0 {
-		md = md.Copy()
-		md.Set(dataplane.Header, "1")
-	}
-	return s.Dispatcher_ConnectTCPServer.SendHeader(md)
-}
 
 // noHeaderStream drops SendHeader: headers then go out with the first frame.
 type noHeaderStream struct{ pb.Dispatcher_ConnectTCPServer }
@@ -428,7 +413,7 @@ func StartHarness[D Relay](tb testing.TB, o Options[D], rtt time.Duration, old H
 	pb.RegisterDispatcherServer(srv, connectTCPStub{d: d, bind: o.BindHeader, old: old, ag: ag, endPrimary: h.EndPrimary})
 	cert := testcert.Generate(tb)
 	lis := tlsconfig.WrapGRPCListener(countingListener{grpcLn, &h.Conns, &h.Writes}, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2"}})
-	if old == RelayCurrent || old == RelayLinkV1 {
+	if old == RelayCurrent || old == RelayNoCredit {
 		lis = d.DataPlaneListener(lis) // as server_run.go
 	}
 	var serveQUIC func(context.Context) error
@@ -457,14 +442,14 @@ func StartHarness[D Relay](tb testing.TB, o Options[D], rtt time.Duration, old H
 	}
 	var dial agent.RelayDialer
 	switch ag {
-	case AgentDataFails:
+	case AgentLinkFails:
 		dial.Data = func(context.Context) (net.Conn, error) { return nil, errors.New("proxied") }
 		dial.GRPC = dialRelay
 	case AgentQUIC:
 		dial.QUIC = &agent.QUICDialer{Host: "127.0.0.1", TLS: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}} // #nosec G402 -- test-only self-signed relay cert //nolint:gosec
 		dial.Transport = agent.TransportQUIC
 		fallthrough
-	case AgentCurrent, AgentDataConns:
+	case AgentCurrent, AgentNoLink:
 		dial.Data = func(ctx context.Context) (net.Conn, error) {
 			return grpcclient.DialConn(ctx, false, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}, "127.0.0.1", grpcAddr.Port) // #nosec G402 -- test-only self-signed relay cert //nolint:gosec
 		}
@@ -681,16 +666,9 @@ func (h *Harness[D]) Dial(tb testing.TB) net.Conn {
 	return c
 }
 
-// DataStreams is how many of the agent's streams are data connections.
-func (h *Harness[D]) DataStreams() int {
-	_, n := h.opts.Streams(h.D, AgentID)
-	return n
-}
-
 // Streams is how many streams the agent has registered.
 func (h *Harness[D]) Streams() int {
-	n, _ := h.opts.Streams(h.D, AgentID)
-	return n
+	return h.opts.Streams(h.D, AgentID)
 }
 
 func (h *Harness[D]) WaitStreams(tb testing.TB, want int) {

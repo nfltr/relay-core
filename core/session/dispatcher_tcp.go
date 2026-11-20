@@ -145,10 +145,7 @@ type TCPDispatcher struct {
 	AuxIdle time.Duration // tcpAuxIdle; tests shorten it
 	// SessionStall is TCPSessionStall; tests shorten it (sessiontest).
 	SessionStall time.Duration
-	// dataPlane is set once data connections can reach the dispatcher
-	// (DataPlaneListener): agents are then offered them.
-	dataPlane atomic.Bool
-	// Link is the agent link (agent_link.go), made with the data plane.
+	// Link is the agent link (agent_link.go), made by DataPlaneListener.
 	Link *agentLink
 	// registered is closed, and replaced, whenever a stream registers:
 	// connections waiting for their agent's stream wake on it.
@@ -360,7 +357,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		return errTCPSessionRefused
 	}
 
-	path := streamPath(as)
+	path := metrics.PathTCPGRPC
 	began := metrics.TransferBegin(path)
 	defer metrics.TransferEnd(path, began)
 	firstByte := true
