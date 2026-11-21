@@ -110,6 +110,11 @@ func (c *countedConn) count(n int, fromAgent bool) {
 	}
 }
 
+// NetConn is the conn c counts (tls.Conn's convention): a session
+// reaches the visitor's TCP socket through it (relay-core
+// core/session visitorKernel, lane VISITOREND).
+func (c *countedConn) NetConn() net.Conn { return c.Conn }
+
 // CloseWrite passes to c's CloseWrite (errors.ErrUnsupported without one).
 func (c *countedConn) CloseWrite() error {
 	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {

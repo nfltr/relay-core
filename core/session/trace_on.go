@@ -7,6 +7,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +71,7 @@ type traceEvent struct {
 	W  int    `json:"w,omitempty"` // Up: the agent's window
 	A  bool   `json:"a,omitempty"` // Up: the stream acks half closes (EndAck)
 	D  bool   `json:"d,omitempty"` // Up: the stream reports ends delivered (EndDone)
+	K  string `json:"k,omitempty"` // VisitorKernel: acked, rst or unknown
 
 }
 
@@ -168,6 +170,36 @@ func traceTakeEnd(s *tcpSession) {
 	traceMu.Lock()
 	defer traceMu.Unlock()
 	traceLog(s.tr.t, traceEvent{Ev: "TakeEnd", S: s.tr.sid})
+}
+
+// tracePassEnd records the agent's half close of s passed onto the
+// visitor's conn (spec/AgentLink.tla PassEnd).
+func tracePassEnd(s *tcpSession) {
+	if s.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(s.tr.t, traceEvent{Ev: "PassEnd", S: s.tr.sid})
+}
+
+// traceVisitorKernel records what the relay's kernel told of that FIN
+// (VisitorKernel: "acked" for nil, "unknown" for errEndUnknown, else
+// "rst"), before the report or the abort.
+func traceVisitorKernel(s *tcpSession, err error) {
+	if s.tr == nil {
+		return
+	}
+	k := "rst"
+	switch {
+	case err == nil:
+		k = "acked"
+	case errors.Is(err, errEndUnknown):
+		k = "unknown"
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(s.tr.t, traceEvent{Ev: "VisitorKernel", S: s.tr.sid, K: k})
 }
 
 func traceEof(s *tcpSession) {

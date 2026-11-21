@@ -339,7 +339,9 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		}
 		// The link's connections count its bytes; its first byte is the
 		// visitor's (agentLinkPath).
-		_ = peerlink.Join(metrics.CountConn(conn, agentLinkPath(s), nil, time.Now(), false, false), s)
+		// The agent's end is delivered once the visitor's kernel
+		// acknowledged the FIN (visitorEnd).
+		_ = peerlink.Join(visitorEnd(metrics.CountConn(conn, agentLinkPath(s), nil, time.Now(), false, false), conn), s)
 		release()
 		return nil
 	}
@@ -379,9 +381,11 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 	if pc, ok := conn.(*PrefixConn); ok {
 		w = pc.Conn
 	}
+	var written int64 // onto the visitor: its kernel acknowledges the FIN after them
 	writeBatch := func(bufs [][]byte) error {
 		nb := net.Buffers(bufs)
-		_, err := nb.WriteTo(w)
+		n, err := nb.WriteTo(w)
+		written += n
 		return err
 	}
 	var bufs [][]byte
@@ -402,7 +406,27 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 					traceEof(sess)
 				}
 				CloseWrite(conn)
-				as.sendDone(sessionID, sess) // passed on: a visitor's kernel acknowledges no more (lane ENDGRPC finding 5)
+				if as.endDone {
+					if traceOn {
+						tracePassEnd(sess)
+					}
+					err := waitFinAcked(visitorKernel(conn), written)
+					if traceOn {
+						traceVisitorKernel(sess, err)
+					}
+					if err != nil {
+						// Not known delivered (lane VISITOREND): no report, the
+						// session aborted both ways, so the agent's Close fails
+						// at once (spec/AgentLink.tla VisitorAbort). The
+						// visitor first: its kernel's queued tail and FIN never
+						// go once the agent learnt the abort.
+						resetConn(conn)
+						as.send(&pb.TCPData{SessionId: sessionID, Close: true, Abort: true})
+						sess.markClosed()
+						return nil
+					}
+				}
+				as.sendDone(sessionID, sess) // the visitor's kernel acknowledged the FIN
 				<-sess.closed                // the client's bytes still go to the agent until it ends too
 			}
 			return nil
