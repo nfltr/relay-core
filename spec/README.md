@@ -63,6 +63,7 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `acked[p][s]` | relay `tcpSession.acked`, agent `halfEnd.acked` | the peer acknowledged this side's half close (`EndAck`, finding 2) |
 | `apend[p][s]` | the `go enqueue` of the ack frame | an ack of the peer's half close decided, not yet queued |
 | `closing[s]` | `inProcConn.Close` called (finding 3) | the relay's in-process conn is being closed |
+| `ed[p][s]` | relay `tcpSession.done`/`endDoneSent`, agent `halfEnd.dlv`/`delivered` | `took`: `p`'s app took the peer's end; `dp`: `p`'s `done` frame decided, not queued; `done`: the peer's `done` came (`EndDone`, lane ENDGRPC finding 4) |
 | `alive`, `down[p]` | the stream; `unregister`+`CloseAll`, `closeAll` | the stream broke; side `p` noticed |
 
 ### What is abstracted
@@ -104,6 +105,8 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `SendWin(p, s)` | the window frame `link.NewCredit`'s grant callback queues (`dataplane.WindowFrame`) |
 | `Recv(p)`, `RecvData`, `RecvWin`, `RecvClose`, `Release` | relay `recvLoop` (`grpcCreditFrame`, then `Dispatch`); agent `serveTCPStream`'s receive loop: a data frame into the session queue (`PushWithin`), a window frame to `Credit.Grant` (`ParseWindowFrame`), a close frame (`closeFrame`), the half close released to the reader at once or at the ack (`recvAck`) |
 | `SendAck(p, s)` | the ack frame (`dataplane.EndAckFrame`) queued by its own goroutine: the receive loop never waits for its outbox |
+| `TakeEnd(p, s)` | the peer's end reached the app: relay `inProcConn.AckEnd` (Join passed the agent's end on: its client's `CloseWriteSync` returned, or onto a conn that acknowledges nothing), `handleLocalConn` after the visitor's `CloseWrite`; agent `pump`'s writer after the target's `CloseWrite` (`EndDone`) |
+| `SendDone(p, s)` | the delivery report (`dataplane.EndDoneFrame`) queued by its own goroutine; the peer's receive loop takes it (`recvDone`, `endDelivered`): the closer's wait (relay `inProcConn.CloseWriteSync`, agent `QueueConn.Close` through `reportDelivered`) returns nil |
 | `Finish(p, s)` | relay `removeSession` (`handleLocalConn` returned: both halves closed, the peer's whole close, or its own); agent `closeSession` (`pump` after `<-written`, `closeFrame`) |
 | `Stall(p)` | without credit only: `deliver`/`PushWithin` time out, `resetSession` |
 | `Break` | the gRPC stream fails (network, relay restart, `as.silent`, revocation) |
@@ -141,12 +144,18 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
    abort) reaches the relay's reader as a reset, never an EOF (`EndAck`);
    the relay's abort of a client's session (`RelayAbort`: TCPData.abort)
    reaches the agent's target as one (finding 15).
+8. `DoneTruth` (`EndDone`, `AgentLinkDone.cfg`): a side learns its half
+   close delivered (`done`) only once the peer's app took every byte it
+   wrote and the end. The ack stays a receipt: holds and a session's
+   clean end wait for it, never for `done` (R1 of
+   nfltr `docs/decisions/endack-every-transport-2026-11-20.md`).
 
 Witnesses (`make spec-mutants`, each must be violated, so the invariants
 above guard reachable states): `WitnessAbort` (an agent abort reaches the
 relay), `WitnessRelayAbort` (a relay abort reaches the agent,
 `AgentLinkAbort.cfg`), `WitnessHeldEof` (an app that half-closed first
-gets a released EOF).
+gets a released EOF), `WitnessDone` (a side learns its end delivered,
+`AgentLinkDone.cfg`).
 
 ### Liveness (weak fairness on every step that is not an app's)
 
@@ -156,6 +165,9 @@ gets a released EOF).
   called, though the agent reads nothing more and its stream stays up:
   the relay's outbox (`SendCh`) is full, `OutCap` frames
   (`AgentLinkWrite.cfg`, in `make spec`: only the relay side is fair).
+- `DoneComes`: the fair session's end is reported delivered at both sides
+  unless the stream failed or a side closed it whole; with `Isolation` on
+  `AgentLinkDoneLive.cfg` (in `make spec`: 13k states).
 - `Isolation`: a session whose apps write, close and read (fairly)
   completes at both sides although the other session's readers never read
   (`AgentLinkLive.cfg`; with credit no stall reset is needed, `NoHOL`).
@@ -197,6 +209,13 @@ whole close in a config whose property needs the apps to finish.
   so it may later read the peer's FIN or the stream's loss (link's
   interface alone on `AgentLinkIface.cfg`: an own Reset or Abort reads
   `here`, lane LINKABORT).
+- `done-on-receipt`: the delivery report sent at the half close's
+  receipt (`DoneTruth` on `AgentLinkDone.cfg`; lane ENDGRPC finding 4: the
+  relay's ack was the only signal and the SDK's Close returned at once).
+- `hold-on-done`: holds and the clean end wait for the peer's `done`, not
+  the ack: crossing half closes each hold the EOF the other's report
+  waits for (`Isolation`, `DoneComes` on `AgentLinkDoneLive.cfg`; finding
+  8's cycle).
 - `no-credit` runs with 3 bytes (one past the window).
 - a stream without the end acknowledgement (finding 2: an older agent or
   relay): `race:clean-tail-lost` (`EndAck = FALSE`, `NoSilentLoss`).
@@ -1707,6 +1726,8 @@ accepted, 4-6 s each.
 |---|---|---|---|---|
 | `AgentLink.cfg` (CI) | invariants, 1 session, window 2, 2 bytes, 1 a frame, in-process relay end, `EndAck` (2026-11-02, after findings 1-2) | 2,905,774 (601,711) | | 28 s |
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
+| `AgentLinkDone.cfg` (CI) | invariants with `DoneTruth`, 1 session, window 1, 1 byte each way, the stream may fail, aborts, `EndDone` (2026-11-21, lane ENDGRPC) | 2,794,813 (614,409) | | 2 min 30 s (`taskpolicy -b`, load) |
+| `AgentLinkDoneLive.cfg` (CI) | `Isolation`, `DoneComes`, 1 session, window 1, crossing half closes | 40,391 (13,100) | 31 | 5 s |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 341,113 (81,647) | | 2-4 s |
 | `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5), B's arrival (finding 45), onward forwards (finding 46) | 271,505 (51,545) | 25 | 6 s at load 25 (2026-11-06; 135,307 states before finding 45) |

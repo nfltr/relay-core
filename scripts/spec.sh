@@ -112,6 +112,8 @@ trace() {
 	cfg=$work/$(basename "$1").cfg
 	endack=FALSE # the stream acked half closes (Up's "a", dataplane.EndAckHeader)
 	! head -1 "$1" | grep -q '"a":true' || endack=TRUE
+	enddone=FALSE # the stream reports ends delivered (Up's "d", dataplane.EndDoneHeader)
+	! head -1 "$1" | grep -q '"d":true' || enddone=TRUE
 	cat >"$cfg" <<CFG
 CONSTANTS
     TraceFile = "$1"
@@ -125,6 +127,7 @@ CONSTANTS
     Fair = ""
     Aborts = TRUE
     EndAck = $endack
+    EndDone = $enddone
     OutCap = 1000000
     RelayAbort = TRUE
     Mutant = "none"
@@ -478,6 +481,8 @@ check)
 	run AgentLinkIface.cfg MCAgentLink.tla
 	run AgentLinkAbort.cfg MCAgentLink.tla
 	run AgentLinkWrite.cfg MCAgentLink.tla
+	run AgentLinkDone.cfg MCAgentLink.tla
+	run AgentLinkDoneLive.cfg MCAgentLink.tla
 	run Handoff.cfg Handoff.tla
 	run Move.cfg Move.tla
 	run Presence.cfg Presence.tla
@@ -569,6 +574,10 @@ mutants)
 	expect AgentLinkIface.cfg MCAgentLink.tla interface:abort-unended -e "$m"'abort-unended"/' -e '/^INVARIANTS/,$d'
 	expect AgentLink.cfg MCAgentLink.tla witness:abort -e 's/    AbortTyped/    WitnessAbort/'
 	expect AgentLink.cfg MCAgentLink.tla witness:held-eof -e 's/    NoSilentLoss/    WitnessHeldEof/'
+	# The end's delivery on the gRPC streams (lane ENDGRPC finding 4, 8).
+	expect AgentLinkDone.cfg MCAgentLink.tla done-on-receipt -e "$m"'done-on-receipt"/'
+	expect AgentLinkDoneLive.cfg MCAgentLink.tla hold-on-done -e "$m"'hold-on-done"/'
+	expect AgentLinkDone.cfg MCAgentLink.tla witness:done -e 's/    DoneTruth/    WitnessDone/'
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'
 	expect Handoff.cfg Handoff.tla keep-conns -e "$m"'keep-conns"/'
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'
@@ -616,7 +625,7 @@ mutants)
 	expect AgentLink.cfg MCAgentLink.tla inproc-closewrite -e "$m"'inproc-closewrite"/'
 	expect AgentLinkWrite.cfg MCAgentLink.tla inproc-enqueue-blocks -e "$m"'inproc-enqueue-blocks"/'
 	# A stream without the end acknowledgement (finding 2: an older agent or relay).
-	expect AgentLink.cfg MCAgentLink.tla race:clean-tail-lost -e 's/EndAck = TRUE/EndAck = FALSE/'
+	expect AgentLink.cfg MCAgentLink.tla race:clean-tail-lost -e 's/EndAck = TRUE/EndAck = FALSE/' -e 's/EndDone = TRUE/EndDone = FALSE/'
 	# Move.tla: the move's bugs, and the code's races before the design (findings 6, 7).
 	expect Move.cfg Move.tla done-ignores-leases -e "$m"'done-ignores-leases"/'
 	expect Move.cfg Move.tla done-overtakes -e "$m"'done-overtakes"/'
