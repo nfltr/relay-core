@@ -148,8 +148,11 @@ OwnAbort(p, s) == p = "a" \/ WholeT(p, s) = "abort"
 \* abort ends this side's reader with it ("here"), unless it had learned
 \* an end: a session this side aborted never reads as complete (link's
 \* LinkSession.tla, lane LINKABORT).
+\* double-abort: a second whole close of a session (handleLocalConn's
+\* VisitorAbort and the pump's read of the reset visitor each sent one;
+\* lane DOUBLEABORT).
 Abort(p, s) ==
-    /\ st[p][s] = "open" /\ wfin[p][s] # "whole"
+    /\ st[p][s] = "open" /\ (wfin[p][s] # "whole" \/ (Mutant = "double-abort" /\ p = "r"))
     /\ p = "r" /\ s \in InProc => closing[s] /\ (Mutant # "inproc-enqueue-blocks" \/ pend[p][s] = 0)
     /\ wfin' = [wfin EXCEPT ![p][s] = "whole"]
     /\ finAt' = [finAt EXCEPT ![p][s] = IF wfin[p][s] = "" THEN wr[p][s] ELSE @]  \* the first close's
@@ -308,12 +311,15 @@ SendAck(p, s) ==
 \* halves closed (relay closeWrite/peerClosedWrite -> markClosed, agent
 \* pump after <-written) or the peer's whole close, and the queue read; or
 \* this side's whole close (what is queued is dropped). With EndAck both
-\* halves end the session only once the peer acknowledged this side's.
+\* halves end the session only once the peer acknowledged this side's;
+\* also an inProcConn closed by its app (close-before-ack: forgotten at
+\* Close, before the ack; lane DOUBLEABORT).
 Finish(p, s) ==
     /\ st[p][s] = "open"
     /\ \/ wfin[p][s] = "whole"
        \/ /\ q[p][s] = 0
-          /\ \/ wfin[p][s] = "half" /\ rfin[p][s] = "half" /\ (Held(p, s) \/ ~EndAck)
+          /\ \/ wfin[p][s] = "half" /\ rfin[p][s] = "half"
+                /\ (Held(p, s) \/ ~EndAck \/ (Mutant = "close-before-ack" /\ p = "r" /\ s \in InProc /\ closing[s]))
              \/ rfin[p][s] = "whole"
     /\ st' = [st EXCEPT ![p][s] = "gone"]
     /\ cr' = [cr EXCEPT ![p][s] = NoCr]
@@ -523,6 +529,12 @@ DoneTruth ==
         /\ rcv[Peer(p)][s] = finAt[p][s]
         /\ p = "a" /\ s \notin InProc => ed["r"][s].k = "acked"
 
+\* A side sends one end of a session: its whole close (abort) at most once
+\* (lane DOUBLEABORT). The frames still on the way are what TLC sees: two
+\* in flight at once is a reachable state of any double send.
+EndFrames(p, s) == SelectSeq(ch[p], LAMBDA f : f.s = s /\ f.t \in {"whole", "abort"})
+OneEnd == \A p \in P, s \in Sess : Len(EndFrames(p, s)) <= 1
+
 \* Witnesses (make spec-mutants: TLC must violate each, so the invariants
 \* above are not vacuous): the agent's abort reaches the relay; an app
 \* that half-closed first gets a released EOF (a clean end).
@@ -530,6 +542,7 @@ WitnessAbort == EndAck => \A s \in Sess : rfin["r"][s] # "whole"
 WitnessRelayAbort == RelayAbort => \A s \in Sess \ InProc : rfin["a"][s] # "whole"
 WitnessDone == EndDone => \A p \in P, s \in Sess : ~ed[p][s].done
 WitnessVisitorAbort == \A s \in Sess \ InProc : ~(ed["r"][s].k = "unknown" /\ wfin["r"][s] = "whole")
+WitnessOneEnd == \A p \in P, s \in Sess : Len(EndFrames(p, s)) = 0
 WitnessHeldEof == \A p \in P, s \in Sess : ~(waits[p][s] /\ why[p][s] = "eof")
 
 (* Liveness. *)

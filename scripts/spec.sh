@@ -589,6 +589,11 @@ mutants)
 	expect AgentLinkDone.cfg MCAgentLink.tla report-on-write -e "$m"'report-on-write"/'
 	expect AgentLinkDoneLive.cfg MCAgentLink.tla silent-unknown -e "$m"'silent-unknown"/'
 	expect AgentLinkDone.cfg MCAgentLink.tla witness:visitor-abort -e 's/    DoneTruth/    WitnessVisitorAbort/'
+	# One end per session (lane DOUBLEABORT): a second abort; an inProcConn
+	# forgotten at Close before its half close's ack.
+	expect AgentLinkAbort.cfg MCAgentLink.tla double-abort -e "$m"'double-abort"/'
+	expect AgentLink.cfg MCAgentLink.tla close-before-ack -e "$m"'close-before-ack"/'
+	expect AgentLinkAbort.cfg MCAgentLink.tla witness:one-end -e 's/    OneEnd/    WitnessOneEnd/'
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'
 	expect Handoff.cfg Handoff.tla keep-conns -e "$m"'keep-conns"/'
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'

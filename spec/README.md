@@ -160,6 +160,8 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
    covers every byte before it (RFC 9293 section 3.4: the FIN occupies
    one sequence number after the data, the ACK is cumulative); an RST
    acknowledges nothing (section 3.5.2).
+9. `OneEnd`: a side sends a session's whole close (an abort) at most
+   once (finding 51, lane DOUBLEABORT; `WitnessOneEnd`: one is sent).
 
 Witnesses (`make spec-mutants`, each must be violated, so the invariants
 above guard reachable states): `WitnessAbort` (an agent abort reaches the
@@ -235,6 +237,11 @@ whole close in a config whose property needs the apps to finish.
 - `silent-unknown`: an end not known delivered gets neither a report nor
   an abort: the agent's Close waits for a report that never comes
   (`DoneComes` on `AgentLinkDoneLive.cfg`).
+- `double-abort`: the relay sends a session's abort twice (`OneEnd` on
+  `AgentLinkAbort.cfg`; finding 51: `handleLocalConn`'s `VisitorAbort`
+  and the pump's failed read of the visitor it reset).
+- `close-before-ack`: an inProcConn closed after both half closes is
+  forgotten before its own was acked (`NoSilentLoss`; finding 51).
 - `no-credit` runs with 3 bytes (one past the window).
 - a stream without the end acknowledgement (finding 2: an older agent or
   relay): `race:clean-tail-lost` (`EndAck = FALSE`, `NoSilentLoss`).
@@ -1499,7 +1506,12 @@ stream loss, a stuck target) and checks each stream's trace, after
 checking that each `spec/testdata/reject-*.ndjson` is rejected:
 `reject-data-after-fin` (data sent after the relay's half close),
 `reject-eof-after-loss` (the client got the EOF of an agent half close
-held for the ack after the stream ended: finding 15's race). The
+held for the ack after the stream ended: finding 15's race),
+`reject-double-abort` (a session aborted twice), `reject-inproc-finish-before-ack`
+(an inProcConn forgotten at Close before its half close's ack, recorded by
+`TestTCPTunnelHalfClose`; both finding 51). `make spec-traces-repeat
+COUNT=n` runs the datapath tests `n` times and prints a rejected trace
+whole: a trace rejected once in several runs reproduced. The
 recorder's `Eof` (`traceEof`: `handleLocalConn`'s FIN to the client, an
 inProcConn's `io.EOF`) is logged after `Down` too, and the model takes it
 only for a released half close.
@@ -2619,6 +2631,31 @@ relay link connection never outlives every primary holding its token.
     clause, `WitnessVisitorAbort`; mutants `report-on-write`,
     `silent-unknown`; trace events `PassEnd`, `VisitorKernel`. Guards:
     `TestWaitFinAcked`, `TestTCPTunnelVisitorEndDoneOnceKernelAcked`.
+51. **A session's end sent twice, or before the ack** (code, fixed; low;
+    lane DOUBLEABORT, 2026-11-21). `make spec-traces` rejected about one
+    `TestTCPTunnelHalfClose` stream trace in five (`make
+    spec-traces-repeat`: 21 of 111 on the build box; one of three full
+    runs). Three gaps, each a step the model never takes:
+    - An inProcConn closed by its app after both half closes, its own not
+      yet acked, removed its session at once: `Finish` before the
+      agent's ack (`Held`). Now it is forgotten once the ack came or the
+      stream ended, as a visitor's session waits for it
+      (`handleLocalConn`). Mutant `close-before-ack`, trace
+      `reject-inproc-finish-before-ack`; guard
+      `TestInProcCloseAfterBothHalvesHoldsSessionForAck`.
+    - An auxiliary stream was published (`bindAux`) before its trace
+      began (`traceUp`): a session that picked it meanwhile had its
+      `Open` unrecorded (the recorder's gap, not the relay's). Now the
+      trace begins before the stream is published.
+    - `handleLocalConn` aborted a session whose visitor's end was not
+      known delivered (`VisitorAbort`) or whose write failed, and reset
+      the visitor; the pump's read of that conn then failed and sent a
+      second abort (also after a stall reset, `resetSession`). Now
+      `tcpAgentStream.abort` sends a session's abort once
+      (`tcpSession.abortSent`), and a session the agent or the stream
+      ended is never aborted after. Invariant `OneEnd`, mutant
+      `double-abort`, trace `reject-double-abort`; guard
+      `TestTCPTunnelVisitorAbortSendsOneAbort`.
 
 
 ## Agent-to-agent calls (relay spec/CallCredit.tla)

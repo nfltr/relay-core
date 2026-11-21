@@ -1,0 +1,16 @@
+{"ev":"Up","s":"","n":8388608,"t":"","w":16777216,"a":true,"d":true}
+{"ev":"Open","s":"ws13","n":0,"t":""}
+{"ev":"Write","s":"ws13","n":1,"t":""}
+{"ev":"SendData","s":"ws13","n":1,"t":""}
+{"ev":"Recv","s":"ws13","n":5,"t":"data"}
+{"ev":"Recv","s":"ws13","n":0,"t":"half"}
+{"ev":"SendAck","s":"ws13","n":0,"t":""}
+{"ev":"Read","s":"ws13","n":5,"t":""}
+{"ev":"Eof","s":"ws13","n":0,"t":""}
+{"ev":"Write","s":"ws13","n":65536,"t":""}
+{"ev":"SendData","s":"ws13","n":65536,"t":""}
+{"ev":"CloseWrite","s":"ws13","n":0,"t":"half"}
+{"ev":"Finish","s":"ws13","n":0,"t":""}
+{"ev":"Recv","s":"ws13","n":0,"t":"ack"}
+{"ev":"Recv","s":"ws13","n":0,"t":"done"}
+{"ev":"Down","s":"","n":0,"t":""}
