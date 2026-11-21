@@ -102,6 +102,8 @@ today besides (`cmd/nfltr-relay-core/links_test.go` fails on any other):
 - fsnotify (the key file's reload), golang-lru (`hashicorp/golang-lru/v2`);
 - quic-go, as `github.com/nfltr/quic-go` (a fork), through quiclink;
 - `github.com/flynn/noise` (the relay client's end-to-end encryption);
+- `github.com/jackpal/gateway` and `github.com/jackpal/go-nat-pmp` (the
+  relay client's NAT-PMP port mapping for its direct path);
 - `golang.org/x/...` (crypto, net, sync, sys, text).
 
 No cgo. Every module it links is public.
@@ -131,10 +133,13 @@ the latest release tag.
 
 `make ci` runs what the workflow (`.github/workflows/check.yml`) runs: build,
 vet, tests with `-race`, short fuzzing, gosec, semgrep (docker), govulncheck,
-the publish check, the binary size budget, the examples and this README's
-quickstart. `make hooks` installs a pre-push hook that runs it.
+the publish check, the binary size budget, the examples, this README's
+quickstart, the API check, the TLA+ specs and their mutants, and the
+ProVerif models. `make hooks` installs a pre-push hook that checks each
+pushed commit's author and refuses a push to main or a tag whose commit
+has no green `make ci` result from the maintainer's Linux runner.
 
-A TLC run, ProVerif model whose inputs did not change is not checked again:
+A TLC run or ProVerif model whose inputs did not change is not checked again:
 `scripts/cicache.sh` keys each by the sha256 of what it reads (config,
 models, jars, arguments) and replays a stored pass (`CICACHE=off`
 disables it, `CICACHE_VERIFY=1` reruns every hit and fails on a different
