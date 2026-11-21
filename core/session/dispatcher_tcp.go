@@ -402,7 +402,8 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 					traceEof(sess)
 				}
 				CloseWrite(conn)
-				<-sess.closed // the client's bytes still go to the agent until it ends too
+				as.sendDone(sessionID, sess) // passed on: a visitor's kernel acknowledges no more (lane ENDGRPC finding 5)
+				<-sess.closed                // the client's bytes still go to the agent until it ends too
 			}
 			return nil
 		}

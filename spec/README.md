@@ -2545,6 +2545,47 @@ relay link connection never outlives every primary holding its token.
     `TestRebalanceMoveKeepsRenewingTheRecord`,
     `TestTickRenewalNotThrottledByReannounce`.
 
+
+50. **A session's end on the gRPC streams was acknowledged on receipt**
+    (code, fixed; medium; lane ENDGRPC, 2026-11-21, nfltr
+    `docs/decisions/endack-every-transport-2026-11-20.md` findings 4, 8).
+    The relay sent `EndAckFrame` when its queue took the agent's half
+    close, the agent likewise, and the relay SDK's accepted conn's Close
+    on a gRPC stream returned at once: a session could report a clean end
+    whose tail the far app never read. Now both sides announce
+    `dataplane.EndDoneHeader` and report a half close delivered
+    (`EndDoneFrame`) once their onward app took it: the relay once Join
+    passed the agent's end on (`inProcConn.AckEnd`: its client's
+    `CloseWriteSync` returned) or the visitor's `CloseWrite` did; the
+    agent once its target's `CloseWrite` did. The relay's in-process conn
+    is a receipt syncer (`CloseWriteSyncReceived`: the Join's hold ends at
+    the ack, its return at the report, 30 s idle bound counted by the
+    session's window updates); the agent's accepted conn's Close waits for
+    the report (`reportDelivered`). The ack stays a receipt: holds and the
+    clean end wait for it, never for the report (`hold-on-done`: crossing
+    half closes would wait for each other). Model: `ed`, `TakeEnd`,
+    `SendDone`, `DoneTruth`, `DoneComes`, `WitnessDone`; mutants
+    `done-on-receipt` and `hold-on-done`; trace events `TakeEnd`,
+    `SendDone`, `Recv` of `done`. Guards: relay-core
+    `TestTCPTunnelEndDoneAfterOnward`, `TestInProcCloseWriteSyncWaitsForEndDone`;
+    relay `TestQueueConnCloseOnGRPCWaitsForEndDone`,
+    `TestQueueConnCloseOnGRPCStreamEndBeforeEndDone`,
+    `TestTCPTunnelSendsEndDoneOnceTargetTookTheEnd`. Open (finding 5 of
+    that document): a TCP visitor's (and a TCP target's) end is reported
+    once passed to its kernel. The delivery signal chosen is the kernel's
+    cumulative ACK covering the FIN: Linux `TCP_INFO` `tcpi_bytes_acked`
+    reaching the bytes written + 1 (the FIN's sequence number; an RST
+    never advances it, while `tcpi_unacked == 0` also holds after an RST
+    purged the queue), its advance the idle bound's progress; macOS
+    `TCP_CONNECTION_INFO` state `FIN_WAIT_2` or `TIME_WAIT` after
+    `FIN_WAIT_1` (an RST goes to `CLOSED`), while `CLOSED` from `LAST_ACK`
+    is an ACK or an RST alike; there, and on every other OS, the end is
+    not known delivered: no report, the session aborted toward the agent
+    (its Close returns `link.ErrReset` at once), never a report of
+    delivery. `golang.org/x/sys/unix` (`GetsockoptTCPInfo`,
+    `GetsockoptTCPConnectionInfo`), already in the module graph.
+
+
 ## Agent-to-agent calls (relay spec/CallCredit.tla)
 
 An agent-to-agent call's credit is end to end between the two rpcclient

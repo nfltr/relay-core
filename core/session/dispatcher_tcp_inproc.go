@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nfltr/link"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -191,6 +192,91 @@ func (c *inProcConn) CloseWrite() error {
 	c.agentStream.closeWrite(c.sessionID, c.sess)
 	return nil
 }
+
+// CloseWriteSync is CloseWrite that returns once the agent's target took
+// the end (peerlink's endSyncer): Join acknowledges its other conn's end
+// only then.
+func (c *inProcConn) CloseWriteSync() error { return c.CloseWriteSyncReceived(nil) }
+
+// CloseWriteSyncReceived is CloseWriteSync that calls received (when not
+// nil) at the agent's receipt (dataplane.EndAckFrame), where a Join's hold
+// ends (link spec/HopHold.tla R1). It returns nil once the agent reported
+// the end delivered (dataplane.EndDoneFrame; an agent without the report:
+// at its receipt; without the ack: at once), link.ErrReset when the
+// session failed or its stream ended first, link.ErrEndAckIdle when the
+// agent's target took none of the session's bytes for endDoneIdle (lane
+// ENDGRPC finding 4; spec/AgentLink.tla DoneTruth).
+func (c *inProcConn) CloseWriteSyncReceived(received func()) error {
+	_ = c.CloseWrite()
+	s := c.sess
+	if s.endAck {
+		if err := c.waitEnd(s.ackCh); err != nil {
+			return err
+		}
+	}
+	if received != nil {
+		received()
+	}
+	if !s.endDone {
+		return nil
+	}
+	return c.waitEnd(s.doneCh)
+}
+
+// endDoneIdle bounds the wait for the agent's report while the agent's
+// target takes none of the session's bytes (no window update), as link's
+// CloseWriteSync's idle bound: a slow, live tail is no failure.
+var endDoneIdle = 30 * time.Second
+
+// waitEnd waits for ch: nil once closed; link.ErrReset once the session
+// failed (not a clean end) or its stream ended; link.ErrEndAckIdle after
+// endDoneIdle without a window update.
+func (c *inProcConn) waitEnd(ch <-chan struct{}) error {
+	s := c.sess
+	closed := s.closed
+	idle := time.NewTimer(endDoneIdle)
+	defer idle.Stop()
+	seen := s.grants.Load()
+	for {
+		select {
+		case <-ch:
+			return nil
+		case <-closed:
+			closed = nil // a clean end (both halves) comes before the report
+			if s.endErr() != io.EOF {
+				return link.ErrReset
+			}
+			continue
+		case <-c.agentStream.Done:
+		case <-idle.C:
+			if g := s.grants.Load(); g != seen {
+				seen = g
+				idle.Reset(endDoneIdle)
+				continue
+			}
+		}
+		select {
+		case <-ch: // it came with the stream's end
+			return nil
+		default:
+		}
+		select {
+		case <-c.agentStream.Done:
+			return link.ErrReset
+		default:
+			return link.ErrEndAckIdle
+		}
+	}
+}
+
+// HoldEndAck (peerlink.EndAcker): Join acknowledges the agent's end only
+// once its other conn took it (AckEnd); nothing to hold here.
+func (c *inProcConn) HoldEndAck() {}
+
+// AckEnd (peerlink.EndAcker): Join passed the agent's half close on (its
+// client's CloseWriteSync returned, or onto a conn that acknowledges
+// nothing): the agent's accepted conn's Close may return.
+func (c *inProcConn) AckEnd() { c.agentStream.sendDone(c.sessionID, c.sess) }
 
 func (c *inProcConn) Close() error {
 	c.closeOnce.Do(func() {
