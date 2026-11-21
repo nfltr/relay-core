@@ -111,7 +111,7 @@ bench-tcp-tunnel:
 # caught and the documented races found (both in CI); spec-liveness,
 # spec-simulate and spec-traces: weekly. Java and tla2tools.jar come from
 # scripts/fetch-tla.sh (pinned, cached outside the repository).
-.PHONY: spec spec-mutants spec-nightly spec-liveness spec-simulate spec-traces
+.PHONY: spec spec-mutants spec-nightly spec-liveness spec-simulate spec-traces spec-traces-repeat
 spec:
 	./scripts/spec.sh check
 
@@ -143,6 +143,11 @@ spec-simulate:
 
 spec-traces:
 	./scripts/spec.sh traces
+
+# spec-traces-repeat COUNT=n: the datapath tests' traces n times (TRACE_TESTS
+# in the environment narrows them), a rejected one printed whole.
+spec-traces-repeat:
+	COUNT=$(COUNT) ./scripts/spec.sh repeat
 
 CI_WORKFLOW_FILE := .github/workflows/check.yml
 # ci: what the GitHub workflow runs on a push (CI_WORKFLOW_FILE), run here.

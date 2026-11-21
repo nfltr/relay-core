@@ -2,7 +2,7 @@
 # Copyright 2026 nfltr
 # SPDX-License-Identifier: Apache-2.0
 
-# spec.sh actions|check|nightly|liveness|mutants|simulate|traces|walks|trace F: the TLA+ models of
+# spec.sh actions|check|nightly|liveness|mutants|simulate|traces|repeat|walks|trace F: the TLA+ models of
 # spec/ (spec/README.md).
 #   actions   every model step in spec/README.md's action tables (and every
 #             row a step), every event a trace module takes recorded by Go.
@@ -39,6 +39,9 @@
 #             call's lifecycle (calllifecycle-*.ndjson, the same recorder)
 #             against relay's spec/TraceCallLifecycle.tla; with
 #             COVERAGE=1 the steps no trace took (weekly).
+#   repeat    the datapath tests of traces (TRACE_TESTS) COUNT (10) times,
+#             each frame stream's trace against spec/Trace.tla, a rejected
+#             one printed whole (make spec-traces-repeat COUNT=n).
 #   walks     random walks of spec/Directory.cfg into
 #             spec/testdata/directory-walks.ndjson (core/directory
 #             TestDirectoryModelWalks replays them against the store).
@@ -48,6 +51,8 @@
 # Java and tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
 cd "$(dirname "$0")/.."
+# The frame streams' datapath tests whose traces spec/Trace.tla checks (traces, repeat).
+datapath_tests='^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions|TestTCPTunnelClientResetResetsTargetEndToEnd|TestTraceWriteAfterFinishIsLeftOut)$'
 tools=$(scripts/fetch-tla.sh)
 java=$(echo "$tools" | sed -n 1p)
 jar=$(echo "$tools" | sed -n 2p)
@@ -417,7 +422,7 @@ checktraces() {
 			echo "trace $(basename "$t"): $(wc -l <"$t" | tr -d ' ') lines: REJECTED"
 			grep -E 'Error|unknown event' "$t.out" | head -5
 			echo "-- $(basename "$t") (the trace TLC could not take whole; its last lines):"
-			tail -40 "$t"
+			if [ -n "${TRACE_WHOLE:-}" ]; then cat "$t"; else tail -40 "$t"; fi
 			[ -z "${TRACE_KEEP:-}" ] || cp "$t" "$TRACE_KEEP/"
 		fi
 		[ -z "${COVERAGE:-}" ] || grep -E '^<[A-Za-z]+ line .*>: [0-9]+:[0-9]+$' "$t.out" >>"$1/coverage"
@@ -729,6 +734,18 @@ simulate)
 	grep -E 'states generated|traces generated|Finished in|Error|violated' "$work/sim.out" || true
 	[ $st = 0 ] || { tail -60 "$work/sim.out"; exit $st; }
 	;;
+repeat)
+	# The frame streams' datapath tests (TRACE_TESTS) COUNT times, each
+	# stream's trace checked against spec/Trace.tla; a rejected one printed
+	# whole: a trace rejected once in several runs reproduced.
+	mkdir -p "$work/rep"
+	RELAYTRACE=$work/rep go test -tags relaytrace -count="${COUNT:-10}" -run "${TRACE_TESTS:-$datapath_tests}" ./core/session/ >"$work/test.out" 2>&1 || {
+		cat "$work/test.out"
+		exit 1
+	}
+	find "$work/rep" -type f ! -name 'datapath-*' -exec rm {} +
+	TRACE_WHOLE=1 checktraces "$work/rep" trace
+	;;
 katraces)
 	# The key file's traces alone (seconds): the keyfile tests' recorded
 	# steps and the reject-keyaccount-* fixtures (make spec-traces runs them too).
@@ -748,7 +765,7 @@ katraces)
 	checktraces "$work/katraces" katrace
 	;;
 traces)
-	tests=${TRACE_TESTS:-'^(TestTCPTunnelConcurrentSessionsIntact|TestTCPTunnelHalfClose|TestTCPTunnelCloseAfterDataDeliversEverything|TestTCPTunnelStreamLossCutsSessions|TestTCPTunnelStuckTargetDoesNotStallOtherSessions|TestAgentMoves.*|TestAgentThatDoesNotMoveIsLetGo|TestDrainBoundEndsOnceRoutingStopped|TestMoveAskedAtDrainStart|TestRebalance.*|TestConnectWhileTheMovedSessionStillEndsIsUnavailable|TestConnectTCPOfAMovingAgentStaysWhileDraining|TestMovedAgentsTCPStreamTakesNoNewSessions|TestTCPTunnelClientResetResetsTargetEndToEnd|TestTraceWriteAfterFinishIsLeftOut)$'}
+	tests=${TRACE_TESTS:-$datapath_tests}
 	htests=${HANDOFF_TESTS:-'^(TestAgentLinkTCPSessions|TestAgentLinkCutResetsVisitor|TestAgentLinkSilentEndsPrimary|TestAgentLinkUpForThePrimarysLife|TestAgentLinkDialUnanswered|TestAgentLinkEndsWithItsPort|TestHeartbeatThresholdRestartsWhenTheLinkGoesDown|TestAgentLinkResumedByTheNextPrimary|TestAgentLinkCarriesSessions)$'}
 	ptests=${PRESENCE_TESTS:-'^(TestPresenceAcrossReplicas|TestPresenceAcrossReplicasFailedWrites)$'}
 	cctests=${CALLCREDIT_TESTS:-'^TestInternalAgentRouting_.*$'}
@@ -876,7 +893,7 @@ trace)
 	check_trace "$2" && echo accepted || { grep -E 'Error|unknown event' "$2.out" | head -5; echo rejected; exit 1; }
 	;;
 *)
-	echo "usage: spec.sh actions|check|nightly|liveness|mutants|simulate|traces|walks|trace FILE" >&2
+	echo "usage: spec.sh actions|check|nightly|liveness|mutants|simulate|traces|repeat|walks|trace FILE" >&2
 	exit 2
 	;;
 esac
