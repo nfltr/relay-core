@@ -578,6 +578,10 @@ mutants)
 	expect AgentLinkDone.cfg MCAgentLink.tla done-on-receipt -e "$m"'done-on-receipt"/'
 	expect AgentLinkDoneLive.cfg MCAgentLink.tla hold-on-done -e "$m"'hold-on-done"/'
 	expect AgentLinkDone.cfg MCAgentLink.tla witness:done -e 's/    DoneTruth/    WitnessDone/'
+	# A visitor's end: delivered only once its kernel acknowledged the FIN (lane VISITOREND).
+	expect AgentLinkDone.cfg MCAgentLink.tla report-on-write -e "$m"'report-on-write"/'
+	expect AgentLinkDoneLive.cfg MCAgentLink.tla silent-unknown -e "$m"'silent-unknown"/'
+	expect AgentLinkDone.cfg MCAgentLink.tla witness:visitor-abort -e 's/    DoneTruth/    WitnessVisitorAbort/'
 	expect Handoff.cfg Handoff.tla attach-ended -e "$m"'attach-ended"/'
 	expect Handoff.cfg Handoff.tla keep-conns -e "$m"'keep-conns"/'
 	expect HandoffLive.cfg Handoff.tla wait-forever -e "$m"'wait-forever"/'

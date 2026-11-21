@@ -28,9 +28,11 @@ Step ==
       [] E.ev = "Write" -> Write("r", E.s, E.n)
       [] E.ev = "SendData" -> pend["r"][E.s] = E.n /\ SendData("r", E.s)
       [] E.ev = "CloseWrite" -> CloseWrite("r", E.s)
-      [] E.ev = "Abort" -> Abort("r", E.s)
+      [] E.ev = "Abort" -> Abort("r", E.s) \/ VisitorAbort(E.s)
       [] E.ev = "SendWin" -> gpend["r"][E.s] = E.n /\ SendWin("r", E.s)
       [] E.ev = "SendAck" -> SendAck("r", E.s)
+      [] E.ev = "PassEnd" -> PassEnd(E.s)
+      [] E.ev = "VisitorKernel" -> VisitorKernel(E.s) /\ ed'["r"][E.s].k = E.k
       [] E.ev = "TakeEnd" -> TakeEnd("r", E.s)
       [] E.ev = "SendDone" -> SendDone("r", E.s)
       [] E.ev = "Read" -> Read("r", E.s, E.n)

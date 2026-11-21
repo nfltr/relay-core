@@ -46,12 +46,12 @@ VARIABLES
     apend,  \* [P -> [Sess -> BOOLEAN]]: an ack of the peer's half close decided, not yet queued
     waits,  \* [P -> [Sess -> BOOLEAN]]: the app half-closed before the peer's half close was released to it: the EOF it then gets is a clean end (FIN both ways)
     closing, \* [Sess -> BOOLEAN]: the relay's inProcConn.Close was called (finding 3)
-    ed,     \* [P -> [Sess -> [took, dp, done]]]: took: p's app (its onward conn) took the peer's end; dp: p's "done" frame decided, not yet queued; done: the peer's "done" frame came (EndDone)
+    ed,     \* [P -> [Sess -> [took, dp, done, k]]]: took: p's app (its onward conn) took the peer's end; dp: p's "done" frame decided, not yet queued; done: the peer's "done" frame came (EndDone); k: a visitor's kernel and the agent's end (VisitorKernel)
     err     \* receive steps that broke the protocol
 
 vars == <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err, ed>>
 
-ED0 == [took |-> FALSE, dp |-> FALSE, done |-> FALSE]
+ED0 == [took |-> FALSE, dp |-> FALSE, done |-> FALSE, k |-> ""]
 
 NoCr == [on |-> FALSE, n |-> 0, held |-> 0, cons |-> 0]
 Zero == [p \in P |-> [s \in Sess |-> 0]]
@@ -371,9 +371,16 @@ Down(p) ==
 \* (relay inProcConn.EndDelivered, handleLocalConn after the visitor's
 \* CloseWrite; agent pump after the target's CloseWrite), on its own
 \* goroutine like the ack. Holds and the session's end stay on the ack.
+\* For a visitor (a relay session not InProc: a plain TCP conn) that is
+\* its kernel's ACK of the FIN (VisitorKernel); report-on-write: the end
+\* passed to the kernel taken for delivered (lane VISITOREND).
+TookEnd(p, s) ==
+    /\ rfin[p][s] = "half" /\ why[p][s] = "eof" /\ q[p][s] = 0 /\ wfin[p][s] # "whole"
 TakeEnd(p, s) ==
     /\ EndDone /\ ~ed[p][s].took
-    /\ rfin[p][s] = "half" /\ why[p][s] = "eof" /\ q[p][s] = 0 /\ wfin[p][s] # "whole"
+    /\ TookEnd(p, s)
+    /\ p = "r" /\ s \notin InProc =>
+         IF Mutant = "report-on-write" THEN ed[p][s].k # "" ELSE ed[p][s].k = "acked"
     /\ ed' = [ed EXCEPT ![p][s].took = TRUE, ![p][s].dp = @ \/ Mutant # "done-on-receipt"]
     /\ UNCHANGED <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
@@ -384,6 +391,38 @@ SendDone(p, s) ==
     /\ ed' = [ed EXCEPT ![p][s].dp = FALSE]
     /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
 
+\* The relay passes the agent's end onto a visitor's conn (handleLocalConn's
+\* CloseWrite, Join's onto a visitor): its kernel sends the FIN after the
+\* bytes written.
+PassEnd(s) ==
+    /\ EndDone /\ s \notin InProc /\ ed["r"][s].k = "" /\ TookEnd("r", s)
+    /\ ed' = [ed EXCEPT !["r"][s].k = "sent"]
+    /\ UNCHANGED <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
+
+\* What the relay's kernel tells of the FIN (VisitorKernel): the visitor's
+\* kernel acknowledged it, with every byte before it ("acked": Linux
+\* tcpi_bytes_acked past the bytes written, macOS FIN_WAIT_2 or TIME_WAIT);
+\* an RST, or nothing acknowledged for the idle bound ("rst": the far app
+\* stopped reading, or closed with bytes unread); or it cannot tell ("unknown":
+\* macOS's CLOSED from LAST_ACK, another OS).
+VisitorKernel(s) ==
+    /\ ed["r"][s].k = "sent"
+    /\ \E k \in {"acked", "rst", "unknown"} : ed' = [ed EXCEPT !["r"][s].k = k]
+    /\ UNCHANGED <<ch, alive, down, st, cr, pend, gpend, q, rcv, wr, wfin, rfin, finAt, why, clean, acked, apend, waits, closing, err>>
+
+\* An end not known delivered: no report; the relay aborts the session
+\* toward the agent (TCPData.abort, also once the session ended here), so
+\* the agent's Close returns an error at once (silent-unknown: no abort,
+\* the agent's Close waits for a report that never comes: DoneComes).
+VisitorAbort(s) ==
+    /\ Mutant # "silent-unknown"
+    /\ ed["r"][s].k \in {"rst", "unknown"} /\ wfin["r"][s] # "whole"
+    /\ wfin' = [wfin EXCEPT !["r"][s] = "whole"]
+    /\ Put("r", Frame("abort", s, 0, wr["r"][s]))
+    /\ UNCHANGED <<alive, down, st, cr, pend, gpend, q, rcv, wr, rfin, finAt, why, clean, acked, apend, waits, closing, err, ed>>
+
+Visitor(s) == PassEnd(s) \/ VisitorKernel(s) \/ VisitorAbort(s)
+
 App(p, s) ==
     \/ \E n \in 1..Chunk : Write(p, s, n)
     \/ CloseWrite(p, s)
@@ -392,7 +431,7 @@ App(p, s) ==
     \/ \E k \in 1..q[p][s] : Read(p, s, k)
 
 Next ==
-    \/ \E s \in Sess : Open(s)
+    \/ \E s \in Sess : Open(s) \/ Visitor(s)
     \/ \E p \in P, s \in Sess : App(p, s) \/ SendData(p, s) \/ SendWin(p, s) \/ SendAck(p, s) \/ Finish(p, s) \/ TakeEnd(p, s) \/ SendDone(p, s)
     \/ \E p \in P : Recv(p) \/ Stall(p) \/ Down(p)
     \/ Break
@@ -404,6 +443,7 @@ Next ==
 Protocol ==
     \/ \E p \in P : Recv(p) \/ Stall(p) \/ Down(p)
     \/ \E p \in P, s \in Sess : SendData(p, s) \/ SendWin(p, s) \/ SendAck(p, s) \/ Finish(p, s) \/ TakeEnd(p, s) \/ SendDone(p, s)
+    \/ \E s \in Sess : Visitor(s)
 FairApps ==
     \/ Open(Fair)
     \/ \E p \in P :
@@ -417,6 +457,7 @@ Fairness == WF_vars(Protocol) /\ WF_vars(FairApps)
 RelaySide ==
     \/ Recv("r") \/ Stall("r") \/ Down("r")
     \/ \E p \in P, s \in Sess : SendData(p, s) \/ SendWin(p, s) \/ SendAck(p, s) \/ Finish(p, s) \/ TakeEnd(p, s) \/ SendDone(p, s)
+    \/ \E s \in Sess : Visitor(s)
 
 Spec == Init /\ [][Next]_vars
 LiveSpec == Spec /\ Fairness
@@ -474,10 +515,13 @@ AbortTyped ==
 \* app took every byte it wrote and the end (lane ENDGRPC finding 4: the
 \* relay acked on receipt, the SDK's Close on a gRPC stream returned at
 \* once).
+\* A visitor's took the end only once its kernel acknowledged the FIN
+\* (lane VISITOREND, mutant report-on-write).
 DoneTruth ==
     \A p \in P, s \in Sess : ed[p][s].done =>
         /\ ed[Peer(p)][s].took
         /\ rcv[Peer(p)][s] = finAt[p][s]
+        /\ p = "a" /\ s \notin InProc => ed["r"][s].k = "acked"
 
 \* Witnesses (make spec-mutants: TLC must violate each, so the invariants
 \* above are not vacuous): the agent's abort reaches the relay; an app
@@ -485,6 +529,7 @@ DoneTruth ==
 WitnessAbort == EndAck => \A s \in Sess : rfin["r"][s] # "whole"
 WitnessRelayAbort == RelayAbort => \A s \in Sess \ InProc : rfin["a"][s] # "whole"
 WitnessDone == EndDone => \A p \in P, s \in Sess : ~ed[p][s].done
+WitnessVisitorAbort == \A s \in Sess \ InProc : ~(ed["r"][s].k = "unknown" /\ wfin["r"][s] = "whole")
 WitnessHeldEof == \A p \in P, s \in Sess : ~(waits[p][s] /\ why[p][s] = "eof")
 
 (* Liveness. *)

@@ -105,7 +105,10 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
 | `SendWin(p, s)` | the window frame `link.NewCredit`'s grant callback queues (`dataplane.WindowFrame`) |
 | `Recv(p)`, `RecvData`, `RecvWin`, `RecvClose`, `Release` | relay `recvLoop` (`grpcCreditFrame`, then `Dispatch`); agent `serveTCPStream`'s receive loop: a data frame into the session queue (`PushWithin`), a window frame to `Credit.Grant` (`ParseWindowFrame`), a close frame (`closeFrame`), the half close released to the reader at once or at the ack (`recvAck`) |
 | `SendAck(p, s)` | the ack frame (`dataplane.EndAckFrame`) queued by its own goroutine: the receive loop never waits for its outbox |
-| `TakeEnd(p, s)` | the peer's end reached the app: relay `inProcConn.AckEnd` (Join passed the agent's end on: its client's `CloseWriteSync` returned, or onto a conn that acknowledges nothing), `handleLocalConn` after the visitor's `CloseWrite`; agent `pump`'s writer after the target's `CloseWrite` (`EndDone`) |
+| `TakeEnd(p, s)` | the peer's end reached the app: relay `inProcConn.AckEnd` (Join passed the agent's end on: its client's `CloseWriteSync` returned, or onto a conn that acknowledges nothing), `handleLocalConn` once the visitor's kernel acknowledged the FIN (`VisitorKernel` "acked"); agent `pump`'s writer after the target's `CloseWrite` (`EndDone`) |
+| `PassEnd(s)` | relay `handleLocalConn`'s `CloseWrite` of the visitor's conn (Join's: `finAckedConn.CloseWriteSync`): the visitor's kernel is sent the FIN after the bytes written (lane VISITOREND) |
+| `VisitorKernel(s)` | `waitFinAcked`: Linux `TCP_INFO` `tcpi_bytes_acked` past the bytes written ("acked"), macOS `TCP_CONNECTION_INFO` `FIN_WAIT_2`/`TIME_WAIT` ("acked"), `CLOSED` after an RST or nothing acknowledged for `endDoneIdle` ("rst": `link.ErrReset`, `link.ErrEndAckIdle`), macOS `CLOSED` from `LAST_ACK`, another OS, a conn not TCP ("unknown": `errEndUnknown`) |
+| `VisitorAbort(s)` | the end not known delivered: `handleLocalConn` resets the visitor (its queued tail and FIN never go), then sends `TCPData.abort` (also after the session ended here); Join's `finAckedConn.CloseWriteSync` resets the visitor and Join aborts the agent's link session |
 | `SendDone(p, s)` | the delivery report (`dataplane.EndDoneFrame`) queued by its own goroutine; the peer's receive loop takes it (`recvDone`, `endDelivered`): the closer's wait (relay `inProcConn.CloseWriteSync`, agent `QueueConn.Close` through `reportDelivered`) returns nil |
 | `Finish(p, s)` | relay `removeSession` (`handleLocalConn` returned: both halves closed, the peer's whole close, or its own); agent `closeSession` (`pump` after `<-written`, `closeFrame`) |
 | `Stall(p)` | without credit only: `deliver`/`PushWithin` time out, `resetSession` |
@@ -148,14 +151,23 @@ Per side `p` and session `s` (sessions `Sess`, opened by the relay):
    close delivered (`done`) only once the peer's app took every byte it
    wrote and the end. The ack stays a receipt: holds and a session's
    clean end wait for it, never for `done` (R1 of
-   nfltr `docs/decisions/endack-every-transport-2026-11-20.md`).
+   nfltr `docs/decisions/endack-every-transport-2026-11-20.md`). A
+   visitor's (a relay session not `InProc`: a plain TCP conn) took it
+   only once its kernel acknowledged the FIN (`PassEnd`,
+   `VisitorKernel` "acked"); an end its kernel cannot tell delivered
+   ("rst", "unknown") gets no report: the relay aborts the session toward
+   the agent (`VisitorAbort`, lane VISITOREND). The kernel's ACK of a FIN
+   covers every byte before it (RFC 9293 section 3.4: the FIN occupies
+   one sequence number after the data, the ACK is cumulative); an RST
+   acknowledges nothing (section 3.5.2).
 
 Witnesses (`make spec-mutants`, each must be violated, so the invariants
 above guard reachable states): `WitnessAbort` (an agent abort reaches the
 relay), `WitnessRelayAbort` (a relay abort reaches the agent,
 `AgentLinkAbort.cfg`), `WitnessHeldEof` (an app that half-closed first
 gets a released EOF), `WitnessDone` (a side learns its end delivered,
-`AgentLinkDone.cfg`).
+`AgentLinkDone.cfg`), `WitnessVisitorAbort` (an end the visitor's kernel
+could not tell delivered aborts the session, `AgentLinkDone.cfg`).
 
 ### Liveness (weak fairness on every step that is not an app's)
 
@@ -216,9 +228,22 @@ whole close in a config whose property needs the apps to finish.
   the ack: crossing half closes each hold the EOF the other's report
   waits for (`Isolation`, `DoneComes` on `AgentLinkDoneLive.cfg`; finding
   8's cycle).
+- `report-on-write`: a visitor's end reported delivered once passed to
+  the relay's kernel (`DoneTruth` on `AgentLinkDone.cfg`; lane VISITOREND,
+  ENDGRPC finding 5: `handleLocalConn` reported right after the
+  visitor's `CloseWrite`).
+- `silent-unknown`: an end not known delivered gets neither a report nor
+  an abort: the agent's Close waits for a report that never comes
+  (`DoneComes` on `AgentLinkDoneLive.cfg`).
 - `no-credit` runs with 3 bytes (one past the window).
 - a stream without the end acknowledgement (finding 2: an older agent or
   relay): `race:clean-tail-lost` (`EndAck = FALSE`, `NoSilentLoss`).
+
+### Code map (drift check)
+
+| what the spec models | file |
+|---|---|
+| a visitor's end (`PassEnd`, `VisitorKernel`, `VisitorAbort`) | `core/session/visitor_end.go`, `core/session/visitor_end_linux.go`, `core/session/visitor_end_darwin.go`, `core/session/visitor_end_other.go` |
 
 ## The link session interface (LinkSession.tla, lane LINKIFACE)
 
@@ -1726,8 +1751,8 @@ accepted, 4-6 s each.
 |---|---|---|---|---|
 | `AgentLink.cfg` (CI) | invariants, 1 session, window 2, 2 bytes, 1 a frame, in-process relay end, `EndAck` (2026-11-02, after findings 1-2) | 2,905,774 (601,711) | | 28 s |
 | `AgentLinkLarge.cfg` (`make spec-nightly`) | as the CI config was: 3 bytes, 2 a frame, not in-process | 5,774,765 (1,217,770) before `EndAck` | 39 | 81 s before `EndAck` |
-| `AgentLinkDone.cfg` (CI) | invariants with `DoneTruth`, 1 session, window 1, 1 byte each way, the stream may fail, aborts, `EndDone` (2026-11-21, lane ENDGRPC) | 2,794,813 (614,409) | | 2 min 30 s (`taskpolicy -b`, load) |
-| `AgentLinkDoneLive.cfg` (CI) | `Isolation`, `DoneComes`, 1 session, window 1, crossing half closes | 40,391 (13,100) | 31 | 5 s |
+| `AgentLinkDone.cfg` (CI) | invariants with `DoneTruth`, 1 session, window 1, 1 byte each way, the stream may fail, aborts, `EndDone` (2026-11-21, lane ENDGRPC; lane VISITOREND's visitor kernel: 4,362,435 (923,051), 52 s against 35 s before, 2 workers, load 13) | 2,794,813 (614,409) | | 2 min 30 s (`taskpolicy -b`, load) |
+| `AgentLinkDoneLive.cfg` (CI) | `Isolation`, `DoneComes`, 1 session, window 1, crossing half closes (with the visitor kernel, lane VISITOREND) | 133,373 (41,912) | | 13 s |
 | `AgentLinkWrite.cfg` (CI) | `WriteReturns`, 1 in-process session, relay window 1, outbox 1 frame, the agent may stop reading | 557,944 (141,165) | 36 | 51 s |
 | `Handoff.cfg` (CI) | invariants, 2 sessions, 2 primaries, the link's own redial (finding 30) | 341,113 (81,647) | | 2-4 s |
 | `Move.cfg` (CI) | invariants, 2 requests, 1 TCP session, drain, B failing (findings 31, 32, MV-5), B's arrival (finding 45), onward forwards (finding 46) | 271,505 (51,545) | 25 | 6 s at load 25 (2026-11-06; 135,307 states before finding 45) |
@@ -2570,20 +2595,30 @@ relay link connection never outlives every primary holding its token.
     `TestTCPTunnelEndDoneAfterOnward`, `TestInProcCloseWriteSyncWaitsForEndDone`;
     relay `TestQueueConnCloseOnGRPCWaitsForEndDone`,
     `TestQueueConnCloseOnGRPCStreamEndBeforeEndDone`,
-    `TestTCPTunnelSendsEndDoneOnceTargetTookTheEnd`. Open (finding 5 of
-    that document): a TCP visitor's (and a TCP target's) end is reported
-    once passed to its kernel. The delivery signal chosen is the kernel's
-    cumulative ACK covering the FIN: Linux `TCP_INFO` `tcpi_bytes_acked`
-    reaching the bytes written + 1 (the FIN's sequence number; an RST
-    never advances it, while `tcpi_unacked == 0` also holds after an RST
-    purged the queue), its advance the idle bound's progress; macOS
-    `TCP_CONNECTION_INFO` state `FIN_WAIT_2` or `TIME_WAIT` after
-    `FIN_WAIT_1` (an RST goes to `CLOSED`), while `CLOSED` from `LAST_ACK`
-    is an ACK or an RST alike; there, and on every other OS, the end is
-    not known delivered: no report, the session aborted toward the agent
-    (its Close returns `link.ErrReset` at once), never a report of
-    delivery. `golang.org/x/sys/unix` (`GetsockoptTCPInfo`,
-    `GetsockoptTCPConnectionInfo`), already in the module graph.
+    `TestTCPTunnelSendsEndDoneOnceTargetTookTheEnd`. Closed by lane
+    VISITOREND (finding 5 of that document): a TCP visitor's end is
+    reported delivered only once the visitor's kernel acknowledged the
+    FIN, on the gRPC streams (`handleLocalConn`: `EndDoneFrame`) and the
+    agent link (Join through `finAckedConn.CloseWriteSync`: the ENDACK).
+    The signal is the kernel's cumulative ACK covering the FIN: Linux
+    `TCP_INFO` `tcpi_bytes_acked` reaching the bytes written + 1 (the
+    FIN's sequence number; an RST never advances it, while
+    `tcpi_unacked == 0` also holds after an RST purged the queue), its
+    advance the idle bound's progress (`endDoneIdle`, 30 s); macOS
+    `TCP_CONNECTION_INFO` state `FIN_WAIT_2` or `TIME_WAIT` (an RST goes
+    to `CLOSED`), `tcpi_snd_sbbytes` the progress, while `CLOSED` from
+    `LAST_ACK` is an ACK or an RST alike; there, on every other OS and on
+    a conn that is not TCP, the end is not known delivered
+    (`errEndUnknown`): no report, the session aborted toward the agent
+    (its Close returns `link.ErrReset` at once) and the visitor reset,
+    never a report of delivery. No event tells an ACK: `waitFinAcked`
+    polls with backoff (1 ms doubling to 50 ms), bounded by the idle
+    bound. `golang.org/x/sys/unix` (`GetsockoptTCPInfo`,
+    `GetsockoptTCPConnectionInfo`), already in the module graph. Model:
+    `PassEnd`, `VisitorKernel`, `VisitorAbort`, `DoneTruth`'s visitor
+    clause, `WitnessVisitorAbort`; mutants `report-on-write`,
+    `silent-unknown`; trace events `PassEnd`, `VisitorKernel`. Guards:
+    `TestWaitFinAcked`, `TestTCPTunnelVisitorEndDoneOnceKernelAcked`.
 
 
 ## Agent-to-agent calls (relay spec/CallCredit.tla)
