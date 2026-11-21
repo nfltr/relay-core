@@ -416,6 +416,8 @@ checktraces() {
 			bad=$((bad + 1))
 			echo "trace $(basename "$t"): $(wc -l <"$t" | tr -d ' ') lines: REJECTED"
 			grep -E 'Error|unknown event' "$t.out" | head -5
+			echo "-- $(basename "$t") (the trace TLC could not take whole; its last lines):"
+			tail -40 "$t"
 			[ -z "${TRACE_KEEP:-}" ] || cp "$t" "$TRACE_KEEP/"
 		fi
 		[ -z "${COVERAGE:-}" ] || grep -E '^<[A-Za-z]+ line .*>: [0-9]+:[0-9]+$' "$t.out" >>"$1/coverage"
