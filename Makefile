@@ -92,11 +92,15 @@ readme-quickstart:
 	./scripts/readme-quickstart.sh
 
 # The exported API against the latest release (apidiff, pinned in the
-# script): the changes must be the ones api/ lists; before the first tag it
-# passes with a message. A change on purpose: CHANGELOG.md, then
+# script): the changes must be the ones api/ lists; without the tags (a
+# shallow clone) it fails. A change on purpose: CHANGELOG.md, then
 # UPDATE=1 make check-api.
-.PHONY: check-api
-check-api:
+.PHONY: check-api test-check-api
+# test-check-api: check-api fails, never passes, in a clone without the tags.
+test-check-api:
+	./scripts/check-api_test.sh
+
+check-api: test-check-api
 	./scripts/check-api.sh
 
 # bench-tcp-tunnel: the TCP data path's throughput, COUNT runs (default 6)

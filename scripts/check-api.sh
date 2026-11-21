@@ -6,23 +6,15 @@
 # before HEAD (the newest tag v*), with apidiff. The report must equal
 # (line for line, in any order) api/<that tag>.txt, the API changes this
 # release makes on purpose (no file: none). UPDATE=1 writes the file from
-# the report instead. Before the first release (no v* tag) there is
-# nothing to compare: it says so and passes.
+# the report instead. No v* tag before HEAD (a clone without the tags, a
+# shallow one) fails: passing would compare nothing (lane APITAGS).
 set -eu
 APIDIFF=golang.org/x/exp/cmd/apidiff@v0.0.0-20260908205506-85c1c2202aba
 root=$(git rev-parse --show-toplevel)
 cd "$root"
-if [ -z "$(git tag --list 'v[0-9]*')" ]; then
-	echo "check-api: no release tag v* yet (v0.1.0 is the first): nothing to compare, skipped"
-	exit 0
-fi
-git rev-parse -q --verify HEAD^ >/dev/null || {
-	echo "check-api: HEAD is the first commit: nothing before it to compare, skipped"
-	exit 0
-}
 base=$(git describe --tags --abbrev=0 --match "v[0-9]*" HEAD^ 2>/dev/null || true)
 if [ -z "$base" ]; then
-	echo "check-api: no release tag v* before HEAD (a shallow clone? fetch the tags)" >&2
+	echo "check-api: no release tag v* before HEAD (a shallow clone? fetch the tags: git fetch --unshallow --tags)" >&2
 	exit 1
 fi
 mod=$(go list -m)
