@@ -398,6 +398,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 			// TestTCPTunnelEndAckStreamLossResetsHalfClosedClient,
 			// TestTCPTunnelEndAckAgentAbortResetsClient).
 			if sess.endErr() != io.EOF {
+				sess.abortSent.Store(true) // the agent or the stream ended it: no abort after
 				resetConn(conn)
 				return nil
 			}
@@ -421,8 +422,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 						// visitor first: its kernel's queued tail and FIN never
 						// go once the agent learnt the abort.
 						resetConn(conn)
-						as.send(&pb.TCPData{SessionId: sessionID, Close: true, Abort: true})
-						sess.markClosed()
+						as.abort(sessionID, sess)
 						return nil
 					}
 				}
@@ -440,8 +440,7 @@ func (d *TCPDispatcher) handleLocalConn(conn net.Conn, ep TCPEndpoint, as *tcpAg
 		if err != nil {
 			// The client's connection failed: an abort, so the agent resets
 			// its target rather than ending it with a FIN (finding 15).
-			as.send(&pb.TCPData{SessionId: sessionID, Close: true, Abort: true})
-			sess.markClosed()
+			as.abort(sessionID, sess)
 			return nil
 		}
 	}
@@ -465,10 +464,9 @@ func (d *TCPDispatcher) pumpToAgent(conn net.Conn, as *tcpAgentStream, sessionID
 				return
 			}
 			if err != nil {
-				// A read error (a reset): an abort, never a FIN at the
-				// agent's target (finding 15).
-				as.send(&pb.TCPData{SessionId: sessionID, Close: true, Abort: true})
-				sess.markClosed()
+				// A read error (a reset, or handleLocalConn's resetConn):
+				// an abort, never a FIN at the agent's target (finding 15).
+				as.abort(sessionID, sess)
 				return
 			}
 		}

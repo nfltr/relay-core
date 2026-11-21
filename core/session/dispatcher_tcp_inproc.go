@@ -283,10 +283,15 @@ func (c *inProcConn) Close() error {
 		c.sess.markClosed() // first: a Write waiting for the outbox holds wmu (spec/README.md finding 3)
 		c.sess.wmu.Lock()
 		c.closed.Store(true)
-		if !c.sess.selfHalf.Load() || !c.sess.peerHalf.Load() { // both half closes ended it already
+		ended := c.sess.selfHalf.Load() && c.sess.peerHalf.Load()
+		if !ended && !c.sess.abortSent.Swap(true) { // both half closes ended it already
 			c.agentStream.send(&pb.TCPData{SessionId: c.sessionID, Close: true})
 		}
 		c.sess.wmu.Unlock()
+		if ended && c.sess.endAck {
+			go c.forgetOnceAcked()
+			return
+		}
 		c.cleanupFn()
 	})
 	return nil

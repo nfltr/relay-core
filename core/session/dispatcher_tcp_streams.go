@@ -371,7 +371,7 @@ func (a *tcpAgentStream) sendDone(id string, sess *tcpSession) {
 func (a *tcpAgentStream) closeWrite(id string, sess *tcpSession) {
 	sess.wmu.Lock()
 	sess.endMu.Lock()
-	if sess.selfHalf.Swap(true) {
+	if sess.abortSent.Load() || sess.selfHalf.Swap(true) { // nothing after its end (abort)
 		sess.endMu.Unlock()
 		sess.wmu.Unlock()
 		return
@@ -402,7 +402,7 @@ func (a *tcpAgentStream) resetSession(id string, sess *tcpSession) {
 			break
 		}
 	}
-	go a.send(&pb.TCPData{SessionId: id, Close: true, Abort: true}) // the stream's sender may be busy
+	go a.abort(id, sess) // the stream's sender may be busy
 	if sess.abort != nil {
 		sess.abort()
 	}
@@ -526,20 +526,20 @@ func (d *TCPDispatcher) enterRotation(agentID string, as *tcpAgentStream) {
 // token, one of another agent, or one past the primary's 3
 // auxiliary streams is refused.
 func (d *TCPDispatcher) RegisterAuxStream(agentID, token string, stream pb.Dispatcher_ConnectTCPServer) error {
-	var as *tcpAgentStream
-	cr := grpcCredit(stream.Context(), func(f *pb.TCPData) { as.enqueue(f) }) // grants follow pops: as is set
+	as := NewTCPAgentStream()
 	endAck := asksEndAck(stream.Context())
-	as, err := d.bindAux(agentID, token, cr, endAck, endAck && asksEndDone(stream.Context()))
-	if err != nil {
-		return err
-	}
+	as.agent, as.drained, as.endAck, as.endDone = agentID, make(chan struct{}), endAck, endAck && asksEndDone(stream.Context())
+	as.cr = grpcCredit(stream.Context(), as.enqueue)
 	if traceOn {
-		traceUp(as)
+		traceUp(as) // before bindAux publishes it: a session's Open is in its trace (finding 51)
+	}
+	if err := d.bindAux(token, as); err != nil {
+		return err
 	}
 	// The header goes out before the sender starts: a session that picks
 	// the stream meanwhile only queues its open frame.
 	md := metadata.Pairs(TCPBindHeader, token)
-	if cr != nil {
+	if as.cr != nil {
 		md.Set(dataplane.CreditHeader, strconv.Itoa(tcpGRPCWindow))
 	}
 	if endAck {
@@ -554,21 +554,20 @@ func (d *TCPDispatcher) RegisterAuxStream(agentID, token string, stream pb.Dispa
 
 // bindAux adds an auxiliary stream bound with token to agentID's primary
 // stream to the agent's rotation; serveAux serves it.
-func (d *TCPDispatcher) bindAux(agentID, token string, cr *link.Credit, endAck, endDone bool) (*tcpAgentStream, error) {
+func (d *TCPDispatcher) bindAux(token string, as *tcpAgentStream) error {
 	d.Mu.Lock()
 	defer d.Mu.Unlock()
 	p := d.bound[token]
-	if p == nil || !slices.Contains(d.All[agentID], p) {
-		return nil, status.Error(codes.NotFound, "no tcp stream of this agent to bind to")
+	if p == nil || !slices.Contains(d.All[as.agent], p) {
+		return status.Error(codes.NotFound, "no tcp stream of this agent to bind to")
 	}
 	if p.aux >= tcpAgentStreams-1 {
-		return nil, status.Errorf(codes.ResourceExhausted, "an agent binds at most %d auxiliary tcp connections", tcpAgentStreams-1)
+		return status.Errorf(codes.ResourceExhausted, "an agent binds at most %d auxiliary tcp connections", tcpAgentStreams-1)
 	}
 	p.aux++
-	as := NewTCPAgentStream()
-	as.agent, as.primary, as.drained, as.cr, as.endAck, as.endDone = agentID, p, make(chan struct{}), cr, endAck, endDone // before it is published: sessions read them
-	d.All[agentID] = append(d.All[agentID], as)
-	return as, nil
+	as.primary = p // before it is published: sessions read it
+	d.All[as.agent] = append(d.All[as.agent], as)
+	return nil
 }
 
 // serveAux serves a bound auxiliary stream until it ends: its primary
@@ -1090,8 +1089,9 @@ type tcpSession struct {
 	grants            atomic.Int64
 	doneSent          atomic.Bool
 	// wmu orders an inProcConn's data frames with its close (closeWrite,
-	// inProcConn.Close): none goes after it.
-	wmu sync.Mutex
+	// inProcConn.Close), a half close with the abort: none goes after it.
+	wmu       sync.Mutex
+	abortSent atomic.Bool // its whole close (abort) was sent, or the agent or stream ended it (abort)
 
 	closed    chan struct{}
 	closeOnce sync.Once
