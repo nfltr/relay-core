@@ -42,7 +42,7 @@ rm -f "$work.out"
 	echo "$out" >&2
 	exit 1
 }
-echo "$out" | grep -q '^echoed: hello through nfltr-relay-core$' || {
+echo "$out" | grep '^echoed: hello through nfltr-relay-core$' >/dev/null || {
 	echo "readme-quickstart: no echoed bytes in:" >&2
 	echo "$out" >&2
 	exit 1

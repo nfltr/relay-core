@@ -97,6 +97,7 @@ jobs:
       # the model's bindings against the code (spec/proverif/README.md "Bindings")
       - run: make spec-bindings
       - run: make check-spec-drift
+      - run: make check-grepq
   spec:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest

@@ -170,6 +170,13 @@ hooks:
 	if [ -e "$$h" ] && ! grep -q 'scripts/pre-push' "$$h"; then echo "hooks: $$h exists and is not this one; move it away first" >&2; exit 1; fi; \
 	printf '#!/bin/sh\n# make hooks: scripts/pre-push of the checkout pushing (else of %s)\ns="$$(git rev-parse --show-toplevel)/scripts/pre-push"\n[ -x "$$s" ] || s=%s/scripts/pre-push\nexec "$$s" "$$@"\n' "$(CURDIR)" "$(CURDIR)" >"$$h" && chmod +x "$$h" && echo "hooks: installed $$h"
 
+# Early-exit pipes under pipefail (scripts/check-grepq.sh, a copy of
+# nfltr's, kept identical): `producer | grep -q` reads SIGPIPE (141) as "not
+# found"; the self-test reproduces the race.
+.PHONY: check-grepq
+check-grepq:
+	./scripts/check-grepq.sh self-test
+	./scripts/check-grepq.sh
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
 # spec README's code-map entry exists, and the commits since origin/main
