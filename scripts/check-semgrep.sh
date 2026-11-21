@@ -13,8 +13,8 @@
 # commit and by the sha256 of their concatenated YAML. The rules are fetched
 # once into ${SEMGREP_RULES_CACHE} (Semgrep Rules License v1.0: used, not
 # redistributed, so not checked in); the scan runs with --network none and
-# --metrics=off. Needs docker: without a docker command it says so and
-# passes (a host with docker that is down fails). SEMGREP_JSON (read this
+# --metrics=off. Needs docker: without a docker command it fails (it
+# passed, checking nothing: lane APITAGS). SEMGREP_JSON (read this
 # saved report instead of running the tool) is for reuse of one run. ~2 min. -j 1: semgrep's taint
 # fixpoint limit is process CPU time, so more jobs cut functions short and drop
 # their findings depending on load (scripts/sast-baseline.py fails on any cut).
@@ -30,8 +30,8 @@ mode=check
 [[ "${1:-}" == "--update" ]] && mode=update
 cd "${ROOT}"
 if [[ -z "${SEMGREP_JSON:-}" ]] && ! command -v docker >/dev/null 2>&1; then
-    echo "check-semgrep: no docker on this host: skipped (semgrep runs in a container)"
-    exit 0
+    echo "check-semgrep: no docker on this host: semgrep runs in a container (or SEMGREP_JSON=<saved report>)" >&2
+    exit 1
 fi
 python3 scripts/sast-baseline.py --self-test >/dev/null 2>&1 || { echo "FAIL: sast-baseline self-test" >&2; exit 1; }
 
