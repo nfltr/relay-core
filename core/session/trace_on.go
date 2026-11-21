@@ -69,6 +69,7 @@ type traceEvent struct {
 	T  string `json:"t"`
 	W  int    `json:"w,omitempty"` // Up: the agent's window
 	A  bool   `json:"a,omitempty"` // Up: the stream acks half closes (EndAck)
+	D  bool   `json:"d,omitempty"` // Up: the stream reports ends delivered (EndDone)
 
 }
 
@@ -89,7 +90,7 @@ func traceUp(a *tcpAgentStream) {
 	a.tr = &traceStreamState{f: f}
 	traceMu.Lock()
 	defer traceMu.Unlock()
-	traceLog(a.tr, traceEvent{Ev: "Up", N: a.cr.Window(), W: a.cr.PeerWindow(), A: a.endAck})
+	traceLog(a.tr, traceEvent{Ev: "Up", N: a.cr.Window(), W: a.cr.PeerWindow(), A: a.endAck, D: a.endDone})
 }
 
 // traceLog writes e; under traceMu.
@@ -158,6 +159,17 @@ func traceRead(s *tcpSession, n int) {
 // traceEof: the reader gets the EOF of the agent's half close (the
 // client's FIN, an in-process io.EOF). Recorded after Down too: the spec
 // gives a lost session's reader no EOF (Trace.tla).
+// traceTakeEnd records that the agent's half close of s reached its
+// onward app (spec/AgentLink.tla TakeEnd), before its report is queued.
+func traceTakeEnd(s *tcpSession) {
+	if s.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(s.tr.t, traceEvent{Ev: "TakeEnd", S: s.tr.sid})
+}
+
 func traceEof(s *tcpSession) {
 	if s.tr == nil {
 		return
@@ -238,6 +250,8 @@ func sentEvent(f *pb.TCPData) traceEvent {
 		return traceEvent{Ev: "SendWin", S: s, N: n}
 	case sid == dataplane.EndAckSID:
 		return traceEvent{Ev: "SendAck", S: string(f.GetData())}
+	case sid == dataplane.EndDoneSID:
+		return traceEvent{Ev: "SendDone", S: string(f.GetData())}
 	case strings.HasPrefix(sid, "_"):
 		return traceEvent{} // control: not a step of the model
 	case f.GetOpen():
@@ -266,6 +280,8 @@ func traceRecv(a *tcpAgentStream, f *pb.TCPData, process func() error) error {
 		}
 	case sid == dataplane.EndAckSID:
 		e.T, e.S = "ack", string(f.GetData())
+	case sid == dataplane.EndDoneSID:
+		e.T, e.S = "done", string(f.GetData())
 	case strings.HasPrefix(sid, "_"):
 	case f.GetClose() && f.GetHalf():
 		e.T = "half"
