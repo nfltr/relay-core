@@ -110,6 +110,12 @@ func (c *countedConn) count(n int, fromAgent bool) {
 	}
 }
 
+// Unwrap is the conn c counts: a peerlink.Join takes a counted link
+// session for the session (its end held onto a syncing conn, its
+// connection watched) and still copies through c (link peerlink.Join's
+// doc; lane LINKWRAP, connect TestSessionWrappersPassTheEndOn).
+func (c *countedConn) Unwrap() net.Conn { return c.Conn }
+
 // CloseWrite passes to c's CloseWrite (errors.ErrUnsupported without one).
 func (c *countedConn) CloseWrite() error {
 	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {

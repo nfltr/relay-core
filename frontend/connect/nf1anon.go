@@ -4,6 +4,7 @@
 package connect
 
 import (
+	"net"
 	"sync"
 	"time"
 
@@ -24,7 +25,9 @@ var errAccountRequired = &link.Abort{Code: dataplane.AbortCode(nf1anon.Reason), 
 // legs are aborted with ERROR_REASON_ACCOUNT_REQUIRED. An account's leg
 // (leg nil) is out itself: never budgeted, spliced as before. A budgeted
 // leg hides out's concrete type, so the join copies through it, but passes
-// its end on (endLeg: lane QUICEND, TestSessionWrappersPassTheEndOn).
+// its end on (endLeg: lane QUICEND, TestSessionWrappersPassTheEndOn) and
+// unwraps to out (Unwrap: the join takes it for out's link session, lane
+// LINKWRAP).
 func budgeted(in, out peerlink.Session, leg *nf1anon.Leg) peerlink.Session {
 	if leg == nil {
 		return out
@@ -118,6 +121,7 @@ type budgetLeg struct {
 func (l *budgetLeg) Read(p []byte) (int, error)  { return l.b.read(p) }
 func (l *budgetLeg) Write(p []byte) (int, error) { return l.b.write(p) }
 func (l *budgetLeg) Close() error                { l.b.close(); return l.Session.Close() }
+func (l *budgetLeg) Unwrap() net.Conn            { return l.Session }
 
 type budgetChainLeg struct {
 	peerlink.ChainSession
@@ -127,6 +131,7 @@ type budgetChainLeg struct {
 func (l *budgetChainLeg) Read(p []byte) (int, error)  { return l.b.read(p) }
 func (l *budgetChainLeg) Write(p []byte) (int, error) { return l.b.write(p) }
 func (l *budgetChainLeg) Close() error                { l.b.close(); return l.ChainSession.Close() }
+func (l *budgetChainLeg) Unwrap() net.Conn            { return l.ChainSession }
 
 // endLeg is a link or quiclink session: every end method a joint uses
 // (peerlink: EndAcker, endSyncer, receiptSyncer). Hidden behind
@@ -147,6 +152,7 @@ type budgetEndLeg struct {
 func (l *budgetEndLeg) Read(p []byte) (int, error)  { return l.b.read(p) }
 func (l *budgetEndLeg) Write(p []byte) (int, error) { return l.b.write(p) }
 func (l *budgetEndLeg) Close() error                { l.b.close(); return l.endLeg.Close() }
+func (l *budgetEndLeg) Unwrap() net.Conn            { return l.endLeg }
 
 // Done is the leg's Done channel (peerlink's doneOf), nil when it has none.
 func (l *budgetEndLeg) Done() <-chan struct{} {
