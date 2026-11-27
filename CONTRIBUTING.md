@@ -17,6 +17,20 @@ For the maintainers:
 - An exported API change is recorded in [CHANGELOG.md](CHANGELOG.md)
   and, after the first release, in `api/` (`UPDATE=1 make check-api`).
 
+## Dependencies behind ports
+
+Every external dependency (gRPC and its wire, quic-go, config and metrics
+libraries, databases, Redis, cloud and provider APIs, docker, any library with
+a wide surface) is reached through a narrow port this repository owns: only
+its adapter and the escape hatches (migration, backup and restore, break-glass
+tools) import or name it, and code above it, tests included, uses the port.
+`make check-dep-ports` (`scripts/check-dep-ports.sh`, a copy of nfltr's, kept
+identical; in `make ci`) checks it against `scripts/dep-ports.txt` (per
+dependency, its adapter paths). Today's violations are listed in
+`scripts/dep-ports-allow.txt`, which may only shrink: a new violation fails,
+and so does an entry whose violation is gone. A new dependency gets its rule
+and adapter in the change that adds it.
+
 ## Verify the design with TLA+ before writing code
 
 A change to a protocol, the wire format, concurrency, storage or a

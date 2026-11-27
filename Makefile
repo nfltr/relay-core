@@ -179,6 +179,15 @@ hooks:
 	if [ -e "$$h" ] && ! grep -q 'scripts/pre-push' "$$h"; then echo "hooks: $$h exists and is not this one; move it away first" >&2; exit 1; fi; \
 	printf '#!/bin/sh\n# make hooks: scripts/pre-push of the checkout pushing (else of %s)\ns="$$(git rev-parse --show-toplevel)/scripts/pre-push"\n[ -x "$$s" ] || s=%s/scripts/pre-push\nexec "$$s" "$$@"\n' "$(CURDIR)" "$(CURDIR)" >"$$h" && chmod +x "$$h" && echo "hooks: installed $$h"
 
+# Dependencies behind ports (scripts/check-dep-ports.sh, a copy of nfltr's, kept identical;
+# nfltr docs/decisions/dependencies-behind-ports-2026-11-27.md): only a
+# dependency's adapter or an escape hatch imports or names it
+# (scripts/dep-ports.txt); today's violations are scripts/dep-ports-allow.txt,
+# which may only shrink.
+.PHONY: check-dep-ports
+check-dep-ports:
+	./scripts/check-dep-ports.sh self-test
+	./scripts/check-dep-ports.sh
 # Early-exit pipes under pipefail (scripts/check-grepq.sh, a copy of
 # nfltr's, kept identical): `producer | grep -q` reads SIGPIPE (141) as "not
 # found"; the self-test reproduces the race.

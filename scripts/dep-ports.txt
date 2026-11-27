@@ -1,0 +1,18 @@
+# Dependencies behind ports (scripts/check-dep-ports.sh; nfltr
+# docs/decisions/dependencies-behind-ports-2026-11-27.md). One rule per line:
+# NAME KIND PATTERN ALLOWED... (ALLOWED: the adapter and the escape hatches).
+# Today's violations are in scripts/dep-ports-allow.txt, which may only shrink.
+#
+# gRPC and its wire: the auth and factory adapters and the status service
+# (AGENTS.md "Transport encapsulation rule"); the session core and the
+# frontends reach it today.
+grpc import google\.golang\.org/(grpc|genproto)|github\.com/grpc-ecosystem grpcauth/** grpcfactory/** core/relaystatus/** internal/platform/tcprig/**
+protobuf import google\.golang\.org/protobuf core/relaystatus/** broker/**
+# QUIC: link's peerlink/quiclink is the adapter; relay-core reaches it directly.
+quic import github\.com/nfltr/quic-go
+# Config: viper and pflag in platform/config and the binary only.
+config import github\.com/spf13/(viper|pflag) platform/config/** cmd/**
+metrics import github\.com/prometheus/ platform/metrics/**
+fsnotify import github\.com/fsnotify/fsnotify platform/filewatch/**
+proxyproto import github\.com/pires/go-proxyproto compose/listen.go compose/listen_proxyproto_test.go
+docker name (^|[^[:alnum:]_./-])docker[[:space:]]+(compose|run|exec|build|buildx|rm|pull|push|ps|inspect|network|volume|logs|cp|kill|stop|start|image|info|wait|save|load|tag|context)([[:space:]]|$)

@@ -98,6 +98,7 @@ jobs:
       - run: make spec-bindings
       - run: make check-spec-drift
       - run: make check-grepq
+      - run: make check-dep-ports
   spec:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
