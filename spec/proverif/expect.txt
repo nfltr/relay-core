@@ -1,0 +1,8 @@
+# <model> <flags> <results>: run.sh. T holds, F attack, ? not proved.
+# The query of each position is in README.md; a flag is a mutant: the
+# query it targets reads F (or ?) where the model holds T.
+e2ee_share - TF
+e2ee_share gate-skipped-here FF
+e2ee_share gate-skipped-on-link FF
+e2ee_share share-not-carried-on-link FF
+e2ee_share agent-skips-credential FF

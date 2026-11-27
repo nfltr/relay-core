@@ -1,0 +1,540 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+// Package config registers the relay's settings as flags (SetDefaultFlags)
+// read through viper: a set flag, then the environment (a key upper-cased,
+// "." and "-" as "_"), then the default. ConfigWatcher reloads the settings
+// that change at runtime.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"slices"
+	"strings"
+	"time"
+
+	flag "github.com/spf13/pflag"
+	"github.com/spf13/viper"
+)
+
+// ─── Exported constants ─────────────────────────────────────────────────────
+
+// Config keys of the relay's ports, and the values some settings take
+// (cache.type, the Redis deployment, env).
+const (
+	// Ports
+	GrpcServerPort  = "grpc-port"
+	ProxyServerPort = "proxy-port"
+	// SNIRouterPort is the E2EE passthrough SNI router's own port (the
+	// relay applies no TLS on the gRPC port, so no SNI mux there).
+	SNIRouterPort = "e2ee.tls_passthrough.port"
+
+	// Cache types
+	InMemoryCache = "inmemory"
+	RedisCache    = "redis"
+	NoCache       = "nocache"
+
+	// Redis deployment types
+	RedisStandalone  = "standalone"
+	RedisReplication = "replication"
+
+	// Environment names
+	EnvLocal      = "local"
+	EnvStandalone = "standalone"
+	EnvCI         = "CI"
+	EnvK8s        = "k8s"
+
+	// gRPC max message size default (8 MiB)
+	DefaultGRPCMaxMessageSize = 8 << 20
+)
+
+// IsLocalEnv reports whether env belongs to the local-style configuration
+// group used for developer and single-node runtime validation rules.
+func IsLocalEnv(env string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(env))
+	return normalized == EnvLocal || normalized == EnvStandalone
+}
+
+// IsK8sMultiPodEnv reports whether env should enable k8s-style multi-pod behavior.
+// CI is included because repo integration/smoke suites run multi-pod flows under CI.
+func IsK8sMultiPodEnv(env string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(env))
+	return normalized == EnvK8s || normalized == strings.ToLower(EnvCI)
+}
+
+// GRPCMaxMessageSizeBytes returns the configured max gRPC message size in bytes.
+// Falls back to DefaultGRPCMaxMessageSize when unset or invalid.
+func GRPCMaxMessageSizeBytes() int {
+	v := viper.GetInt("grpc.max_message_size")
+	if v <= 0 {
+		return DefaultGRPCMaxMessageSize
+	}
+	return v
+}
+
+// ─── Default values (private, grouped by subsystem) ─────────────────────────
+
+const (
+	// Logging
+	defaultLogLevel = "info"
+
+	// Ports
+	defaultGrpcServerPort  = "9090"
+	defaultProxyServerPort = "8080"
+
+	// Request timeouts
+	defaultRequestTimeout = 60 * time.Second
+
+	// Termination
+	defaultTerminationGracePeriodSeconds = 30
+
+	// Health / Internal
+	defaultInternalEnable    = true
+	defaultInternalAddress   = "0.0.0.0"
+	defaultInternalPort      = "8081"
+	defaultInternalHealth    = "/healthz"
+	defaultInternalReadiness = "/ready"
+
+	// Metrics & Profiling
+	defaultMetricsEnable   = true
+	defaultMetricsPort     = "8082"
+	defaultProfilingEnable = false
+
+	// Behavior flags
+	defaultOnDownstreamErrorsDropAgentConn = false
+)
+
+// SetDefaultFlags registers all configuration keys with pflag + viper.
+// Flags are grouped by subsystem; each group is separated by a blank line.
+func SetDefaultFlags() {
+	// ── Environment & Identity ──────────────────────────────────────────
+	_ = flag.String("env", "", "deployment environment (e.g. local, CI)")
+	_ = flag.String("loopback", "127.0.0.1", "loopback IP used for local connections")
+	_ = flag.String("pod_id.env_var", "MY_POD_NAME", "env var holding the Kubernetes pod name")
+	_ = flag.String("pod_ip.env_var", "MY_POD_IP", "env var holding the Kubernetes pod IP")
+
+	// ── Ports & Networking ──────────────────────────────────────────────
+	_ = flag.String(GrpcServerPort, defaultGrpcServerPort, "gRPC listen port for agent connections")
+	_ = flag.String(ProxyServerPort, defaultProxyServerPort, "HTTP listen port for REST proxy requests")
+	_ = flag.String("listen.address", "", "bind address of the proxy and gRPC ports, or a comma-separated list of addresses all bound on the same ports (empty: all interfaces)")
+
+	// ── Dispatcher ──────────────────────────────────────────────────────
+	_ = flag.Bool("grpc.enabled", true, "start the gRPC server for agent connections")
+	_ = flag.Bool("http.server.enabled", true, "start the HTTP server for REST proxy")
+
+	// ── Request Timeouts ────────────────────────────────────────────────
+	_ = flag.Duration("default.request.timeout", defaultRequestTimeout, "max wait for an agent's response to start or send its next chunk (not a cap on the whole response)")
+
+	// ── Termination ─────────────────────────────────────────────────────
+	_ = flag.Int("termination.grace.periodseconds", defaultTerminationGracePeriodSeconds, "seconds from SIGTERM to SIGKILL (a pod's terminationGracePeriodSeconds less its preStop hook's); the drain ends 5 s before")
+
+	// ── Logging ─────────────────────────────────────────────────────────
+	_ = flag.String("logging.level", defaultLogLevel, "log verbosity: debug, info, warn, error")
+
+	// ── Runtime Config ──────────────────────────────────────────────────
+	_ = flag.String("runtime.config.path", "", "path to a YAML file (typically ConfigMap-mounted) watched for runtime config changes")
+
+	// ── Health / Internal ───────────────────────────────────────────────
+	_ = flag.Bool("internal.enabled", defaultInternalEnable, "start the internal HTTP server (health, readiness)")
+	_ = flag.String("internal.address", defaultInternalAddress, "bind address for the internal HTTP server and the metrics server")
+	_ = flag.String("internal.port", defaultInternalPort, "listen port for the internal HTTP server")
+	_ = flag.String("internal.health", defaultInternalHealth, "URL path for liveness health checks")
+	_ = flag.String("internal.readiness", defaultInternalReadiness, "URL path for readiness probes")
+
+	// ── Metrics & Profiling ─────────────────────────────────────────────
+	_ = flag.Bool("metrics.enabled", defaultMetricsEnable, "expose Prometheus metrics endpoint")
+	_ = flag.String("metrics.port", defaultMetricsPort, "listen port for the Prometheus metrics server")
+	_ = flag.Bool("profiling.enabled", defaultProfilingEnable, "expose /debug/pprof profiling endpoints")
+
+	// ── Heartbeat ───────────────────────────────────────────────────────
+	_ = flag.Bool("rpc.agent.heartbeat.enabled", true, "enable periodic heartbeat pings to connected agents")
+	// The relay states its heartbeat in each agent stream's accept headers;
+	// an agent ends a connection silent for three of them, so 5s (was 15s)
+	// notices a relay that died without a FIN reaching the agent within 15s.
+	// It also keeps consumer-NAT mappings warm. Last-seen refreshes stay
+	// at most every 15s. The recv threshold (agent→relay) is unchanged at
+	// 45s.
+	_ = flag.Duration("rpc.agent.heartbeat.sendduration", 5*time.Second, "interval between heartbeat pings sent to each agent (server→agent); agents end a connection silent for three of them")
+	_ = flag.Duration("rpc.agent.heartbeat.recvthreshold", 45*time.Second, "max time without a heartbeat from agent before disconnect")
+
+	// ── Git operations ────────────────────────────────────────────────────
+
+	// ── Cache & Redis ───────────────────────────────────────────────────
+	_ = flag.String("cache.type", RedisCache, "response cache backend: redis, inmemory, or nocache")
+	_ = flag.String("cache.redis_replication", RedisReplication, "Redis deployment mode: standalone or replication (sentinel)")
+	_ = flag.String("cache.redis_url", "localhost:6379", "Redis address (host:port) for standalone mode")
+	_ = flag.String("cache.redis_master_name", "nfltr-relay", "Sentinel master name for replication mode")
+	_ = flag.StringSlice("cache.redis_sentinel_addrs", []string{"localhost:26379"}, "Sentinel node addresses for replication mode")
+	_ = flag.Int("cache.connection_retry_count", 3, "max connection attempts to Redis before giving up")
+	_ = flag.Duration("redis.ops_timeout", 3*time.Second, "max time for a single directory operation: a Redis GET/SET, a statement on the SQL agents table")
+	_ = flag.Int("redis.pool_size", 10, "max connections in the Redis connection pool")
+	_ = flag.Int("redis.min_idle_conns", 2, "idle connections kept warm in the Redis pool")
+	_ = flag.String("redis.endpoint", "", "external Redis hostname (overrides cache.redis_url)")
+	_ = flag.String("redis.port", "6379", "external Redis port (used with redis.endpoint)")
+
+	// ── TLS ─────────────────────────────────────────────────────────────
+	_ = flag.Bool("tls.enabled", false, "enable TLS on all external listeners (gRPC, HTTP proxy)")
+	_ = flag.String("tls.cert_file", "", "path to PEM-encoded TLS certificate")
+	_ = flag.String("tls.key_file", "", "path to PEM-encoded TLS private key")
+	_ = flag.Bool("tls.auto", false, "auto-generate a self-signed certificate when cert/key are not provided (development only)")
+	_ = flag.Bool("tls.grpc_only", false, "apply TLS only to the gRPC listener, leave HTTP proxy plaintext (useful when TLS is terminated by a reverse proxy for HTTP)")
+	_ = flag.String("tls.san_dns", "", "comma-separated extra DNS SANs to include in auto-generated self-signed certificate (e.g. grpc.example.com,*.example.com)")
+	_ = flag.Bool("tls.acme", false, "obtain TLS certificates from Let\u2019s Encrypt via ACME TLS-ALPN-01 (requires port 443 reachable from the internet)")
+	_ = flag.String("tls.acme_domains", "", "comma-separated domain whitelist for ACME certificates (e.g. grpc.example.com)")
+	_ = flag.String("tls.acme_cache_dir", "/var/cache/autocert", "directory to cache ACME certificates")
+	_ = flag.String("tls.acme_email", "", "contact email for Let\u2019s Encrypt notifications (optional)")
+	_ = flag.String("tls.web_domains", "", "comma-separated hostnames whose TLS connections on the gRPC port are served by the HTTP handler (direct-origin web, no CDN); added to the ACME whitelist. A \"*.<domain>\" entry serves every single-label subdomain except the ACME names, with a Let\u2019s Encrypt wildcard certificate obtained over DNS-01 (needs tls.acme and tls.acme_dns01_cloudflare_token_file)")
+	_ = flag.String("tls.acme_dns01_cloudflare_token_file", "", "file holding a Cloudflare API token with Zone DNS Edit on the zone of each \"*.<domain>\" in tls.web_domains, for the ACME DNS-01 challenge")
+	_ = flag.String("http.redirect_port", "", "when set with tls.web_domains, a plain HTTP port (e.g. 80) that answers ACME HTTP-01 challenges and redirects everything else to https")
+
+	// ── Machines file (a relay without a database) ─────────────────────
+	_ = flag.String("security.machines.file", "/etc/nfltr-relay/machines", "the machines file: the machines of a relay without a database, one \"<machine id> <name> spki:<hex> [account=<id>]\" per line (keyfile)")
+
+	// ── mTLS identity provider (client certificates; off without a CA file) ──
+	_ = flag.String("security.mtls.ca_file", "", "PEM bundle of the CAs whose client certificates authenticate (one or more; reloaded on change); turns the mTLS identity provider on (needs tls.enabled)")
+	_ = flag.String("security.mtls.revoked_file", "", "optional revocation list, reloaded on change: a CRL (PEM or DER) signed by a CA of the bundle, or hex serials one per line; a revoked certificate's connections end")
+	_ = flag.String("security.mtls.owner", "{cn}", "rule making a certificate's owner (namespaced mtls:<owner>) from its fields {cn} {o} {ou} {dns} {email} {uri} {serial}")
+	_ = flag.String("security.mtls.subject", "{cn}", "rule making a certificate's subject (its agent id) from the same fields")
+
+	// ── OIDC/JWT identity provider (an organization's IdP; off without an issuer) ──
+	_ = flag.String("security.oidc.issuer", "", "issuer URL whose JWTs authenticate (the iss claim; https, or http to loopback); turns the OIDC identity provider on")
+	_ = flag.String("security.oidc.audience", "", "value the tokens' aud claim must hold (required with an issuer)")
+	_ = flag.String("security.oidc.jwks_url", "", "the issuer's JWKS URL (empty: from <issuer>/.well-known/openid-configuration)")
+	_ = flag.String("security.oidc.owner", "{sub}", "rule making a token's owner (namespaced oidc:<issuer hash>:<owner>) from its claims, e.g. {org}")
+	_ = flag.String("security.oidc.subject", "{sub}", "rule making a token's subject (its agent id) from its claims")
+	_ = flag.String("security.oidc.scopes_claim", "scope", "claim holding a token's scopes (space-separated or a list; admin is never taken from an IdP)")
+	_ = flag.Duration("security.oidc.clock_skew", time.Minute, "clock skew allowed on exp, nbf and iat (at most 5m); a connection ends at exp plus this")
+
+	// ── IP Allowlist ────────────────────────────────────────────────────
+	_ = flag.StringSlice("security.ip_allowlist", nil, "CIDR ranges allowed to connect (empty = allow all)")
+
+	// ── Audit Logging ───────────────────────────────────────────────────
+	_ = flag.Bool("security.audit.enabled", false, "enable structured audit logging for security events")
+
+	// The hosted product's keys (security.sql.*, security.session.*,
+	// security.google.*, security.users.*, mailbox.service, ui.dev_dir) are
+	// registered by relay-server, the binary that reads them.
+	_ = flag.StringSlice("security.admin_emails", nil, "email addresses allowed to manage global settings (empty = all authenticated users)")
+	_ = flag.Bool("usage.page_visits", false, "count views of the public pages (landing, docs, blog, install) per day for the admin usage report: counts only, no cookies or scripts, no IP or User-Agent stored; needs the SQL user store; env USAGE_PAGE_VISITS")
+	_ = flag.Duration("usage.meter_interval", 0, "record usage: every interval, the bytes each account's sessions carried on each frontend path go to the accounts service in batches it applies once each (shadow mode: recorded, never charged); 0 (default) = off; env USAGE_METER_INTERVAL")
+
+	_ = flag.String("agent_link.quic.listen", "", "UDP address (e.g. :443) where agents' agent-link connections arrive over QUIC, with the gRPC port's TLS certificate; agents use it only when they ask for it (nfltr --transport quic|auto); empty (default) = TCP only; needs TLS; env AGENT_LINK_QUIC_LISTEN")
+	_ = flag.Int("security.min_client_generation", 0, "refuse clients below this generation at connect (gRPC calls and tcp-connect): 2 refuses every nfltr before v2.0.0 with a message to run `nfltr update` (a client below 4 is refused on the gRPC port whatever it is: the agent wire it calls is not served); 0 (default) takes every client and counts and logs those below generation 2 (nfltr_relay_dispatcher_old_generation_clients_total); env SECURITY_MIN_CLIENT_GENERATION")
+
+	// ── Authorization ───────────────────────────────────────────────────
+	_ = flag.Bool("security.trust_loopback", false, "DEV ONLY: trust requests from a loopback address (127.0.0.1/::1) as a fixed local principal with no credential, so local agents use the relay with zero auth setup. Loopback-only; never enable in production. Env: SECURITY_TRUST_LOOPBACK=true.")
+
+	// ── API Type Detection ────────────────────────────────────────────
+	_ = flag.StringSlice("http.api_type_prefixes", []string{"wapi", "ibap"}, "URL path prefixes recognized as distinct API types for metrics labeling")
+
+	// ── HTTP Server ─────────────────────────────────────────────────────
+	_ = flag.Duration("http.server.read_header_timeout", 10*time.Second, "max time to read request headers before timeout")
+	_ = flag.Duration("http.server.idle_timeout", 120*time.Second, "close keep-alive connections idle longer than this")
+	_ = flag.Duration("http.server.write_timeout", 60*time.Second, "max time one response write may stall; each write extends it, so a response that keeps streaming is never cut")
+	_ = flag.Int("http.server.producers.cache_size", 0, "max agentID-to-producer mappings cached in HTTP server (0 = no limit: an agent's producer is dropped when it disconnects)")
+	_ = flag.Duration("http.server.producers.cache_expiry", 1*time.Hour, "TTL for cached agentID-to-producer mappings")
+	_ = flag.Int("http.server.fanout_workers", 1, "goroutines dispatching broker responses to waiting HTTP handlers; chunk reordering ensures correctness at any value")
+	_ = flag.Int64("http.server.max_request_body_size", 1<<30, "maximum request body size in bytes (default 1 GiB); larger bodies get a 413. Bodies stream to agents that advertise upload flow control; agents that read bodies whole stay capped at 10 MiB")
+	_ = flag.Int("http.server.uploads.per_ip", 4, "request bodies over 1 MiB (or of unknown length) in flight, streaming or waiting, per client IP; more get a 429 with Retry-After (0: no limit)")
+	_ = flag.Int64("http.server.uploads.buffer_bytes", 128<<20, "upload bytes the relay may hold in flight across all clients; each body over 1 MiB reserves min(its length, 8 x grpc.max_message_size) while it streams, others wait (0: no bound)")
+	_ = flag.Duration("http.server.uploads.wait", 30*time.Second, "how long an upload waits for http.server.uploads.buffer_bytes space before a 503 with Retry-After; keep it under http.server.write_timeout")
+
+	// ── Share URLs ──────────────────────────────────────────────────────
+	_ = flag.String("http.share_domain", "", "wildcard domain for subdomain share URLs (e.g. rpc.example.com); requires a *.rpc.example.com DNS record pointing to this server")
+	_ = flag.Duration("http.share_ttl", 24*time.Hour, "the longest idle lifetime of a share code: a code stops working once its lifetime passes with no visit; each visit moves its end to the visit plus its lifetime, and its URL stays the same")
+	_ = flag.String("http.share_store_file", "", "SQLite file holding issued share codes (a relay that keeps them: nfltr-relay), mailboxes and webhooks when there is no SQL key store, so they survive a restart; empty: in memory")
+	_ = flag.Duration("http.share_reservation_ttl", 2*time.Hour, "how long to reserve a used share code for the same agent before it may be reassigned; 0 disables reservation")
+	// Gap 7: direct agent subdomain routing — <agentID>.share_domain reaches the
+	// live agent for its owner (its machine); anyone else needs a share code.
+	_ = flag.Bool("http.direct_agent_subdomains", false, "route <agentID>.<share_domain> to the matching agent for its owner (its machine); visitors use share codes")
+	_ = flag.String("accounts.service", "", "the relay: accounts service agents (cmd/nfltr-accounts) the dashboard host (dashboard.<http.share_domain>) goes to, <owner>/<agent>[,...] (each declares the tcp service accounts); needs accounts.read_dsn; empty: this process serves sign-in and the dashboard when it links the service; env ACCOUNTS_SERVICE")
+	_ = flag.String("accounts.read_dsn", "", "the accounts service's database, opened read-only (key, session and owner lookups; the revocation journal), dialect security.sql.dialect; env ACCOUNTS_READ_DSN")
+	_ = flag.StringSlice("http.site_hosts", nil, "hosts under http.share_domain served by one account's agent: <label>=<owner>/<agent>[/<service>], any DNS label (a product name such as docs-site, or another); a mapped label is reserved on this relay like the product names: no agent, share or direct subdomain takes it. e.g. site=ops@example.com/site-key.site/web; env HTTP_SITE_HOSTS")
+	_ = flag.String("http.site_hosts_file", "", "a file holding the http.site_hosts entries instead (comma-, space- or newline-separated, # comments), read again whenever it changes: a site host is added or removed without a restart; a file that does not parse is refused whole and the table before it stays; not with http.site_hosts; env HTTP_SITE_HOSTS_FILE")
+	_ = flag.String("http.site_apex", "", "the agent serving http.share_domain itself and www: <owner>/<agent>[/<service>]; the relay keeps its own paths and every request with a relay credential; env HTTP_SITE_APEX")
+	_ = flag.Duration("endpoint.registry.offline_prune_ttl", 0, "delete persisted endpoint-registry entries whose last_seen_at is older than this duration; 0 disables pruning")
+
+	// ── HTTP Reverse Proxy ──────────────────────────────────────────────
+	_ = flag.Duration("proxy.dial_timeout", 5*time.Second, "max time to dial a dispatcher pod via reverse proxy")
+	_ = flag.Duration("proxy.response_header_timeout", 60*time.Second, "max wait for first response header from the dispatcher")
+	_ = flag.Duration("proxy.idle_conn_timeout", 90*time.Second, "close reverse proxy connections idle longer than this")
+	_ = flag.Int("proxy.max_idle_conns_per_host", 1024, "idle connections retained per dispatcher host; keep it above the requests in flight, or every request above it opens and closes a connection and TIME_WAIT can exhaust the host's ports (G-L1)")
+	_ = flag.Duration("proxy.tcp_keepalive", 30*time.Second, "TCP keepalive interval for reverse proxy connections")
+
+	// ── Agent port ──────────────────────────────────────────────────────
+	_ = flag.Int("rpc.recv_buffer_size", 1000, "buffered channel capacity for inbound agent messages")
+	_ = flag.Int("rpc.connected_agents_threshold", 0, "refuse new agents while this many are connected (0 = no limit); a refused agent stops with an error naming the limit")
+
+	// ── Between replicas ────────────────────────────────────────────────
+	// The replica link (link v2 over mTLS on its own port), the only path
+	// between replicas; 0 = off: a multi-replica relay then serves only its
+	// own agents; -1 = a port the kernel chooses, which peers read from this
+	// replica's directory record.
+	_ = flag.Int("peer_link.port", 0, "replica link port (link v2, mTLS), the only path between replicas; 0: off (agents on other replicas unreachable); -1: a port the kernel chooses, which peers read from this replica's directory record")
+	_ = flag.String("peer_link.transport", "mtls", "replica link transport: mtls (the CA below), or plaintext where the pod network already encrypts or is trusted (needs S2S_TOKEN); one per release")
+	_ = flag.String("peer_link.ca_cert_file", "", "replica link CA bundle (PEM; the first certificate signs this replica's certificate)")
+	_ = flag.String("peer_link.ca_key_file", "", "replica link CA key (PEM)")
+	_ = flag.String("peer_link.trust_domain", "nfltr-relay", "replica link trust domain: peers' certificates must name spiffe://<this>/replica/<pod>")
+	_ = flag.String("peer_link.liveness", "default", "replica link liveness preset (default, fast, nat, datacenter, mobile) or interval=..,timeout=..")
+	_ = flag.Duration("grpc.proxying.downstream.sync_map.clear_timeout", 5*time.Second, "grace period to drain pending requests before closing downstream")
+
+	// ── gRPC Keepalive (server) ─────────────────────────────────────────
+	_ = flag.Int("grpc.max_message_size", DefaultGRPCMaxMessageSize, "maximum gRPC message size in bytes for send/recv (applies to server and client call options)")
+	// Defaults sized for long-lived idle worker streams behind Cloudflare. The
+	// rpcclient default sends pings every 60s; min_time=30s keeps that well
+	// under the server's TOO_MANY_PINGS enforcement. Server-initiated pings
+	// every 30s detect dead client streams within ~40s and keep middleboxes
+	// (Cloudflare, NAT) from idling the underlying TCP connection out.
+	_ = flag.Duration("grpc.keepalive.enforcement_policy.min_time", 30*time.Second, "minimum allowed interval between client keepalive pings")
+	_ = flag.Bool("grpc.keepalive.enforcement_policy.permit_without_stream", true, "allow client keepalive pings even when no RPC stream is active")
+	_ = flag.Duration("grpc.keepalive.server_parameters.time", 30*time.Second, "interval between server-initiated keepalive pings to clients")
+	_ = flag.Duration("grpc.keepalive.server_parameters.timeout", 10*time.Second, "time to wait for a keepalive ping ack from client")
+	_ = flag.Uint32("grpc.max_concurrent_streams", 250, "max concurrent gRPC streams per connection (0 = unlimited)")
+	_ = flag.Duration("grpc.connection_timeout", 10*time.Second, "time a new gRPC connection has to finish its TLS handshake and HTTP/2 preface (grpc-go's default is 120s, which let stalled handshakes hold memory)")
+	_ = flag.Duration("grpc.max_connection_idle", 5*time.Minute, "a gRPC connection with no stream for this long gets GOAWAY and is closed (0 = never; a client reconnects at its next call)")
+
+	// ── Behavior Flags ──────────────────────────────────────────────────
+	_ = flag.Bool("on_downstream_errors.drop_agent_connection", defaultOnDownstreamErrorsDropAgentConn, "disconnect the agent when a downstream gRPC call fails")
+
+	// ── Rate Limiting ───────────────────────────────────────────────────
+	_ = flag.Bool("ratelimit.enabled", true, "enable per-AgentID request rate limiting")
+	_ = flag.Float64("ratelimit.rate", 100, "tokens added per second per AgentID")
+	_ = flag.Int("ratelimit.burst", 200, "max token capacity (burst size) per AgentID")
+	_ = flag.Float64("ratelimit.visitor_rate", 20, "share and site visits a second one visitor IP may make to one agent, checked before the agent's ratelimit.rate so one visitor cannot spend it (0 = no per-visitor limit)")
+	_ = flag.Int("ratelimit.visitor_burst", 100, "burst of ratelimit.visitor_rate (a page and its assets)")
+
+	// ── Connection limits per source IP (platform/connlimit) ────────────
+	// Checked at accept on the public ports, before any byte is read: a
+	// single machine's handshake or slow-connection flood stops there
+	// (docs/decisions/relay-flood-hardening-2026-11-05.md in nfltr). Loopback
+	// peers are exempt. 0 turns a limit off.
+	_ = flag.Int("security.conn_limit.per_ip_max", 5000, "open connections one source (IPv4 address, IPv6 /64) may hold on each public port, before TLS or any account is known: the flood floor (0 = no limit)")
+	_ = flag.Float64("security.conn_limit.per_ip_rate", 1000, "new connections a second one source (IPv4 address, IPv6 /64) may open on each public port: the flood floor (0 = no limit)")
+	_ = flag.Int("security.conn_limit.per_ip_burst", 5000, "burst of security.conn_limit.per_ip_rate")
+	_ = flag.Int("security.conn_limit.account_max", 0, "open E2EE share connections of one account (its agents' owner), past the flood floor; a hosted relay takes its plan's limits from the accounts service instead (0 = no limit)")
+	_ = flag.Float64("security.conn_limit.account_rate", 0, "new E2EE share connections a second of one account (0 = no limit)")
+	_ = flag.Int("security.conn_limit.account_burst", 0, "burst of security.conn_limit.account_rate")
+	_ = flag.Int("security.conn_limit.account_source_max", 0, "open E2EE share connections of one account from one source address: visitors behind one NAT spend their account's budget only (0 = no limit)")
+	_ = flag.Float64("security.conn_limit.account_source_rate", 0, "new E2EE share connections a second of one account from one source address (0 = no limit)")
+	_ = flag.Int("security.conn_limit.account_source_burst", 0, "burst of security.conn_limit.account_source_rate")
+	_ = flag.Float64("security.conn_limit.per_ip_packet_rate", 20000, "UDP datagrams a second one source (IPv4 address, IPv6 /64) may send to the QUIC agent link (agent_link.quic.listen); the rest are dropped before QUIC parses them (0 = no limit)")
+	_ = flag.Int("security.conn_limit.per_ip_packet_burst", 40000, "burst of security.conn_limit.per_ip_packet_rate")
+	_ = flag.Float64("security.conn_limit.per_ip_handshake_packet_rate", 50, "of those, QUIC long-header datagrams (handshakes, 3 to 8 per connection, more when a slow or lossy path retransmits; version negotiation) a second one source may send: each Initial with a new connection ID makes the relay hold a half-open handshake (~70 KB) until its timeout (15 s), so this bounds a source's (0 = no limit)")
+	_ = flag.Int("security.conn_limit.per_ip_handshake_packet_burst", 1000, "burst of security.conn_limit.per_ip_handshake_packet_rate (125 to 330 handshakes at once: agents behind one NAT reconnecting; retransmissions spend tokens the rate refills)")
+
+	// Behind a load balancer (several relays, hosted docs/decisions/scale-lb-2026-11-22.md):
+	// connections from these senders carry a PROXY protocol header naming the
+	// client, which every per-source limit then counts (compose.trustProxyHeaders).
+	_ = flag.String("security.proxy_protocol.trusted", "", "comma-separated IPs or CIDRs (the load balancer) whose connections to the proxy, gRPC, SNI and internal (the balancer's health check) ports must start with a PROXY protocol v1/v2 header naming the client; other senders keep their own address and a header from them is not read (empty = no PROXY protocol)")
+
+	// ── Capability addresses (nf1...) ───────────────────────────────────
+	// Clients with no credential open the one service an address names
+	// (nfltr docs/decisions/nf1-rendezvous-2026-11-13.md); the serving
+	// agent's owner pays. Limits per replica; 0 turns a limit off.
+	_ = flag.Bool("nf1.enabled", false, "serve capability addresses (nf1...): data connections with no credential, which open nf1 sessions only; needs nf1.hosts")
+	_ = flag.StringSlice("nf1.hosts", nil, "the relay hosts this relay's capability addresses name, as the address text carries them (nfltr.xyz): an agent's declaration of an address is taken only with its server key's registration proof for one of them; empty: none taken")
+	_ = flag.Int("nf1.source_max", 16, "open data connections with no credential from one source address")
+	_ = flag.Float64("nf1.source_rate", 2, "new data connections with no credential a second from one source address")
+	_ = flag.Int("nf1.source_burst", 10, "burst of nf1.source_rate")
+	_ = flag.Float64("nf1.open_rate", 5, "nf1 opens a second from one source address, before the address is looked up")
+	_ = flag.Int("nf1.open_burst", 20, "burst of nf1.open_rate")
+	_ = flag.Bool("nf1.websocket", false, "serve capability addresses to browsers too: a WebSocket at /nf1/v1 (subprotocol nf1.v1) carries one anonymous nf1 session (nfltr docs/decisions/browser-peer-2026-11-16.md); needs nf1.enabled")
+	_ = flag.Duration("nf1.websocket_idle", 10*time.Minute, "close a browser's nf1 WebSocket after this long with no byte either way (0: never)")
+	_ = flag.Int("nf1.address_max", 64, "open sessions of one capability address")
+	_ = flag.Float64("nf1.address_rate", 10, "new sessions a second of one capability address")
+	_ = flag.Int("nf1.address_burst", 20, "burst of nf1.address_rate")
+	// The owner's daily cap on an address's relayed bytes for clients
+	// outside the owner's account (nfltr
+	// docs/decisions/nf1-relay-cap-2026-11-25.md, core/nf1cap). Per replica.
+	_ = flag.Int64("nf1.relay_cap", 4<<30, "relayed bytes a UTC day of one capability address's sessions whose client is not its owner's account, when its agent sets none (label nfltr.nf1.relay_cap.<service>); past it the relay refuses and cuts them (ERROR_REASON_LIMIT_EXCEEDED)")
+	_ = flag.Duration("nf1.relay_cap_refresh", 30*time.Second, "how often an open relayed leg re-reads its address's cap from the serving agent's labels")
+	// An nf1 address served with no account (nfltr
+	// docs/decisions/nf1-anon-2026-11-16.md): direct only, the relay
+	// carries its sessions' signalling. Per replica.
+	_ = flag.Bool("nf1.anon.enabled", false, "take nf1 addresses served with no account (an agent with no credential declaring only capability addresses, each with its registration proof): their sessions' relayed legs carry signalling only; needs nf1.enabled")
+	_ = flag.Duration("nf1.anon.lifetime", time.Hour, "an anonymous registration's lifetime: the relay ends its connection then and the agent registers again")
+	_ = flag.Int64("nf1.anon.leg_bytes", 128<<10, "bytes one relayed leg of an anonymous address's session carries, both ways, before the relay cuts it (account_required)")
+	_ = flag.Duration("nf1.anon.leg_time", 2*time.Minute, "how long one relayed leg of an anonymous address's session lives before the relay cuts it (account_required)")
+	_ = flag.Int("nf1.anon.bucket_bytes", 1<<20, "relayed bytes of all the anonymous sessions of one source (IPv4 address, IPv6 /64), across its registrations")
+	_ = flag.Float64("nf1.anon.bucket_rate", 1024, "refill of nf1.anon.bucket_bytes, bytes a second")
+	_ = flag.Int("nf1.anon.max", 1024, "anonymous registrations open on this replica")
+	_ = flag.Int("nf1.anon.source_max", 8, "anonymous registrations open from one source (IPv4 address, IPv6 /64)")
+	_ = flag.Float64("nf1.anon.source_rate", 1.0/60, "new anonymous registrations a second from one source")
+	_ = flag.Int("nf1.anon.source_burst", 8, "burst of nf1.anon.source_rate")
+
+	// ── Admin API ───────────────────────────────────────────────────────
+	_ = flag.String("admin.message", "", "admin message displayed to agents on connect and on the landing page (empty = no message)")
+
+	// ── Header & URL Rewriting (Gap 10) ─────────────────────────────────
+	_ = flag.StringToString("http.request_headers.add", nil, "headers to inject into every proxied request (name=value pairs)")
+	_ = flag.StringSlice("http.request_headers.remove", nil, "request header names to strip before forwarding to the agent")
+	_ = flag.StringToString("http.response_headers.add", nil, "headers to inject into every response from the agent (name=value pairs)")
+	_ = flag.StringSlice("http.response_headers.remove", nil, "response header names to strip before returning to the client")
+	_ = flag.String("http.url_rewrite.pattern", "", "Go regex applied to request URL path before dispatch (empty = disabled)")
+	_ = flag.String("http.url_rewrite.replacement", "", "replacement string for url_rewrite.pattern (supports $1 back-references)")
+
+	// ── Fleet (IoT Command & Control) ───────────────────────────────────
+
+	// ── TCP Tunneling (Gap 3 — SSH / RDP / Database) ───────────────────
+	// tcp.enabled activates the raw TCP tunneling engine.  When false
+	// (default) ConnectTCP returns Unimplemented.
+	_ = flag.Bool("tcp.enabled", false, "enable raw TCP tunneling over gRPC (SSH, RDP, database, etc.)")
+	// tcp.endpoints maps listen addresses to agentID|targetAddr pairs.
+	// Example config file:
+	//   [tcp.endpoints]
+	//     ":2222" = "mydevice|localhost:22"        # SSH
+	//     ":3389" = "mywinpc|localhost:3389"       # RDP
+	//     ":5432" = "lan-gw|192.168.1.10:5432"    # LAN Postgres
+	_ = flag.StringToString("tcp.endpoints", nil,
+		"TCP tunnel endpoints: listenAddr=agentID|targetAddr (e.g. ':2222=mydevice|localhost:22')")
+
+	// ── Native SSH/SCP Proxy ──────────────────────────────────────────
+	// ssh.proxy.enabled exposes GET /connect/{agentID}/{port} which hijacks
+	// the HTTP connection to a raw TCP pipe.  Users can then use native
+	// ssh/scp/sftp via ProxyCommand="curl -sN http://server/connect/%h/22".
+	// Requires tcp.enabled=true.  Defaults to false.
+	_ = flag.Bool("ssh.proxy.enabled", false,
+		"enable native SSH/SCP proxy via HTTP connection hijacking (requires tcp.enabled=true)")
+	// ssh.proxy.target_host overrides the host portion of the target address
+	// the agent dials.  The port comes from the URL path.  Default: localhost.
+	_ = flag.String("ssh.proxy.target_host", "localhost",
+		"target host the agent dials for SSH proxy connections (default: localhost)")
+
+	// ── TCP / SSH Proxy Dial Retries ──────────────────────────────────
+	// tcp.dial_max_retries controls how many times DialAgentWithRetry
+	// attempts to reach an agent before returning an error.  Used by the
+	// SSH proxy and browser terminal handlers.
+	_ = flag.Int("tcp.dial_max_retries", 3,
+		"max attempts to dial an agent for SSH proxy / terminal sessions")
+	_ = flag.Duration("tcp.dial_retry_interval", 500*time.Millisecond,
+		"base backoff interval between TCP dial retries (doubles each attempt, capped at 30s)")
+
+	// ── End-to-end encryption of TCP sessions ────────────────────────
+	// tcp.e2ee_policy is the operator's rule for the owner's TCP sessions
+	// to named services (/connect): require refuses plain sessions and
+	// agents that declare a plain service, forbid refuses E2EE sessions
+	// and agents that declare an E2EE service, allow takes both.
+	// tcp.e2ee_default is what a service that states nothing gets under
+	// allow. A conflict is refused, never downgraded.
+	_ = flag.String("tcp.e2ee_policy", E2EEAllow,
+		"end-to-end encryption of TCP sessions to services: require, allow or forbid; env TCP_E2EE_POLICY")
+	_ = flag.Bool("tcp.e2ee_default", false,
+		"under tcp.e2ee_policy=allow, end-to-end encrypt the TCP services whose agent states no e2ee; env TCP_E2EE_DEFAULT")
+
+	// ── E2EE TLS Passthrough ─────────────────────────────────────────
+	// e2ee.tls_passthrough.enabled activates the SNI-based TLS passthrough
+	// router.  When enabled, the server listens on a dedicated port, peeks
+	// at the TLS ClientHello to extract the SNI hostname, maps it to an
+	// agent ID, and forwards the raw encrypted bytes to the agent via the
+	// TCP tunneling subsystem.  The server never terminates TLS for this
+	// traffic.  Requires tcp.enabled=true.
+	_ = flag.Bool("e2ee.tls_passthrough.enabled", false,
+		"enable SNI-based TLS passthrough routing for E2EE connections")
+	// e2ee.tls_passthrough.port is the TCP port for the SNI router listener.
+	_ = flag.String("e2ee.tls_passthrough.port", "4443",
+		"TCP port for E2EE TLS passthrough SNI router (default: 4443)")
+	// e2ee.tls_passthrough.base_domain is the base domain suffix of E2EE share
+	// URLs: with base_domain "e2ee.example.com", an SNI of
+	// "<share code>.e2ee.example.com" routes to the share's agent. A literal
+	// agent ID does not route (agent_reach.go).
+	_ = flag.String("e2ee.tls_passthrough.base_domain", "",
+		"base domain of E2EE share URLs, <share code>.<base domain> (e.g. e2ee.example.com)")
+
+	// p2p.turn.*: TURN for `nfltr p2p call`. Off unless both the URLs and the
+	// shared secret (env P2P_TURN_SECRET only, never a flag) are set; the
+	// relay then issues per-call TURN REST credentials valid for p2p.turn.ttl.
+	_ = flag.String("p2p.turn.urls", "",
+		"comma-separated TURN URLs offered to p2p calls (turn:host:port?transport=udp); empty = no TURN")
+	_ = flag.Duration("p2p.turn.ttl", time.Hour,
+		"lifetime of a per-call TURN credential (1m-24h)")
+
+	flag.Parse()
+	loadFlags(viper.GetViper(), flag.CommandLine)
+
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+}
+
+// loadFlags gives viper the flags' values without viper.BindPFlags: with a
+// bound flag set, every Get of a dotted key that no Set or set flag answers
+// copies all ~200 flags into a fresh map to check that no flag shadows it
+// (viper's isPathShadowedInFlatMap), about 35 KB of garbage per read, and
+// the relay reads config on every proxied request. A set flag becomes an
+// override and the rest become defaults, which keeps the precedence a key
+// had (set flag > env > default) and the value Get returned, since each is
+// read through a viper bound to the flag set alone.
+func loadFlags(v *viper.Viper, fs *flag.FlagSet) {
+	bound := viper.New()
+	if err := bound.BindPFlags(fs); err != nil {
+		panic(fmt.Errorf("could not bind flags: %v", err))
+	}
+	fs.VisitAll(func(f *flag.Flag) {
+		if f.Changed {
+			v.Set(f.Name, bound.Get(f.Name))
+		} else {
+			v.SetDefault(f.Name, bound.Get(f.Name))
+		}
+	})
+}
+
+// renamedKeys are the core's keys spelled *.enable before v0.18.0 (lane
+// RCNAMES): each is now *.enabled.
+var renamedKeys = []string{"http.server.enable", "internal.enable", "metrics.enable",
+	"profiling.enable", "rpc.agent.heartbeat.enable", "tls.enable", "security.audit.enable", "ratelimit.enable"}
+
+// CheckRenamed refuses a renamed key (the core's eight, and a binary's own in
+// more) still set in the environment: viper ignores an env name no key has,
+// so TLS_ENABLE=true would start the relay with plain listeners. A flag of
+// the old name is refused by the flag parser already. Remove after v1.0.0,
+// once no deploy of an earlier relay remains.
+func CheckRenamed(more ...string) error {
+	var errs []error
+	for _, k := range append(slices.Clone(renamedKeys), more...) {
+		env := strings.ToUpper(strings.NewReplacer(".", "_", "-", "_").Replace(k))
+		if _, ok := os.LookupEnv(env); ok {
+			errs = append(errs, fmt.Errorf("%s is set: the key %s is now %sd (env %sD); rename it", env, k, k, env))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// tcp.e2ee_policy values.
+const (
+	E2EERequire = "require"
+	E2EEAllow   = "allow"
+	E2EEForbid  = "forbid"
+)
+
+// CheckNF1 refuses nf1.enabled without nf1.hosts: such a relay would take
+// no address's declaration (nfltr docs/decisions/nf1-risks-2026-11-14.md);
+// and nf1.anon.enabled without nf1.enabled, or with a limit that is not
+// positive (nfltr docs/decisions/nf1-anon-2026-11-16.md); and a negative
+// nf1.relay_cap (nf1-relay-cap-2026-11-25.md).
+// A relay calls it before it starts.
+func CheckNF1() error {
+	if viper.GetBool("nf1.enabled") && len(viper.GetStringSlice("nf1.hosts")) == 0 {
+		return fmt.Errorf("nf1.enabled needs nf1.hosts: the relay hosts its capability addresses name")
+	}
+	if viper.GetInt64("nf1.relay_cap") < 0 || viper.GetDuration("nf1.relay_cap_refresh") <= 0 {
+		return fmt.Errorf("nf1.relay_cap must not be negative and nf1.relay_cap_refresh must be positive")
+	}
+	if !viper.GetBool("nf1.anon.enabled") {
+		return nil
+	}
+	switch {
+	case !viper.GetBool("nf1.enabled"):
+		return fmt.Errorf("nf1.anon.enabled needs nf1.enabled")
+	case viper.GetDuration("nf1.anon.lifetime") <= 0, viper.GetInt64("nf1.anon.leg_bytes") <= 0, viper.GetDuration("nf1.anon.leg_time") <= 0,
+		viper.GetInt("nf1.anon.bucket_bytes") <= 0, viper.GetFloat64("nf1.anon.bucket_rate") < 0,
+		viper.GetInt("nf1.anon.max") <= 0, viper.GetInt("nf1.anon.source_max") <= 0, viper.GetFloat64("nf1.anon.source_rate") <= 0, viper.GetInt("nf1.anon.source_burst") <= 0:
+		return fmt.Errorf("nf1.anon.*: every limit must be positive (bucket_rate may be 0): an anonymous address without them is a free relay")
+	}
+	return nil
+}
+
+// ValidE2EEPolicy reports whether p is a tcp.e2ee_policy value.
+func ValidE2EEPolicy(p string) bool {
+	return p == E2EERequire || p == E2EEAllow || p == E2EEForbid
+}

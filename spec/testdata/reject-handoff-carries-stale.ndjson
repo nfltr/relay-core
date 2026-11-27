@@ -1,0 +1,5 @@
+{"ev":"Register","g":1,"t":1,"s":"","via":""}
+{"ev":"Bind","g":0,"t":1,"s":"","via":""}
+{"ev":"Arrive","g":0,"t":0,"s":"c1","via":""}
+{"ev":"Open","g":0,"t":1,"s":"c1","via":"link"}
+{"ev":"Carries","g":0,"t":0,"s":"","via":"no"}

@@ -1,0 +1,171 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package metrics
+
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// Buckets for the histogram (1-2-5 sequence, 1 ms → 10 s)
+var timingBuckets = []float64{
+	1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000,
+}
+
+const (
+	proxyNamespace      = "nfltr_relay_proxy"
+	dispatcherNamespace = "nfltr_relay_dispatcher"
+	brokerNamespace     = "nfltr_relay_broker"
+)
+
+var (
+	requestsQueued = auto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: brokerNamespace,
+			Name:      "requests_queued_total",
+			Help:      "The total number of requests queued to the broker.",
+		},
+	)
+
+	requestsDequeued = auto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: brokerNamespace,
+			Name:      "requests_dequeued_total",
+			Help:      "The total number of requests dequeued from the broker.",
+		},
+	)
+
+	requestsReceived = auto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: proxyNamespace,
+			Name:      "requests_received_total",
+			Help:      "The total number of requests received.",
+		},
+	)
+
+	requestsSentToAgents = auto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: proxyNamespace,
+			Name:      "agent_requests_sent_total",
+			Help:      "Requests the relay forwarded to agents.",
+		},
+	)
+
+	responsesReceivedFromAgents = auto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: proxyNamespace,
+			Name:      "agent_replies_total",
+			Help:      "Replies the relay received from agents.",
+		},
+	)
+
+	requestsFailedDueToAgentNotConnected = auto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: proxyNamespace,
+			Name:      "agent_offline_refusals_total",
+			Help:      "Requests refused because their agent was not connected.",
+		},
+	)
+
+	requestsTotal = auto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: proxyNamespace,
+			Name:      "requests_total",
+			Help:      "The total number of requests handled.",
+		},
+		[]string{"method", "status", "api_type"},
+	)
+
+	timeoutRequests = auto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: proxyNamespace,
+			Name:      "requests_timed_out_total",
+			Help:      "Requests that timed out waiting for their agent.",
+		},
+	)
+
+	agentRoundTrip = auto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: proxyNamespace,
+			Name:      "agent_round_trip_milliseconds",
+			Help:      "Milliseconds from the relay forwarding a request to its agent's reply.",
+			Buckets:   timingBuckets,
+		},
+		[]string{"method", "status"},
+	)
+
+	rpcRequestPayloadSize = auto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: proxyNamespace,
+			Name:      "request_body_bytes",
+			Help:      "Request body sizes in bytes.",
+			Buckets:   prometheus.ExponentialBuckets(512*1024, 2, 20),
+		},
+		[]string{"method"}, // Labels for the histogram.
+	)
+
+	rpcResponsePayloadSize = auto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: proxyNamespace,
+			Name:      "response_body_bytes",
+			Help:      "Response body sizes in bytes.",
+			Buckets:   prometheus.ExponentialBuckets(512*1024, 2, 20),
+		},
+		[]string{"method", "status"}, // Labels for the histogram.
+	)
+)
+
+// IncrQueuedRequests counts a request queued to the broker.
+func IncrQueuedRequests() {
+	requestsQueued.Inc()
+}
+
+// IncrDequeuedRequests counts a request dequeued from the broker.
+func IncrDequeuedRequests() {
+	requestsDequeued.Inc()
+}
+
+// RegisterRequestsReceived counts a request received.
+func RegisterRequestsReceived() {
+	requestsReceived.Inc()
+}
+
+// RegisterRequestsSentToAgents counts a request sent to an agent.
+func RegisterRequestsSentToAgents() {
+	requestsSentToAgents.Inc()
+}
+
+// RegisterResponsesReceivedFromAgents counts a response received from an agent.
+func RegisterResponsesReceivedFromAgents() {
+	responsesReceivedFromAgents.Inc()
+}
+
+// RegisterRequestsTotal counts a handled request by method, status and API type.
+func RegisterRequestsTotal(method, status, apiType string) {
+	requestsTotal.WithLabelValues(httpMethod(method), httpStatus(status), apiType).Inc()
+}
+
+// RegisterTimeoutRequests counts a request that timed out.
+func RegisterTimeoutRequests() {
+	timeoutRequests.Inc()
+}
+
+// RegisterLatencyIntroduced observes the latency the relay and agent added, in milliseconds.
+func RegisterLatencyIntroduced(method, status string, duration float64) {
+	agentRoundTrip.WithLabelValues(httpMethod(method), httpStatus(status)).Observe(duration)
+}
+
+// RegisterRequestsFailedDueToAgentNotConnected counts a request that failed because its agent was not connected.
+func RegisterRequestsFailedDueToAgentNotConnected() {
+	requestsFailedDueToAgentNotConnected.Inc()
+}
+
+// RegisterRPCRequestPayloadSize observes a request payload's size in bytes.
+func RegisterRPCRequestPayloadSize(method string, size float64) {
+	rpcRequestPayloadSize.WithLabelValues(httpMethod(method)).Observe(size)
+}
+
+// RegisterRPCResponsePayloadSize observes a response payload's size in bytes.
+func RegisterRPCResponsePayloadSize(method, status string, size float64) {
+	rpcResponsePayloadSize.WithLabelValues(httpMethod(method), httpStatus(status)).Observe(size)
+}

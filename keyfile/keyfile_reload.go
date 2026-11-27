@@ -1,0 +1,114 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package keyfile
+
+import (
+	"context"
+	"fmt"
+	"maps"
+	"slices"
+
+	"github.com/nfltr/relay-core/core/identity"
+
+	"github.com/nfltr/relay-core/platform/filewatch"
+)
+
+// Reload reads the key file again into the live store: the keys the file
+// now holds replace the store's at once, and the records follow. A machine
+// whose key left the file or whose key changed is
+// revoked (a rename alone is not):
+// OnRevoke runs for it (the relay ends its connections) after its old key
+// stopped validating and before a new key of it validates, so the cut never
+// takes a connection of the new key. The manager writes the file
+// atomically (a temporary file renamed over it), so a file without keys (empty, or comments
+// only) is meant: every key is revoked. A file that does not load
+// (missing, unreadable, malformed, a machine twice) or that changes a
+// kept machine's account (fixed at generate: spec/KeyAccount.tla
+// AccountStable; revoke it and generate it again) changes nothing and
+// returns the error. It returns the revoked machines.
+func (km *KeyManager) Reload() ([]identity.MachineID, error) {
+	// Read under the manager's lock, which every write of this process
+	// holds from its store change through its file write: a file read
+	// before an Enrol's line landed and compared after it revoked the
+	// machine just enrolled (TestReloadDuringEnrolRevokesNothing).
+	km.mu.Lock()
+	defer km.mu.Unlock()
+	next, err := read(km.filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	nextAccount := make(map[identity.MachineID]identity.MachineID, len(next.keys))
+	for _, n := range next.keys {
+		nextAccount[n.ID] = n.AccountOf()
+	}
+	gone := map[identity.MachineID]bool{}
+	km.store.mu.RLock()
+	orig := km.store.keys
+	for h, m := range km.store.keys {
+		if a, kept := nextAccount[m.ID]; kept && a != m.AccountOf() {
+			km.store.mu.RUnlock()
+			return nil, fmt.Errorf("security: %s: machine %s's account changed from %s to %s: an account is fixed at generate; revoke the machine and generate it again", km.filePath, m.ID, m.AccountOf(), a)
+		}
+		if n, ok := next.keys[h]; !ok || n.ID != m.ID {
+			gone[m.ID] = true
+		}
+	}
+	km.store.mu.RUnlock()
+	revoked := slices.Sorted(maps.Keys(gone))
+
+	if len(revoked) > 0 {
+		// The revoked subjects' keys, old and new, stop validating first.
+		staged := make(map[[32]byte]Machine, len(next.keys))
+		for h, m := range next.keys {
+			if !gone[m.ID] {
+				staged[h] = m
+			}
+		}
+		km.store.swap(staged, nil)
+		if km.onRevoke != nil {
+			for _, id := range revoked {
+				km.onRevoke(string(id))
+			}
+		}
+	}
+	km.store.swap(next.keys, orig)
+
+	records := make(map[identity.MachineID]KeyRecord, len(next.keys))
+	for h, m := range next.keys {
+		if r, ok := km.records[m.ID]; ok && !gone[m.ID] {
+			r.Name = m.Name
+			records[m.ID] = r
+			continue
+		}
+		records[m.ID] = fileRecord(m, h)
+	}
+	km.records = records
+	km.logger.Info("security: reloaded the key file", "file", km.filePath, "keys", len(next.keys), "revoked", revoked)
+	return revoked, nil
+}
+
+// swap replaces the store's keys with keys; from, when not nil, is the
+// map before the reload: its trace steps (the lines added and removed).
+func (s *Store) swap(keys, from map[[32]byte]Machine) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if from != nil {
+		s.traceLines(from, keys)
+	}
+	s.keys = keys
+}
+
+// Watch reloads the key file (Reload) whenever it changes, until ctx ends
+// (filewatch.Watch). It returns an error only when the file's directory
+// cannot be watched.
+func (km *KeyManager) Watch(ctx context.Context) error {
+	return filewatch.Watch(ctx, km.filePath, func() {
+		if _, err := km.Reload(); err != nil {
+			km.logger.Warn("security: the key file changed but does not load: the current lines stay", "file", km.filePath, "error", err)
+		}
+	}, func(err error) {
+		km.logger.Warn("security: key file watch", "file", km.filePath, "error", err)
+	})
+}

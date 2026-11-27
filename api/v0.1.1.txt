@@ -1,0 +1,5 @@
+Compatible changes:
+- ./frontend/http.Shares.Realm: added
+- ./frontend/http.Shares.RobotsTag: added
+- ./core/frontend.DefaultRealm: added
+- ./core/frontend.SharePolicy.EnforceRealm: added

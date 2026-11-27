@@ -1,0 +1,7 @@
+Compatible changes:
+- ./platform/metrics.NF1CapAtOpen: added
+- ./platform/metrics.NF1CapCut: added
+- ./platform/metrics.NF1CapRefused: added
+- ./platform/metrics.NF1CapRelayed: added
+- ./core/session.(*Dispatcher).AgentLabels: added
+- package github.com/nfltr/relay-core/core/nf1cap: added

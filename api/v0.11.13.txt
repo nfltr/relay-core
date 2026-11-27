@@ -1,0 +1,8 @@
+Incompatible changes:
+- ./core/session.Target: old is comparable, new is not
+Compatible changes:
+- ./core/session.(*Dispatcher).ResolveService: added
+- ./core/session.AgentAddress.Group: added
+- ./core/session.PresenceServices: added
+- ./core/session.Target.Exclude: added
+- ./core/directory.ServiceIndex: added

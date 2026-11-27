@@ -1,0 +1,6 @@
+Compatible changes:
+- ./core/directory.NF1Index: added
+- ./core/session.NF1NotServed: added
+- ./core/session.Target.Admit: added
+- ./core/session.Target.NF1: added
+- ./frontend/connect.Config.NF1: added

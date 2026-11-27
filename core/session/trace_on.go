@@ -1,0 +1,329 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build relaytrace
+
+package session
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/dataplane"
+
+	"github.com/nfltr/relay-core/platform/metrics"
+)
+
+// Trace mode (go test -tags relaytrace, RELAYTRACE=<dir>) writes one JSON
+// line per relay-side step of spec/AgentLink.tla that a gRPC frame stream
+// with per-session credit takes, to <dir>/<agent>-<n>.ndjson, one file per
+// stream. Each line is written under one process-wide lock held across the
+// state change it records (a receive's processing, a frame's insertion
+// into the outbox, a session's removal), so a file's order is an order the
+// steps took; spec/Trace.tla checks it against the model (make
+// spec-traces). After the stream's Down nothing more is recorded.
+const traceOn = true
+
+type (
+	traceStream = *traceStreamState
+	traceSess   = *traceSessState
+)
+
+type traceStreamState struct {
+	f       *os.File
+	stopped bool // Down was recorded (under traceMu)
+	// Under traceMu: the sessions Finish was recorded for, and per session
+	// the chunks whose Acquire returned before that Finish but reached
+	// traceWrite after it. Such a Write and its SendData are left out: the
+	// chunk is dropped as after the session's end, a stutter of the model's
+	// state (its credit is gone), and logging it after Finish would order
+	// the Acquire after the removal it preceded.
+	finished map[string]bool
+	skip     map[string]int
+}
+
+type traceSessState struct {
+	t   *traceStreamState
+	sid string
+}
+
+var (
+	traceMu sync.Mutex
+	traceN  atomic.Int64
+)
+
+// traceEvent is one line: ev the model step, s the session, n its size
+// (bytes, a window update; Up: the relay's window), t a received frame's
+// type (data, win, half, whole) or a sent close's (half, whole).
+type traceEvent struct {
+	Ev string `json:"ev"`
+	S  string `json:"s"`
+	N  int    `json:"n"`
+	T  string `json:"t"`
+	W  int    `json:"w,omitempty"` // Up: the agent's window
+	A  bool   `json:"a,omitempty"` // Up: the stream acks half closes (EndAck)
+	D  bool   `json:"d,omitempty"` // Up: the stream reports ends delivered (EndDone)
+	K  string `json:"k,omitempty"` // VisitorKernel: acked, rst or unknown
+
+}
+
+func traced(a *tcpAgentStream) bool { return a.tr != nil }
+
+// traceUp starts the trace of a gRPC stream with credit when RELAYTRACE
+// names a directory.
+func traceUp(a *tcpAgentStream) {
+	dir := os.Getenv("RELAYTRACE")
+	if dir == "" || a.cr == nil {
+		return
+	}
+	name := strings.NewReplacer("/", "_", ":", "_").Replace(a.agent)
+	f, err := os.OpenFile(filepath.Join(dir, fmt.Sprintf("%s-%d.ndjson", name, traceN.Add(1))), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) // #nosec G304 -- the tester's RELAYTRACE
+	if err != nil {
+		panic(err)
+	}
+	a.tr = &traceStreamState{f: f}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(a.tr, traceEvent{Ev: "Up", N: a.cr.Window(), W: a.cr.PeerWindow(), A: a.endAck, D: a.endDone})
+}
+
+// traceLog writes e; under traceMu.
+func traceLog(t *traceStreamState, e traceEvent) {
+	if t == nil || t.stopped || e.Ev == "" { // a control frame: no step
+		return
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := t.f.Write(append(b, '\n')); err != nil {
+		panic(err)
+	}
+}
+
+func traceStep(t *traceStreamState, e traceEvent) {
+	if t == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(t, e)
+}
+
+// traceOpenSess names a session for its pops (Read).
+func traceOpenSess(a *tcpAgentStream, id string, s *tcpSession) {
+	if a.tr != nil {
+		s.tr = &traceSessState{t: a.tr, sid: id}
+	}
+}
+
+// traceWrite: sendData's Credit.Acquire took n.
+func traceWrite(a *tcpAgentStream, id string, n int) {
+	if a.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	if a.tr.finished[id] {
+		a.tr.skip[id]++
+		return
+	}
+	traceLog(a.tr, traceEvent{Ev: "Write", S: id, N: n})
+}
+
+// traceSent logs the step a frame put into the outbox stands for; a
+// skipped Write's SendData is left out with it. Under traceMu.
+func traceSent(t *traceStreamState, f *pb.TCPData) {
+	e := sentEvent(f)
+	if t != nil && e.Ev == "SendData" && t.skip[e.S] > 0 {
+		t.skip[e.S]--
+		return
+	}
+	traceLog(t, e)
+}
+
+// traceRead: n bytes popped from the session's queue (Credit.Consumed
+// follows).
+func traceRead(s *tcpSession, n int) {
+	if s.tr != nil {
+		traceStep(s.tr.t, traceEvent{Ev: "Read", S: s.tr.sid, N: n})
+	}
+}
+
+// traceEof: the reader gets the EOF of the agent's half close (the
+// client's FIN, an in-process io.EOF). Recorded after Down too: the spec
+// gives a lost session's reader no EOF (Trace.tla).
+// traceTakeEnd records that the agent's half close of s reached its
+// onward app (spec/AgentLink.tla TakeEnd), before its report is queued.
+func traceTakeEnd(s *tcpSession) {
+	if s.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(s.tr.t, traceEvent{Ev: "TakeEnd", S: s.tr.sid})
+}
+
+// tracePassEnd records the agent's half close of s passed onto the
+// visitor's conn (spec/AgentLink.tla PassEnd).
+func tracePassEnd(s *tcpSession) {
+	if s.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(s.tr.t, traceEvent{Ev: "PassEnd", S: s.tr.sid})
+}
+
+// traceVisitorKernel records what the relay's kernel told of that FIN
+// (VisitorKernel: "acked" for nil, "unknown" for errEndUnknown, else
+// "rst"), before the report or the abort.
+func traceVisitorKernel(s *tcpSession, err error) {
+	if s.tr == nil {
+		return
+	}
+	k := "rst"
+	switch {
+	case err == nil:
+		k = "acked"
+	case errors.Is(err, errEndUnknown):
+		k = "unknown"
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(s.tr.t, traceEvent{Ev: "VisitorKernel", S: s.tr.sid, K: k})
+}
+
+func traceEof(s *tcpSession) {
+	if s.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	if s.tr.t.stopped {
+		s.tr.t.stopped = false
+		defer func() { s.tr.t.stopped = true }()
+	}
+	traceLog(s.tr.t, traceEvent{Ev: "Eof", S: s.tr.sid})
+}
+
+// traceDown: the stream ended here (unregister): CloseAll follows.
+func traceDown(a *tcpAgentStream) {
+	if a.tr == nil {
+		return
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	traceLog(a.tr, traceEvent{Ev: "Down"})
+	a.tr.stopped = true
+}
+
+// traceFinish: the session is removed (removeSession); remove runs under
+// traceMu.
+func traceFinish(a *tcpAgentStream, id string, remove func()) {
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	remove()
+	if a.tr != nil {
+		if a.tr.finished == nil {
+			a.tr.finished, a.tr.skip = map[string]bool{}, map[string]int{}
+		}
+		a.tr.finished[id] = true
+	}
+	traceLog(a.tr, traceEvent{Ev: "Finish", S: id})
+}
+
+// traceEnqueue is enqueue for a traced gRPC stream: the frame goes into the
+// outbox and its line is written under traceMu, so the file's order of the
+// stream's frames is the wire's. Every sender of the stream comes here, and
+// only the sender loop takes frames out, so a free slot stays free under
+// the lock; a full outbox is waited on outside it.
+func traceEnqueue(a *tcpAgentStream, f *pb.TCPData, stop <-chan struct{}) bool {
+	for {
+		traceMu.Lock()
+		if len(a.SendCh) < cap(a.SendCh) {
+			a.SendCh <- f
+			metrics.AddTransferBytes(metrics.PathTCPGRPC, len(f.GetData()), 0)
+			traceSent(a.tr, f)
+			traceMu.Unlock()
+			return true
+		}
+		traceMu.Unlock()
+		select {
+		case <-a.Done: // the stream ended: the frame is lost (SendData on a dead stream)
+			traceMu.Lock()
+			traceSent(a.tr, f)
+			traceMu.Unlock()
+			return true
+		case <-stop: // its session ended: not sent (SendData gives the credit back)
+			return false
+		case <-time.After(50 * time.Microsecond):
+		}
+	}
+}
+
+// sentEvent is the step a frame the relay sends stands for.
+func sentEvent(f *pb.TCPData) traceEvent {
+	sid := f.GetSessionId()
+	switch {
+	case sid == dataplane.WindowSID:
+		s, n, err := dataplane.ParseWindowFrame(f)
+		if err != nil {
+			panic(err)
+		}
+		return traceEvent{Ev: "SendWin", S: s, N: n}
+	case sid == dataplane.EndAckSID:
+		return traceEvent{Ev: "SendAck", S: string(f.GetData())}
+	case sid == dataplane.EndDoneSID:
+		return traceEvent{Ev: "SendDone", S: string(f.GetData())}
+	case strings.HasPrefix(sid, "_"):
+		return traceEvent{} // control: not a step of the model
+	case f.GetOpen():
+		return traceEvent{Ev: "Open", S: sid}
+	case f.GetClose() && f.GetHalf():
+		return traceEvent{Ev: "CloseWrite", S: sid, T: "half"}
+	case f.GetClose():
+		return traceEvent{Ev: "Abort", S: sid, T: "whole"}
+	case len(f.GetData()) > 0:
+		return traceEvent{Ev: "SendData", S: sid, N: len(f.GetData())}
+	}
+	return traceEvent{}
+}
+
+// traceRecv records a frame the relay received and runs its processing
+// (process) under traceMu.
+func traceRecv(a *tcpAgentStream, f *pb.TCPData, process func() error) error {
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	e := traceEvent{Ev: "Recv", S: f.GetSessionId()}
+	switch sid := f.GetSessionId(); {
+	case sid == dataplane.WindowSID:
+		s, n, err := dataplane.ParseWindowFrame(f)
+		if err == nil {
+			e.T, e.S, e.N = "win", s, n
+		}
+	case sid == dataplane.EndAckSID:
+		e.T, e.S = "ack", string(f.GetData())
+	case sid == dataplane.EndDoneSID:
+		e.T, e.S = "done", string(f.GetData())
+	case strings.HasPrefix(sid, "_"):
+	case f.GetClose() && f.GetHalf():
+		e.T = "half"
+	case f.GetClose():
+		e.T = "whole"
+	case len(f.GetData()) > 0:
+		e.T, e.N = "data", len(f.GetData())
+	}
+	if e.T != "" {
+		traceLog(a.tr, e)
+	}
+	return process()
+}

@@ -1,0 +1,4 @@
+Compatible changes:
+- ./frontend/http.Shares.SignIn: added
+- ./core/frontend.SharePolicy.Login: added
+- ./core/frontend.SharePolicy.LoginAllow: added

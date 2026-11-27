@@ -1,0 +1,16 @@
+Incompatible changes:
+- ./platform/metrics.A2AResponse: changed from func(int, bool, time.Time) to func(bool, time.Time)
+- ./platform/metrics.CountConn: changed from func(net.Conn, Path, time.Time, bool, bool) net.Conn to func(net.Conn, Path, *Meter, time.Time, bool, bool) net.Conn
+- ./platform/metrics.CountHTTP: changed from func(net/http.ResponseWriter, *net/http.Request, Path, time.Time) net/http.ResponseWriter to func(net/http.ResponseWriter, *net/http.Request, Path, *Meter, time.Time) net/http.ResponseWriter
+- ./platform/metrics.RecordChainEnded: changed from func(string, int64, int64) to func(string, *Meter, int64, int64)
+Compatible changes:
+- ./platform/metrics.AddBytes: added
+- ./platform/metrics.EnableUsage: added
+- ./platform/metrics.Meter: added
+- ./platform/metrics.OpenMeter: added
+- ./platform/metrics.TakeUsage: added
+- ./platform/metrics.Usage: added
+- ./platform/metrics.UsageEnabled: added
+- ./core/session.(*Dispatcher).OpenMeter: added
+- ./core/session.(*TCPDispatcher).OpenMeter: added
+- ./core/session.MeterChain: added

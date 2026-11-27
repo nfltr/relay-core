@@ -1,0 +1,158 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+// Package security — the gRPC interceptors that authenticate a credential.
+//
+// A call or stream's credential is "x-nfltr-token" (a token), else "authorization:
+// Bearer <token>", else the TLS client certificate of its connection
+// (TLSStateCredentials); the relay core's provider chain
+// (identity.Authenticator: the key file, the accounts store, the
+// configured providers such as mTLS and OIDC) authenticates it, and its
+// principal goes into the context (identity.WithPrincipal), typed, never
+// as strings in metadata. An x-nfltr-token no provider accepts is refused
+// (Unauthenticated); a bearer token no provider knows is as if absent (a
+// gateway call may carry another service's bearer: the certificate, if
+// any, is then the credential), one a provider refuses is refused. A
+// client certificate no provider knows (a revoked machine's, another CA's)
+// is refused, never taken as no credential. A call without a credential passes on
+// (trust-loopback); the handlers refuse it if nothing authenticated it. A
+// stream is held under its credential for as long as it runs: revoking the
+// credential, or its expiry, ends it.
+package grpcauth
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"strings"
+
+	"github.com/nfltr/relay-core/core/identity"
+	"github.com/nfltr/relay-core/core/relaystatus"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
+	"github.com/nfltr/relay/proto/wire/agentwire"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+)
+
+// AuthUnaryInterceptor authenticates a call's key with auth.
+func AuthUnaryInterceptor(auth *identity.Authenticator) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		p, err := metadataPrincipal(ctx, auth)
+		if err != nil {
+			return nil, err
+		}
+		if p.Subject != "" {
+			ctx = identity.WithPrincipal(ctx, p)
+		}
+		return handler(ctx, req)
+	}
+}
+
+// AuthStreamInterceptor authenticates a stream's key with auth and holds
+// the stream under the credential until it ends. A stream its credential's
+// revocation or expiry ended answers Unauthenticated, reason
+// ERROR_REASON_UNAUTHENTICATED; one its account's exhausted balance ended
+// answers FailedPrecondition, reason ERROR_REASON_BALANCE_EXHAUSTED.
+func AuthStreamInterceptor(auth *identity.Authenticator) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		p, err := metadataPrincipal(ss.Context(), auth)
+		if err != nil {
+			return err
+		}
+		if p.Subject == "" {
+			return handler(srv, ss)
+		}
+		held := auth.Hold(ss.Context(), p) // carries p
+		defer held.Release()
+		err = handler(srv, &wrappedStream{ServerStream: ss, ctx: held})
+		if cause := context.Cause(held); identity.Ended(cause) {
+			return credentialEndedStatus(cause).Err()
+		}
+		return err
+	}
+}
+
+// metadataPrincipal authenticates the incoming credential (with the
+// "x-agent-id" name and labels it asks for). No credential: a zero
+// principal, no error.
+func metadataPrincipal(ctx context.Context, auth *identity.Authenticator) (identity.Principal, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok || auth == nil {
+		return identity.Principal{}, nil
+	}
+	c := identity.Credential{Token: first(md, "x-nfltr-token"), Name: first(md, "x-agent-id")}
+	if labels := first(md, agentwire.LabelsKey); labels != "" {
+		c.Labels = agentwire.ParseLabels(labels)
+	}
+	var p identity.Principal
+	var err error
+	if c.Token != "" {
+		p, err = auth.Authenticate(ctx, c)
+	} else {
+		err = identity.ErrUnknownCredential
+		if tok, ok := strings.CutPrefix(first(md, "authorization"), "Bearer "); ok {
+			c.Token = tok
+			p, err = auth.Authenticate(ctx, c)
+			c.Token = ""
+		}
+		if errors.Is(err, identity.ErrUnknownCredential) { // no bearer, or not one of ours
+			if c.PeerCerts = peerCertificates(ctx); c.PeerCerts == nil {
+				return identity.Principal{}, nil
+			}
+			p, err = auth.Authenticate(ctx, c)
+		}
+	}
+	if err != nil {
+		slog.Warn("security: credential refused on gRPC", "error", err)
+		if errors.Is(err, identity.ErrNameNotAllowed) {
+			return p, status.Error(codes.PermissionDenied, err.Error())
+		}
+		if errors.Is(err, identity.ErrUnavailable) {
+			return p, status.Error(codes.Unavailable, "credential store unavailable, retry")
+		}
+		if errors.Is(err, identity.ErrBalanceExhausted) {
+			return p, balanceExhaustedStatus().Err()
+		}
+		if errors.Is(err, identity.ErrMachineNotEnrolled) {
+			return p, relaystatus.New(codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED, err.Error()).Err() // says how to enrol
+		}
+		return p, status.Error(codes.Unauthenticated, "invalid credential")
+	}
+	return p, nil
+}
+
+func first(md metadata.MD, key string) string {
+	if v := md.Get(key); len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
+// wrappedStream overrides Context() to return the enriched context.
+type wrappedStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedStream) Context() context.Context { return w.ctx }
+
+// credentialEndedStatus is the typed answer of a connection its
+// credential's revocation or expiry ended (identity.Ended), or its
+// account's exhausted balance (FailedPrecondition, reason ERROR_REASON_BALANCE_EXHAUSTED).
+func credentialEndedStatus(cause error) *status.Status {
+	if errors.Is(cause, identity.ErrBalanceExhausted) {
+		return balanceExhaustedStatus()
+	}
+	return relaystatus.New(codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED, cause.Error())
+}
+
+// balanceExhaustedStatus is the answer to a credential whose account's
+// prepaid balance is exhausted (identity.ErrBalanceExhausted), at
+// admission and at the cut: FailedPrecondition with reason
+// ERROR_REASON_BALANCE_EXHAUSTED, which clients retry (slowly), never
+// Unauthenticated, which they stop on.
+func balanceExhaustedStatus() *status.Status {
+	return relaystatus.New(codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, identity.ErrBalanceExhausted.Error())
+}

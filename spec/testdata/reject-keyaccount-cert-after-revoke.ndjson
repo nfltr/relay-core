@@ -1,0 +1,4 @@
+{"ev":"MintCode","m":"","n":"laptop","a":"","c":"c1","k":"","ok":false}
+{"ev":"Enrol","m":"m-a","n":"laptop","a":"m-a","c":"c1","k":"k1","ok":false}
+{"ev":"Revoke","m":"m-a","n":"","a":"","c":"","k":"","ok":false}
+{"ev":"Auth","m":"m-a","n":"","a":"","c":"","k":"k1","ok":true}

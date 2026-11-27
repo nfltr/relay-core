@@ -1,0 +1,12 @@
+Compatible changes:
+- ./platform/connlimit.Accounts: added
+- ./platform/connlimit.Limits: added
+- ./platform/connlimit.NewAccounts: added
+- ./platform/connlimit.ReasonAccountConns: added
+- ./platform/connlimit.ReasonAccountRate: added
+- ./platform/connlimit.ReasonAccountSourceConns: added
+- ./platform/connlimit.ReasonAccountSourceRate: added
+- ./platform/ratelimit.(*Limiter).Ready: added
+- ./core/session.(*TCPDispatcher).AdmitVisitor: added
+- ./core/session.TCPDispatcher.VisitorRefused: added
+- ./core/session.TCPDispatcher.Visitors: added

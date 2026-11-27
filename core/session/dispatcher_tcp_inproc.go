@@ -1,0 +1,312 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package session
+
+import (
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/nfltr/link"
+	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/dataplane"
+)
+
+// joinBufs holds the buffers WriteTo joins a backlog in; one is taken only
+// for a backlog of several slices and returned right after its Write.
+var joinBufs = sync.Pool{New: func() any { b := make([]byte, 0, tcpWriteBatch+tcpRelayBufSize); return &b }}
+
+// ---------------------------------------------------------------------------
+// inProcConn — net.Conn backed by TCPDispatcher in-process sessions
+// ---------------------------------------------------------------------------
+
+// inProcConn implements net.Conn for in-process TCPDispatcher sessions
+// created by DialAgent. It reads the agent's bytes straight from the
+// session's queue (no pipe or goroutine in between) and writes caller data
+// into the agent stream's send channel.
+type inProcConn struct {
+	agentStream *tcpAgentStream
+	sessionID   string
+	sess        *tcpSession
+	rest        []byte // unread tail of the last slice taken from the queue
+	closed      atomic.Bool
+	closeOnce   sync.Once
+	cleanupFn   func()
+}
+
+// Read returns the agent's bytes in order, then io.EOF once the agent
+// closed and the queued tail is read. After Close it returns io.EOF.
+func (c *inProcConn) Read(b []byte) (int, error) {
+	if len(c.rest) == 0 {
+		data, ok := c.sess.recvQ.Pop()
+		if !ok {
+			err := c.sess.endErr()
+			if traceOn && err == io.EOF && c.sess.peerHalf.Load() && !c.closed.Load() {
+				traceEof(c.sess)
+			}
+			return 0, err
+		}
+		c.rest = data
+	}
+	if c.closed.Load() {
+		return 0, io.EOF
+	}
+	n := copy(b, c.rest)
+	c.rest = c.rest[n:]
+	return n, nil
+}
+
+// WriteTo writes the agent's bytes to w until the session ends (io.Copy
+// uses it). A backlog goes out in one Write of up to tcpWriteBatch bytes,
+// so serveConnectStream sends one HTTP/2 DATA frame for it instead of one
+// per agent frame, each a round trip through the HTTP/2 server's writer.
+func (c *inProcConn) WriteTo(w io.Writer) (int64, error) {
+	var total int64
+	write := func(p []byte) error {
+		n, err := w.Write(p)
+		total += int64(n)
+		return err
+	}
+	if len(c.rest) > 0 {
+		rest := c.rest
+		c.rest = nil
+		if err := write(rest); err != nil {
+			return total, err
+		}
+	}
+	var bufs [][]byte
+	for {
+		var ok bool
+		if bufs, ok = c.sess.recvQ.PopBatch(bufs[:0], tcpWriteBatch); !ok || c.closed.Load() {
+			if !ok {
+				if err := c.sess.endErr(); err != io.EOF {
+					return total, err
+				}
+			}
+			return total, nil
+		}
+		var err error
+		if len(bufs) == 1 {
+			err = write(bufs[0])
+		} else {
+			jp := joinBufs.Get().(*[]byte)
+			for _, b := range bufs {
+				*jp = append(*jp, b...)
+			}
+			err = write(*jp)
+			*jp = (*jp)[:0]
+			joinBufs.Put(jp)
+		}
+		clear(bufs)
+		if err != nil {
+			return total, err
+		}
+	}
+}
+
+// Write sends data to the agent.  It copies b to prevent data races with the
+// caller reusing the slice before the send channel consumes it.
+func (c *inProcConn) Write(b []byte) (int, error) {
+	if c.writeEnded() {
+		return 0, io.ErrClosedPipe
+	}
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	return c.send(cp)
+}
+
+// WriteOwned sends b to the agent without a copy: the caller gives b up
+// (dataplane.OwnedWriter: a tcp-connect data connection's session).
+func (c *inProcConn) WriteOwned(b []byte) error {
+	_, err := c.send(b)
+	return err
+}
+
+// send queues b for the agent in chunks it has credit for. Each chunk's
+// enqueue and a CloseWrite or Close on another goroutine agree under
+// sess.wmu: nothing is sent after the close (spec/README.md finding 1,
+// TestInProcWriteRacingCloseWriteSendsNothingAfterFIN); a chunk whose
+// credit was taken gives it back. It returns the bytes sent, and
+// io.ErrClosedPipe for the rest once the session ended.
+func (c *inProcConn) send(b []byte) (int, error) {
+	a, s := c.agentStream, c.sess
+	sent := 0
+	for sent < len(b) {
+		n := len(b) - sent
+		if a.cr != nil {
+			n = min(n, dataplane.MaxChunk)
+			if !a.cr.Acquire(c.sessionID, n) {
+				return sent, io.ErrClosedPipe
+			}
+		}
+		s.wmu.Lock()
+		if c.writeEnded() {
+			s.wmu.Unlock()
+			if a.cr != nil {
+				_ = a.cr.Grant(c.sessionID, n) // never sent: the credit is the session's again
+			}
+			return sent, io.ErrClosedPipe
+		}
+		if traceOn && a.cr != nil {
+			traceWrite(a, c.sessionID, n)
+		}
+		// The outbox may stay full (an agent that reads nothing more):
+		// the session's end stops the wait, which holds wmu (finding 3).
+		if !a.enqueueUnless(&pb.TCPData{SessionId: c.sessionID, Data: b[sent : sent+n]}, s.closed) {
+			s.wmu.Unlock()
+			if a.cr != nil {
+				_ = a.cr.Grant(c.sessionID, n)
+			}
+			return sent, io.ErrClosedPipe
+		}
+		s.wmu.Unlock()
+		sent += n
+	}
+	return sent, nil
+}
+
+// Reset ends the session as Close does: the frame streams carry no reset.
+func (c *inProcConn) Reset() error { return c.Close() }
+
+// Close sends a TCP FIN to the agent and releases all session resources.
+// writeEnded reports whether the session takes no more bytes: it ended,
+// or this side half-closed it.
+func (c *inProcConn) writeEnded() bool {
+	if c.closed.Load() {
+		return true
+	}
+	select {
+	case <-c.sess.closed:
+		return true
+	default:
+		return c.sess.selfHalf.Load()
+	}
+}
+
+// CloseWrite half-closes the session: the agent's target reads EOF after
+// what was written; Read still returns the agent's bytes.
+func (c *inProcConn) CloseWrite() error {
+	c.agentStream.closeWrite(c.sessionID, c.sess)
+	return nil
+}
+
+// CloseWriteSync is CloseWrite that returns once the agent's target took
+// the end (peerlink's endSyncer): Join acknowledges its other conn's end
+// only then.
+func (c *inProcConn) CloseWriteSync() error { return c.CloseWriteSyncReceived(nil) }
+
+// CloseWriteSyncReceived is CloseWriteSync that calls received (when not
+// nil) at the agent's receipt (dataplane.EndAckFrame), where a Join's hold
+// ends (link spec/HopHold.tla R1). It returns nil once the agent reported
+// the end delivered (dataplane.EndDoneFrame; an agent without the report:
+// at its receipt; without the ack: at once), link.ErrReset when the
+// session failed or its stream ended first, link.ErrEndAckIdle when the
+// agent's target took none of the session's bytes for endDoneIdle (lane
+// ENDGRPC finding 4; spec/AgentLink.tla DoneTruth).
+func (c *inProcConn) CloseWriteSyncReceived(received func()) error {
+	_ = c.CloseWrite()
+	s := c.sess
+	if s.endAck {
+		if err := c.waitEnd(s.ackCh); err != nil {
+			return err
+		}
+	}
+	if received != nil {
+		received()
+	}
+	if !s.endDone {
+		return nil
+	}
+	return c.waitEnd(s.doneCh)
+}
+
+// endDoneIdle bounds the wait for the agent's report while the agent's
+// target takes none of the session's bytes (no window update), as link's
+// CloseWriteSync's idle bound: a slow, live tail is no failure.
+var endDoneIdle = 30 * time.Second
+
+// waitEnd waits for ch: nil once closed; link.ErrReset once the session
+// failed (not a clean end) or its stream ended; link.ErrEndAckIdle after
+// endDoneIdle without a window update.
+func (c *inProcConn) waitEnd(ch <-chan struct{}) error {
+	s := c.sess
+	closed := s.closed
+	idle := time.NewTimer(endDoneIdle)
+	defer idle.Stop()
+	seen := s.grants.Load()
+	for {
+		select {
+		case <-ch:
+			return nil
+		case <-closed:
+			closed = nil // a clean end (both halves) comes before the report
+			if s.endErr() != io.EOF {
+				return link.ErrReset
+			}
+			continue
+		case <-c.agentStream.Done:
+		case <-idle.C:
+			if g := s.grants.Load(); g != seen {
+				seen = g
+				idle.Reset(endDoneIdle)
+				continue
+			}
+		}
+		select {
+		case <-ch: // it came with the stream's end
+			return nil
+		default:
+		}
+		select {
+		case <-c.agentStream.Done:
+			return link.ErrReset
+		default:
+			return link.ErrEndAckIdle
+		}
+	}
+}
+
+// HoldEndAck (peerlink.EndAcker): Join acknowledges the agent's end only
+// once its other conn took it (AckEnd); nothing to hold here.
+func (c *inProcConn) HoldEndAck() {}
+
+// AckEnd (peerlink.EndAcker): Join passed the agent's half close on (its
+// client's CloseWriteSync returned, or onto a conn that acknowledges
+// nothing): the agent's accepted conn's Close may return.
+func (c *inProcConn) AckEnd() { c.agentStream.sendDone(c.sessionID, c.sess) }
+
+func (c *inProcConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.sess.markClosed() // first: a Write waiting for the outbox holds wmu (spec/README.md finding 3)
+		c.sess.wmu.Lock()
+		c.closed.Store(true)
+		ended := c.sess.selfHalf.Load() && c.sess.peerHalf.Load()
+		if !ended && !c.sess.abortSent.Swap(true) { // both half closes ended it already
+			c.agentStream.send(&pb.TCPData{SessionId: c.sessionID, Close: true})
+		}
+		c.sess.wmu.Unlock()
+		if ended && c.sess.endAck {
+			go c.forgetOnceAcked()
+			return
+		}
+		c.cleanupFn()
+	})
+	return nil
+}
+
+func (c *inProcConn) LocalAddr() net.Addr  { return inProcAddr{"local"} }
+func (c *inProcConn) RemoteAddr() net.Addr { return inProcAddr{"remote"} }
+
+// Deadline methods are no-ops; context cancellation drives session lifetime.
+func (c *inProcConn) SetDeadline(t time.Time) error      { return nil }
+func (c *inProcConn) SetReadDeadline(t time.Time) error  { return nil }
+func (c *inProcConn) SetWriteDeadline(t time.Time) error { return nil }
+
+// inProcAddr is a placeholder net.Addr for in-process connections.
+type inProcAddr struct{ addr string }
+
+func (a inProcAddr) Network() string { return "inproc" }
+func (a inProcAddr) String() string  { return a.addr }

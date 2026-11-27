@@ -1,0 +1,4 @@
+Compatible changes:
+- ./platform/metrics.IncrRateLimitEvictions: added
+- ./platform/ratelimit.DefaultMaxKeys: added
+- ./platform/ratelimit.WithMaxKeys: added

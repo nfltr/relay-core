@@ -1,0 +1,4 @@
+{"addr":6,"ev":"Limits","leg":4,"rate":0}
+{"ev":"Register"}
+{"ev":"Expire"}
+{"ev":"Open","s":1,"srv":"anon"}

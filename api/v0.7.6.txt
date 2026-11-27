@@ -1,0 +1,10 @@
+Incompatible changes:
+- ./frontend/connect.Frontend.Caller: changed from func(*net/http.Request) github.com/nfltr/relay-core/core/identity.Principal to func(*net/http.Request) (github.com/nfltr/relay-core/core/identity.Principal, error)
+- ./frontend/connect.RequestPrincipal: changed from func(*github.com/nfltr/relay-core/core/identity.Authenticator, *net/http.Request, github.com/nfltr/relay-core/core/identity.Credential) (github.com/nfltr/relay-core/core/identity.Principal, string, bool) to func(*github.com/nfltr/relay-core/core/identity.Authenticator, *net/http.Request, github.com/nfltr/relay-core/core/identity.Credential) (github.com/nfltr/relay-core/core/identity.Principal, string, error)
+Compatible changes:
+- ./core/identity.(*Authenticator).RevokeCause: added
+- ./core/identity.Ended: added
+- ./core/identity.ErrBalanceExhausted: added
+- ./frontend/http.Shares.Refuse: added
+- ./frontend/connect.ErrNoCredential: added
+- ./grpcauth.BalanceExhaustedStatus: added

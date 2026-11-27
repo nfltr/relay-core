@@ -1,0 +1,210 @@
+# Copyright 2026 nfltr
+# SPDX-License-Identifier: Apache-2.0
+
+# A go.work above the checkout never joins this module's build.
+export GOWORK := off
+
+GOVULNCHECK_VERSION := v1.8.0
+
+.PHONY: check check-static test-identity build vet check-fmt test test-race fuzz-short fuzz-long check-gosec check-semgrep check-govulncheck check-publish check-no-legacy-name check-binary-size examples readme-quickstart
+# check is three parts, which the workflow (make ci) runs as jobs at once:
+# a new check belongs in check-static, or in a part of its own named in
+# .github/workflows/check.yml too.
+check: check-static test-race fuzz-short
+check-static: build vet check-fmt test-identity check-gosec check-semgrep check-govulncheck check-publish check-no-legacy-name check-binary-size examples readme-quickstart
+
+# check-fmt: gofmt (the toolchain's, not one on PATH) changes no tracked Go
+# file (vendor/ aside); go vet and the tests accept unformatted code.
+check-fmt:
+	@out="$$("$$(go env GOROOT)/bin/gofmt" -l $$(git ls-files '*.go' | grep -v '^vendor/'))"; \
+	if [ -n "$$out" ]; then echo "gofmt would change:"; echo "$$out"; exit 1; fi
+
+# scripts/check-identity.sh (the pre-push hook's) refuses what it should.
+test-identity:
+	./scripts/check-identity_test.sh
+
+build:
+	CGO_ENABLED=0 go build ./...
+
+vet:
+	go vet ./...
+
+test:
+	go test -count=1 -timeout 30m ./...
+	go test -count=1 -tags relaytrace -run TestRevocationTrace ./core/identity/
+
+test-race:
+	./scripts/test-sharded.sh -race -timeout 30m -- ./...
+	go test -count=1 -race -tags relayfault -run TestFault ./frontend/connect/
+
+# test-under-load: PKGS with -count LOAD_COUNT (5) on a starved machine
+# (scripts/test-under-load.sh, the same file in link, relay and relay-core):
+# a test that waits a fixed time for what a busy machine does later fails
+# here; wait for the event or state instead, with a bound only against a hang.
+# A nested module's: PKGS='-C <module dir> <packages>'.
+LOAD_COUNT ?= 5
+.PHONY: test-under-load
+test-under-load:
+	@test -n "$(PKGS)" || { echo "test-under-load: PKGS='<packages>' is required" >&2; exit 2; }
+	@./scripts/test-under-load.sh $(LOAD_COUNT) $(PKGS)
+
+# FUZZTIME per target (default 10s); FUZZPARALLEL caps the workers.
+fuzz-short:
+	./scripts/fuzz-short.sh
+
+# Every target for FUZZTIME (default 30m) each.
+fuzz-long:
+	FUZZTIME=$(or $(FUZZTIME),30m) ./scripts/fuzz-short.sh
+
+# Pinned SAST gated by scripts/{gosec,semgrep}-baseline.txt (semgrep needs
+# docker; without it the check says so and passes).
+check-gosec:
+	./scripts/check-gosec.sh
+
+check-semgrep:
+	./scripts/check-semgrep.sh
+
+# Needs network (vuln.go.dev).
+check-govulncheck:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+# Nothing unpublishable in the repository's files: email addresses, public
+# IPv4 addresses, internal host names, home directory paths
+# (scripts/check-publish.sh; justified lines in scripts/publish-allow.txt).
+check-publish:
+	./scripts/check-publish.sh
+
+# The relay by no retired name in any tracked file (the name held as its
+# SHA-256: scripts/check-no-legacy-name.sh, the same file as relay's).
+check-no-legacy-name:
+	./scripts/check-no-legacy-name_test.sh
+	./scripts/check-no-legacy-name.sh
+
+# The stripped linux/amd64 nfltr-relay-core's size (scripts/check-binary-size.sh).
+# Budget: measured + 5 % (2026-10-28: 20,521,120 bytes, the core linking the
+# frontends it attaches: connect, http, sni); lowered when a cut shrinks it,
+# raised only with the reason in CHANGELOG.md (2026-11-21: 21,710,000, the
+# PROXY protocol reader, lane SCALE-LB).
+CORE_SIZE_BUDGET_BYTES ?= 21710000
+check-binary-size:
+	CORE_SIZE_BUDGET_BYTES=$(CORE_SIZE_BUDGET_BYTES) ./scripts/check-binary-size.sh
+
+# Every program under examples/ built and run to exit 0, each under a
+# timeout (scripts/run-examples.sh).
+examples:
+	./scripts/run-examples.sh
+
+# The README's quickstart block, extracted and run as a reader would
+# (scripts/readme-quickstart.sh).
+readme-quickstart:
+	./scripts/readme-quickstart.sh
+
+# The exported API against the latest release (apidiff, pinned in the
+# script): the changes must be the ones api/ lists; without the tags (a
+# shallow clone) it fails. A change on purpose: CHANGELOG.md, then
+# UPDATE=1 make check-api.
+.PHONY: check-api test-check-api
+# test-check-api: check-api fails, never passes, in a clone without the tags.
+test-check-api:
+	./scripts/check-api_test.sh
+
+check-api: test-check-api
+	./scripts/check-api.sh
+
+# bench-tcp-tunnel: the TCP data path's throughput, COUNT runs (default 6)
+# for benchstat (nfltr AGENTS.md "Relay data path": before and after a
+# data-path change, on the Mac under `taskpolicy -b`).
+.PHONY: bench-tcp-tunnel
+bench-tcp-tunnel:
+	go test -run '^$$' -bench BenchmarkTCPTunnelThroughput -benchmem -count $(or $(COUNT),6) ./core/session/
+
+# The TLA+ models of the agent's frame streams and their handoff
+# (spec/README.md): spec: invariants; spec-mutants: every bug put back is
+# caught and the documented races found (both in CI); spec-liveness,
+# spec-simulate and spec-traces: weekly. Java and tla2tools.jar come from
+# scripts/fetch-tla.sh (pinned, cached outside the repository).
+.PHONY: spec spec-mutants spec-nightly spec-liveness spec-simulate spec-traces spec-traces-repeat
+spec:
+	./scripts/spec.sh check
+
+spec-mutants:
+	./scripts/spec.sh mutants
+
+# The ProVerif model of the E2EE share gate (spec/proverif/README.md):
+# every line of spec/proverif/expect.txt, mutants included (in make ci, seconds).
+.PHONY: spec-proverif
+spec-proverif: test-cicache test-fetch-tla
+	./spec/proverif/run.sh
+# The model's bindings against the code (spec/proverif/README.md
+# "Bindings"): each BIND id of e2ee_share.pv has a test row that sends a
+# protected share where the attacker can and requires a refusal; the test
+# fails when the model's ids and its rows differ (in make ci).
+.PHONY: spec-bindings
+spec-bindings:
+	go test -count=1 -run 'ModelBindings' ./core/session/
+
+# spec-nightly: AgentLink's invariants at larger sizes (minutes; not in make ci).
+spec-nightly:
+	./scripts/spec.sh nightly
+
+spec-liveness:
+	./scripts/spec.sh liveness
+
+spec-simulate:
+	./scripts/spec.sh simulate
+
+spec-traces:
+	./scripts/spec.sh traces
+
+# spec-traces-repeat COUNT=n: the datapath tests' traces n times (TRACE_TESTS
+# in the environment narrows them), a rejected one printed whole.
+spec-traces-repeat:
+	COUNT=$(COUNT) ./scripts/spec.sh repeat
+
+CI_WORKFLOW_FILE := .github/workflows/check.yml
+# ci: what the GitHub workflow runs on a push (CI_WORKFLOW_FILE), run here.
+# GitHub Actions is not a gate; make ci on the operator's Mac is (the build
+# box is deleted, 2026-11-25). scripts/ci.sh reads the steps from
+# the workflow file itself, so the two cannot drift; a pass on a clean tree
+# is stamped and not rerun for the same tree.
+# hooks: install the pre-push hook (scripts/pre-push): a push to main or a
+# tag needs a green make ci result for that sha (scripts/ci.sh records it)
+# or this clone's stamp for its tree; bypass only with
+# NFLTR_CI_BYPASS=<reason> (logged to <git-common-dir>/ci-bypass.log).
+.PHONY: ci hooks
+ci:
+	@CI_WORKFLOW=$(CI_WORKFLOW_FILE) ./scripts/ci.sh
+hooks:
+	@h="$$(git rev-parse --git-path hooks)/pre-push"; \
+	if [ -e "$$h" ] && ! grep -q 'scripts/pre-push' "$$h"; then echo "hooks: $$h exists and is not this one; move it away first" >&2; exit 1; fi; \
+	printf '#!/bin/sh\n# make hooks: scripts/pre-push of the checkout pushing (else of %s)\ns="$$(git rev-parse --show-toplevel)/scripts/pre-push"\n[ -x "$$s" ] || s=%s/scripts/pre-push\nexec "$$s" "$$@"\n' "$(CURDIR)" "$(CURDIR)" >"$$h" && chmod +x "$$h" && echo "hooks: installed $$h"
+
+# Early-exit pipes under pipefail (scripts/check-grepq.sh, a copy of
+# nfltr's, kept identical): `producer | grep -q` reads SIGPIPE (141) as "not
+# found"; the self-test reproduces the race.
+.PHONY: check-grepq
+check-grepq:
+	./scripts/check-grepq.sh self-test
+	./scripts/check-grepq.sh
+# Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
+# identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
+# spec README's code-map entry exists, and the commits since origin/main
+# that change a file a code map lists change that spec too or carry
+# `Spec-Reviewed: <spec> <reason>`. The pre-push hook checks the pushed range.
+.PHONY: check-spec-drift
+check-spec-drift:
+	./scripts/check-spec-drift.sh maps
+	./scripts/check-spec-drift.sh ci
+
+# scripts/cicache.sh (the same file in every nfltr repository): the result
+# cache of TLC runs and ProVerif models; a hit skips a check whose inputs
+# did not change. Its soundness test, ahead of the first check using it.
+.PHONY: test-cicache
+test-cicache:
+	./scripts/cicache_test.sh
+
+# scripts/fetch-tla.sh: concurrent fetchers sharing one cache never see
+# another's partial download; a good cache is used with no fetch.
+.PHONY: test-fetch-tla
+test-fetch-tla:
+	./scripts/fetch-tla_test.sh

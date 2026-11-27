@@ -1,0 +1,6 @@
+Compatible changes:
+- ./core/directory.(*MemoryCache).SetNX: added
+- ./core/directory.RelayID: added
+- ./core/directory.SetNXCache: added
+- ./core/session.Dispatcher.RelayID: added
+- ./grpcfactory.WithRelayID: added

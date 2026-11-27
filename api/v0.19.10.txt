@@ -1,0 +1,2 @@
+Compatible changes:
+- ./core/session.TCPEndpoint.NF1: added

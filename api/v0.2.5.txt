@@ -1,0 +1,39 @@
+Incompatible changes:
+- ./platform/metrics.RegisterPodToPodConnectionFailure: changed from func(string) to func()
+Compatible changes:
+- ./platform/metrics.AddTransferBytes: added
+- ./platform/metrics.AddTransferStall: added
+- ./platform/metrics.ObserveTransferFirstByte: added
+- ./platform/metrics.ObserveTransferOpen: added
+- ./platform/metrics.Path: added
+- ./platform/metrics.PathA2A: added
+- ./platform/metrics.PathAccounts: added
+- ./platform/metrics.PathBlob: added
+- ./platform/metrics.PathConnect: added
+- ./platform/metrics.PathHTTPGRPC: added
+- ./platform/metrics.PathHTTPLink: added
+- ./platform/metrics.PathMailbox: added
+- ./platform/metrics.PathNames: added
+- ./platform/metrics.PathP2PRelay: added
+- ./platform/metrics.PathReplica: added
+- ./platform/metrics.PathSNI: added
+- ./platform/metrics.PathSSH: added
+- ./platform/metrics.PathTCPDataConn: added
+- ./platform/metrics.PathTCPGRPC: added
+- ./platform/metrics.PathTCPLink: added
+- ./platform/metrics.PathTCPQUIC: added
+- ./platform/metrics.PathWG: added
+- ./platform/metrics.SecondsBuckets: added
+- ./platform/metrics.TrackTransferConn: added
+- ./platform/metrics.TransferAbort: added
+- ./platform/metrics.TransferBegin: added
+- ./platform/metrics.TransferDeadPeer: added
+- ./platform/metrics.TransferDrain: added
+- ./platform/metrics.TransferEnd: added
+- ./platform/metrics.TransferError: added
+- ./platform/metrics.TransferLimit: added
+- ./platform/metrics.TransferObserver: added
+- ./platform/metrics.TransferOpened: added
+- ./platform/metrics.TransferReset: added
+- ./platform/metrics.TransferStalled: added
+- ./platform/metrics.TransferTimeout: added

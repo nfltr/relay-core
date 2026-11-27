@@ -1,0 +1,463 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package session
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/nfltr/relay-core/broker"
+	"github.com/nfltr/relay-core/core/directory"
+	"github.com/nfltr/relay-core/internal/platform/auth"
+	"github.com/nfltr/relay-core/internal/platform/logging"
+	"github.com/nfltr/relay-core/internal/platform/receiveloop"
+	"github.com/nfltr/relay-core/platform/metrics"
+	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/agentservices"
+	"github.com/nfltr/relay/proto/wire/agentwire"
+	"github.com/nfltr/relay/proto/wire/chunking"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+)
+
+// ConnectHTTP implements the gRPC Dispatcher_ConnectHTTPServer handler, registering
+// an HTTP-based agent stream and relaying frames until the agent disconnects.
+func (d *Dispatcher) ConnectHTTP(stream pb.Dispatcher_ConnectHTTPServer) error {
+	// Get AgentID from context — supports a token or a machine certificate.
+	agentID, err := auth.GetAgentIDFromContext(stream.Context())
+	if err != nil {
+		d.Logger.Error("error determining agentID from context", "error", err)
+		return errNoPrincipal()
+	}
+	if err := d.Config.Reserved.RefuseAgentName(agentID); err != nil {
+		return err
+	}
+	if err := d.refuseAttached(stream.Context(), agentID, "ConnectHTTP"); err != nil {
+		return err
+	}
+
+	// The credential names the principal allowed to take this session over.
+	credHash := streamCredHash(stream.Context())
+
+	sessionCtx, cancel := context.WithCancelCause(stream.Context()) // will cancel if `stream context` cancels
+	defer cancel(nil)
+	ctx := sessionCtx
+	registrationCtx := d.agentInventoryRegistrationContext(ctx)
+
+	d.Logger.Info("received SubscribeEvent from agent for AgentID", "agent_id", agentID)
+	if d.refusesAgents(registrationCtx, agentID) { // agent_move.go, agent_rebalance.go: its reconnect must reach another replica
+		return status.Error(codes.Unavailable, "this relay replica is leaving or holds more than its share of agents: connect again")
+	}
+	proc := traceTakeoverProc(d, agentID)
+	if err := d.takeOverSession(registrationCtx, agentID, credHash, proc); err != nil {
+		return err
+	}
+	credential := sessionCredential(credHash)
+	release, err := d.validateAgentConnection(registrationCtx, agentID, credential, d.IPInventory)
+	if err != nil {
+		traceTakeoverStep(d, agentID, proc, credHash, func() (string, string) { return "End", "" })
+		return err
+	}
+	defer release()
+	// The session leaves agents, and ended closes, after every other
+	// deferred teardown step: a reconnect waits for ended (takeOverSession)
+	// and registers only then, so no step here undoes its registration.
+	ended := make(chan struct{})
+	var registered *HTTPStream
+	defer func() {
+		traceTakeoverStep(d, agentID, proc, credHash, func() (string, string) { // Takeover.tla Notice, Stop
+			if registered != nil {
+				metrics.AgentDown(agentID)
+				d.DeregisterAgent(agentID, registered, stream.Context().Err())
+			}
+			if errors.Is(context.Cause(sessionCtx), errSessionReplaced) {
+				return "Notice", ""
+			}
+			return "End", ""
+		})
+		close(ended)
+	}()
+
+	// Send the server-resolved agent identity back so the agent can
+	// display the correct browse URL (the server may have scoped --name
+	// to the key's stored identity).
+	md := metadata.Pairs("x-resolved-agent-id", agentID)
+	md.Append(chunking.FlowControlMetadataKey, "1") // this relay sends cancel/ack frames
+	md.Append(agentwire.LabelUpdatesKey, "1")       // and applies the agent's LabelUpdate frames
+	if msg := d.Config.AdminMessage; msg != "" {
+		md.Append("x-admin-message", msg)
+	}
+	services, err := declaredServices(stream.Context(), d.Config.NF1Hosts)
+	if err != nil {
+		return err
+	}
+	// An agent that does not read modes (nfltr before v2.1.6) requires
+	// the echo to equal its declaration and cannot terminate E2EE on a tcp
+	// service: it gets its declaration back, its tcp services plain.
+	echo, modes := services, firstIncoming(stream.Context(), agentservices.ModesHeader) == "1"
+	if !modes {
+		if services, err = plainServices(services, d.Config.E2EEPolicy); err != nil {
+			// Such an agent reads only the header of a refused stream:
+			// accept its declaration there with the reason as the notice
+			// it prints, then refuse (a status it stops on, not retried).
+			md.Append(agentservices.Header, agentservices.Format(echo))
+			md.Set("x-admin-message", status.Convert(err).Message())
+			_ = stream.SendHeader(md)
+			return err
+		}
+	}
+	if err := CheckServicesE2EE(services, d.Config.E2EEPolicy); err != nil {
+		return err
+	}
+	services = ResolveServicesE2EE(services, d.Config.E2EEPolicy, d.Config.E2EEDefault)
+	if modes {
+		echo = services
+	}
+	if services != nil {
+		// Accepted: the agent may serve them, each tcp service's E2EE
+		// resolved (its own choice, else the policy's or the default).
+		md.Append(agentservices.Header, agentservices.Format(echo))
+	}
+	d.appendHeartbeat(md, d.agentHeartbeat(stream.Context()))
+	if d.Config.HeartbeatEnabled && d.TCPDispatcher != nil && d.TCPDispatcher.Link != nil {
+		// While its agent link is up, the link's liveness is the agent's:
+		// it need not answer the heartbeats (WatchAgentSession).
+		md.Append(agentwire.LinkLivenessKey, "1")
+	}
+
+	metrics.RegisterUpstreamConnection(ProtocolHTTP)
+	upstreamStart := time.Now()
+
+	recvThreshold := d.Config.HeartbeatRecvThreshold
+
+	session, err := claimAgentRecord(registrationCtx, d.IPInventory, agentID, directory.Session{Since: time.Now(), Credential: credential, Account: PrincipalOwner(stream.Context()), Services: agentservices.Format(services)}, nil, nil, recvThreshold)
+	if err != nil {
+		d.Logger.Error("failed to set agentID dispatcher addr in cache", "agent_id", agentID, "error", err)
+		return err
+	}
+	traceFailover(d, stream.Context(), "accept", agentID, "ConnectHTTP")
+
+	defer func() {
+		err = releaseAgentRecord(context.Background(), d.IPInventory, agentID, session)
+		if err != nil {
+			d.Logger.Error("failed to delete agentID dispatcher addr from cache", "agent_id", agentID, "error", err)
+			d.lateDown(agentID, nil) // its down now is DeregisterAgent's (finding 29)
+		}
+	}()
+
+	heartbeats, heartbeatsRecvThresholdTicker := newHeartbeatState(recvThreshold)
+	defer heartbeatsRecvThresholdTicker.Stop()
+
+	agentStream := NewHTTPStream(agentID, stream, stream.Context(), heartbeats, heartbeatsRecvThresholdTicker)
+	agentStream.connectedAt, agentStream.seq, agentStream.credential, agentStream.account = session.Since, session.Seq, session.Credential, session.Account
+	agentStream.Services = services
+	agentStream.labelRate = rate.NewLimiter(labelUpdateRate, labelUpdateBurst)
+	defer agentStream.markEnded()     // before the record's release (deferred above): no update writes it back
+	defer d.failInflight(agentStream) // the session ended: its unanswered transactions get agent-gone
+	if services != nil {
+		d.Logger.Info("agent declared services", "agent_id", agentID, "services", agentservices.Format(services))
+	}
+
+	// Extract advertised routes from gRPC metadata (e.g., "fossil,gitea").
+	{
+		md := incomingKeys(stream.Context(), "x-routes", agentwire.LabelsKey, "x-agent-capabilities",
+			chunking.FlowControlMetadataKey, "x-tls-fingerprint")
+		if vals := md.Get("x-routes"); len(vals) > 0 && vals[0] != "" {
+			for r := range strings.SplitSeq(vals[0], ",") {
+				r = strings.TrimSpace(r)
+				if r != "" {
+					agentStream.routes = append(agentStream.routes, r)
+				}
+			}
+			d.Logger.Info("agent advertised routes", "agent_id", agentID, "routes", agentStream.routes)
+		}
+		agentStream.labels = parseLabelsMetadata(md)
+		agentStream.connectLabels = maps.Clone(agentStream.labels)
+		if len(agentStream.labels) > 0 {
+			d.Logger.Info("agent advertised labels", "agent_id", agentID, "labels", agentStream.labels)
+		}
+		agentStream.capabilities = parseCapabilitiesMetadata(md)
+		if len(agentStream.capabilities) > 0 {
+			d.Logger.Info("agent advertised capabilities", "agent_id", agentID, "capabilities", agentStream.capabilities)
+		}
+		if advertisesMove(stream.Context()) {
+			agentStream.moved, agentStream.rebalance, agentStream.moveDone = make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
+		}
+		// E2EE: read TLS certificate fingerprint from agent metadata.
+		if vals := md.Get("x-tls-fingerprint"); len(vals) > 0 && vals[0] != "" {
+			agentStream.tlsFingerprint = vals[0]
+			d.Logger.Info("agent advertised TLS fingerprint", "agent_id", agentID, "fingerprint", vals[0])
+		}
+	}
+
+	// Subscribed (and receiving) before the session registers: a request
+	// routed here once the agent counts as connected finds its consumer.
+	// (A request sent to the agent's topic with no consumer fails with
+	// broker.ErrNoConsumer: its visitor is answered at once.)
+	// The topic is made only here: the broker forgets it once the consumer
+	// and every producer on it closed, so a session that returned before
+	// subscribing would leave it behind.
+	agentIDTopicName := agentID
+	if err := d.broker.CreateTopic(agentIDTopicName, 0, true); err != nil {
+		d.Logger.Error("error creating topic for AgentID", "agent_id", agentID, "error", err)
+		return status.Errorf(codes.Internal, "Error creating topic for AgentID %s", agentID)
+	}
+	consumer, err := d.broker.Subscribe(broker.ConsumerOptions{
+		Topic:            agentIDTopicName,
+		SubscriptionName: agentID,
+		Type:             broker.ConsumerTypeExclusive,
+	})
+	if err != nil {
+		d.Logger.Error("failed to subscribe to topic", "topic", agentIDTopicName, "error", err)
+		return err
+	}
+	defer func() {
+		if err := consumer.Unsubscribe(); err != nil {
+			d.Logger.Error("failed to unsubscribe from topic", "topic", agentIDTopicName, "error", err)
+		}
+		// Closed, it takes no more (a later send fails: the proxy answers
+		// its visitor); what it took and the agent never got is answered.
+		consumer.Close()
+		d.failQueued(agentStream, consumer.Chan())
+		d.movedAway.CompareAndDelete(agentID, agentStream)
+	}()
+	consumer.Chan() // receiving from here
+
+	agentStream.takeover = &sessionTakeover{credHash: credHash, replace: func() { cancel(errSessionReplaced) }, ended: ended, proc: proc}
+	d.AddHTTPSession(agentID, agentStream) // after the claim: a request meanwhile waits (RouteArriving)
+	d.Presence.up(agentID, agentStream.labels, agentStream.capabilities, d.presenceServices(agentID))
+	if d.OnAgentMetadata != nil {
+		d.OnAgentMetadata(AgentInfo{
+			AgentID:      agentID,
+			TunnelType:   ProtocolHTTP,
+			Capabilities: cloneStringSlice(agentStream.capabilities),
+			Routes:       cloneStringSlice(agentStream.routes),
+			Labels:       cloneStringMap(agentStream.labels),
+			ConnectedAt:  agentStream.connectedAt,
+		})
+	}
+	d.RegisterAgent(agentID, agentStream.account, agentStream.tlsFingerprint)
+	registered = agentStream // its teardown: the deferred close(ended) above
+	metrics.AgentUp(agentStream.account, agentID)
+	// The accept goes out only now: an agent that hears it is connected
+	// (a share for a declared service, at once) finds itself registered.
+	if err := stream.SendHeader(md); err != nil {
+		d.Logger.Warn("failed to send resolved agent-id header", "error", err)
+	}
+
+	eg, ctx := errgroup.WithContext(ctx)
+	// Recv returns only when the gRPC stream ends, and the stream ends only
+	// when this handler returns. The receive loop therefore runs outside the
+	// group: a session ended from here (replaced, heartbeat timeout, relay
+	// stop) returns without waiting for a Recv the client may never answer.
+	received := make(chan error, 1) // watchAgentSession ends the session with it
+	go func() {
+		// publishes to the podID topic
+		received <- d.receiveFromHTTPAgent(ctx, agentStream)
+	}()
+	eg.Go(func() error { return d.relayRequestsToAgent(ctx, agentStream, consumer) })
+	err = d.runSession(eg, ctx, cancel, agentID, agentStream, d.IPInventory, received)
+
+	// Record upstream connection duration with disconnect reason.
+	disconnectReason := classifyDisconnectReason(err)
+	metrics.RegisterUpstreamConnectionDuration(disconnectReason, time.Since(upstreamStart).Seconds())
+
+	if errors.Is(context.Cause(sessionCtx), errSessionReplaced) {
+		d.Logger.Info("agent session replaced by its reconnect", "agent_id", agentID)
+		return errReplacedSessionStatus
+	}
+	if err != nil {
+		d.logStreamLifecycle("agent for AgentID subscription is disconnected", err, "agent_id", agentID)
+	}
+	return d.classifyStreamError(err)
+}
+
+// send receives the requests from requests from http server via pulsar topic of the agentID and
+// sends them to the grpc agent for the agentID.
+func (d *Dispatcher) relayRequestsToAgent(ctx context.Context, stream *HTTPStream, consumer broker.Consumer) error {
+	agentID := stream.ID
+	logger := d.Logger.With("AgentID", agentID)
+	interval := d.agentHeartbeat(stream.streamCtx)
+	heartbeatTicker := time.NewTicker(interval)
+	defer heartbeatTicker.Stop()
+	var bookkept time.Time
+	var bookkeeping atomic.Bool
+	incomingMessages := consumer.Chan()
+	moveDone := stream.moveDone
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-moveDone: // agent_move.go: after every request the channel holds
+			moveDone = nil
+			for range len(incomingMessages) {
+				if err := d.relayRequest(stream, <-incomingMessages, logger); err != nil {
+					return err
+				}
+			}
+			var err error
+			traceMoveStep(stream, moveEvent{Ev: "Done"}, func() bool {
+				err = stream.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_DONE})
+				return err == nil
+			})
+			if err != nil {
+				return err
+			}
+			logger.Info("agent moved to another replica: told it no request follows on its old stream")
+		case <-heartbeatTicker.C:
+			if stream.OutboundDataSentWithin(interval) {
+				logger.Debug("skipping heartbeat to agentID agent: outbound data recently sent")
+				continue
+			}
+			if err := stream.Send(&pb.HTTPProxyRequest{}); err != nil {
+				d.onHeartbeatSendError(agentID, err, d.IPInventory, stream.Session())
+				return err
+			}
+			logger.Debug("sent heartbeat to agentID agent")
+			if time.Since(bookkept) < heartbeatBookkeepingEvery {
+				continue
+			}
+			bookkept = time.Now()
+			d.bookkeepHeartbeat(agentID, &bookkeeping)
+		case message, ok := <-incomingMessages:
+			if !ok {
+				return errors.New("broker consumer channel closed")
+			}
+			if err := d.relayRequest(stream, message, logger); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// relayRequest sends one message of the agent's topic on its stream and
+// acks it.
+func (d *Dispatcher) relayRequest(stream *HTTPStream, message broker.Message, logger *slog.Logger) error {
+	logger.Debug("received message from broker")
+	now := time.Now()
+	request, err := broker.DecodeBrokerMessage(message, &pb.HTTPProxyRequest{})
+	if err != nil {
+		metrics.RegisterBrokerMessageDecodeError()
+		// Nack so the message can be redelivered
+		return err
+	}
+	trackRequest(stream, request.Request)
+	logger2 := logging.With(logger, "transaction_id", request.Request.TransactionId)
+	logger2.Debug("unmarshalling message took", "duration", time.Since(now))
+	logger2.Debug("time since message has left proxy server", "duration", now.Sub(time.UnixMilli(request.Timestamps.RequestAtHttpServer)))
+	metrics.IncrDequeuedRequests()
+	request.Timestamps.RequestAtGrpcServer = now.UnixMilli()
+	err = traceForward(stream, request.Request.TransactionId, func() error { return stream.Send(request) })
+	if err != nil {
+		logger2.Error("sending request to agent", "error", err)
+		return fmt.Errorf("send failed: %w", err)
+	}
+	stream.bytesSent.Add(int64(len(request.Request.Payload)))
+	stream.requestCount.Add(1)
+
+	// Ack only after successful decode and send
+	ackErr := message.Ack()
+	if ackErr != nil {
+		metrics.RegisterBrokerAckFailure()
+		return fmt.Errorf("acking failed: %s: %w", message, ackErr)
+	}
+
+	logger2.Debug("handed to agent stream")
+	metrics.RegisterRequestsSentToAgents()
+	return nil
+}
+
+// receive receives from grpc agent and
+// loads the response from agent to a shared podID pulsar topic so the http server can consume.
+func (d *Dispatcher) receiveFromHTTPAgent(ctx context.Context, stream *HTTPStream) error {
+	recvThreshold := d.Config.HeartbeatRecvThreshold
+	return receiveloop.ReceiveAndProcess(ctx, d.Config.RecvBufferSize, stream.ID, d.Logger,
+		stream.Recv,
+		func() { stream.heartbeatsRecvThresholdTicker.Reset(recvThreshold) },
+		func(ctx context.Context, input *pb.HTTPProxyResponse, receivedAt time.Time) error {
+			return d.processHTTPInput(ctx, stream, input, receivedAt)
+		},
+	)
+}
+
+// processHTTPInput handles a single message received from an HTTP-mode agent.
+// Heartbeats (nil response or empty transaction ID) are forwarded to the heartbeat channel.
+// Data messages are enriched with metadata and forwarded via the broker.
+func (d *Dispatcher) processHTTPInput(ctx context.Context, stream *HTTPStream, input *pb.HTTPProxyResponse, receivedAt time.Time) error {
+	if !stream.moving.Load() {
+		_ = d.refreshAgentInventoryOnInboundActivity(ctx, stream.ID, d.IPInventory, stream) // superseded: the session's watch ends it
+	}
+	// Debug lines only when enabled: this runs per body chunk, and their
+	// loggers and arguments were most of its allocations
+	// (BenchmarkProcessHTTPInput).
+	debug := d.Logger.Enabled(ctx, slog.LevelDebug)
+	if input.Response == nil && input.GetMove() == pb.Move_MOVE_CONNECTED {
+		traceMoveStep(stream, moveEvent{Ev: "RecvA", M: "CONNECTED"}, func() bool { stream.noteMoveConnected(); return true }) // agent_move.go
+	}
+	if input.Response == nil && input.GetLabels() != nil {
+		return d.applyHTTPLabelUpdate(ctx, stream, input.GetLabels().GetLabels())
+	}
+	if input.Response == nil || len(input.Response.TransactionId) == 0 {
+		if debug {
+			d.Logger.Debug("received a heartbeat", "AgentID", stream.ID)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		d.markAgentStreamAlive(stream, input)
+		return nil
+	}
+
+	input.Timestamps.ResponseAtGrpcServer = receivedAt.UnixMilli()
+	stream.bytesRecv.Add(int64(len(input.Response.Payload)))
+	// to be backward compatible with agents, set new fields to zero values
+	if input.Routing == nil {
+		input.Routing = &pb.RoutingInfo{}
+	}
+	// overrides agentID received from agent with the known stream agentID
+	input.Routing.AgentId = stream.ID
+	delete(input.Response.Headers, agentGoneHeader) // the relay's own marker
+	now := time.Now()
+	if ctx.Err() != nil {
+		// The session ended and its receive loop drains what the agent sent
+		// before: deliver it on a bound of its own (the in-memory broker
+		// drops a send on an ended ctx without an error).
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), agentGoneDeliveryBound)
+		defer cancel()
+	}
+	txn, ends := input.Response.TransactionId, endsTransaction(input.Response) // the proxy owns input once published
+	err := d.routeResponseToBroker(ctx, input)
+	if err != nil {
+		return fmt.Errorf("sending message for transactionID: %s: %w", txn, err)
+	}
+	if ends { // only once delivered: else failInflight answers it
+		traceAnswer(stream, txn, func() { stream.inflight.Delete(txn) })
+	}
+	if debug {
+		logging.With(d.Logger, "AgentID", stream.ID, "transaction_id", txn).Debug("routeResponseToBroker - sending message to producer took", "duration", time.Since(now))
+	}
+	metrics.IncrQueuedRequests()
+	return nil
+}
+
+// routeResponseToBroker publishes an agent's HTTP response to this pod's
+// topic, where the waiting HTTP proxy consumes it.
+func (d *Dispatcher) routeResponseToBroker(ctx context.Context, input *pb.HTTPProxyResponse) error {
+	publishStart := time.Now()
+	defer func() {
+		metrics.RegisterBrokerPublishDuration(float64(time.Since(publishStart).Milliseconds()))
+	}()
+	_, err := d.podIDTopicProducer.SendProto(ctx, input)
+	return err
+}

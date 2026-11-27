@@ -1,0 +1,6 @@
+Incompatible changes:
+- ./core/frontend.(*CachedGrants).Forget: removed
+- ./core/sharesecret.(*VerifiedCache).Forget: removed
+Compatible changes:
+- ./core/frontend.(*CachedGrants).ForgetID: added
+- ./core/sharesecret.(*VerifiedCache).ForgetID: added

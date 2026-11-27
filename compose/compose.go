@@ -1,0 +1,253 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+// Package compose is a relay composition: the core (core/session, its
+// in-process directory) with its frontends attached and its ports served,
+// as nfltr-relay-core runs it (Serve), and the pieces a larger relay
+// composes on its own (Composition, AgentPort, Listen, Metrics). It lives
+// beside core/, not in it: it attaches frontends (frontend/connect), which
+// core/ does not link.
+package compose
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nfltr/relay-core/broker"
+	"github.com/nfltr/relay-core/core/directory"
+	"github.com/nfltr/relay-core/core/frontend"
+	"github.com/nfltr/relay-core/core/identity"
+	"github.com/nfltr/relay-core/core/relaystatus"
+	"github.com/nfltr/relay-core/core/session"
+	"github.com/nfltr/relay-core/core/sharecode"
+	"github.com/nfltr/relay-core/frontend/connect"
+	httpingress "github.com/nfltr/relay-core/frontend/http"
+	"github.com/nfltr/relay-core/platform/clientgen"
+	"github.com/nfltr/relay-core/platform/config"
+	"github.com/nfltr/relay-core/platform/ratelimit"
+	"github.com/nfltr/relay-core/services"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
+	"github.com/spf13/viper"
+	"google.golang.org/grpc/codes"
+)
+
+// Ports are a composition's listeners: proxy (clients' /connect, keys' own
+// requests), gRPC (agents), internal (/ready), metrics, and the
+// frontends' own (Ports: the SNI router's when
+// e2ee.tls_passthrough.enabled).
+type Ports struct {
+	Proxy, GRPC, Internal, Metrics net.Listener
+	Ports                          map[string]net.Listener
+}
+
+// Serve runs the core on ls until ctx ends, frontends attached
+// (frontend.CoreHost): the dispatchers, the agents' gRPC port (AgentPort),
+// the internal port's /ready and the metrics port's /metrics (and pprof
+// with profiling.enabled). It reads its settings from the process
+// configuration (platform/config.SetDefaultFlags, then viper).
+//
+// Agents and clients authenticate with providers, asked in order, the
+// first one primary (identity.NewAuthenticator). Without providers Serve
+// returns ErrNoProviders: the core holds no credential of its own (the key
+// file, keyfile, authenticates machine certificates and needs the
+// composition's TLS and machine CA).
+func Serve(ctx context.Context, logger *slog.Logger, ls Ports, frontends []frontend.Frontend, providers ...identity.Provider) error {
+	if err := errors.Join(config.CheckRenamed(), config.CheckNF1()); err != nil {
+		return err
+	}
+	if len(providers) == 0 {
+		return ErrNoProviders
+	}
+	// The core has no groups.
+	var policy session.Policy = session.AccountIsOneGroup{}
+	grace := time.Duration(viper.GetInt("termination.grace.periodseconds")) * time.Second
+	rules := session.TargetRules{TargetHost: viper.GetString("ssh.proxy.target_host"), E2EEPolicy: viper.GetString("tcp.e2ee_policy"), E2EEDefault: viper.GetBool("tcp.e2ee_default")}
+	if rules.E2EEPolicy == "" {
+		rules.E2EEPolicy = config.E2EEAllow
+	}
+	dialRetries, dialInterval := max(viper.GetInt("tcp.dial_max_retries"), 1), viper.GetDuration("tcp.dial_retry_interval")
+	if dialInterval <= 0 {
+		dialInterval = 500 * time.Millisecond
+	}
+	podID := os.Getenv(viper.GetString("pod_id.env_var"))
+	dir := directory.NewMemoryCache()
+	loopback := viper.GetString("loopback")
+	dispInv, err := directory.NewIPInventory(logger, dir, viper.GetDuration("redis.ops_timeout"), loopback, directory.GetDispatcherCacheKey)
+	if err != nil {
+		return err
+	}
+	streamInv, err := directory.NewIPInventory(logger, dir, viper.GetDuration("redis.ops_timeout"), loopback, directory.GetStreamerCacheKey)
+	if err != nil {
+		return err
+	}
+	b := broker.NewInMemoryMessageBroker()
+	defer b.Close()
+	if err := b.CreateTopic(podID, 0, true); err != nil {
+		return err
+	}
+	producer, err := b.CreateProducer(broker.ProducerOptions{Topic: podID})
+	if err != nil {
+		return err
+	}
+	defer producer.Close()
+
+	subscriber, err := b.Subscribe(broker.ConsumerOptions{Topic: podID, SubscriptionName: podID + "-core", Type: broker.ConsumerTypeExclusive})
+	if err != nil {
+		return err
+	}
+	defer subscriber.Close()
+
+	c := &session.Core{
+		PodID:                 podID,
+		Directory:             dir,
+		DispatcherIPInventory: dispInv,
+		StreamerIPInventory:   streamInv,
+		Broker:                b,
+		PodIDTopicSubscriber:  subscriber,
+		PodIDTopicProducer:    producer,
+		DrainBy:               sync.OnceValue(func() time.Time { return time.Now().Add(grace) }),
+	}
+	auth := identity.NewAuthenticator(providers[0].Name(), providers...)
+	front := &connect.Frontend{Core: c, Logger: logger, Config: func() connect.Config {
+		return connect.Config{Enabled: viper.GetBool("tcp.enabled"), MinClientGeneration: clientgen.Min(), E2EEPolicy: rules.E2EEPolicy, NF1: viper.GetBool("nf1.enabled")}
+	}}
+	front.Caller = func(r *http.Request) (identity.Principal, error) {
+		p, _, err := connect.RequestPrincipal(auth, r, identity.Credential{})
+		return p, err
+	}
+	front.Hold = func(ctx context.Context, p identity.Principal) (context.Context, func(), bool) {
+		held := auth.Hold(ctx, p)
+		return held, held.Release, true
+	}
+
+	d := session.NewDispatcher(ctx, logger.With("type", "dispatcher"), b, producer, dispInv, streamInv, grace)
+	d.AgentsGo = front.Clients.Drained() // no peers: agents go once clients drained
+	if d.RelayID, err = directory.RelayID(ctx, dir); err != nil {
+		return err
+	}
+	d.Policy = policy
+	c.Dispatcher = d
+	c.PublishedDispatcher.Store(d)
+	if viper.GetBool("tcp.enabled") {
+		c.WireTCP(ctx, logger, grace, front.Clients.Drained())
+	}
+	c.Reach = d.KeyReach(func() session.TargetRules { return rules })
+	c.DialPolicy = func() (int, time.Duration) { return dialRetries, dialInterval }
+
+	shares, journal, err := shareGrants(c, auth, logger, viper.GetString("accounts.service"))
+	if err != nil {
+		return err
+	}
+	internal := http.NewServeMux()
+	internal.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	internal.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	host := &frontend.CoreHost{C: c, Log: logger, Ports: ls.Ports, Shares: shares}
+	// IdleTimeout: with it and ReadTimeout zero net/http holds an idle
+	// keep-alive connection for good (TestProxyClosesAnIdleKeepAliveConnection).
+	proxy := &http.Server{ReadHeaderTimeout: 10 * time.Second, IdleTimeout: viper.GetDuration("http.server.idle_timeout"), HTTP2: connect.HTTP2}
+	comp := &Composition{
+		Core: c, Logger: logger, Internal: ls.Internal, InternalHandler: internal, Metrics: ls.Metrics, Clients: &front.Clients,
+		// The frontends this binary links (frontends.go) attach to the core.
+		Start: func(ctx context.Context, run func(func() error)) error {
+			host.Run = run
+			if err := host.Attach(ctx, frontends...); err != nil {
+				return err
+			}
+			ingress := host.HTTP()
+			if ingress.AgentGone != nil {
+				d.OnAgentDisconnect = ingress.AgentGone
+			}
+			mux := http.NewServeMux()
+			mux.Handle(connect.Path, front)
+			mux.Handle(connect.NF1WebSocketPath, front)
+			if journal != nil {
+				mux.Handle(sharecode.JournalPath, journal)
+			}
+			if ingress.Serve != nil {
+				var visits *httpingress.Shares
+				if shares != nil { // as the relay's: its verified-credential cache, its miss budget per client IP
+					visits = &httpingress.Shares{Grants: shares, Verified: httpingress.NewShareVerified(), Misses: ratelimit.New(1, 30, time.Minute, 10*time.Minute), Log: logger}
+				}
+				mux.Handle("/", ownRequests(auth, ingress.Serve, visits))
+			}
+			proxy.Handler = mux
+			attrs := []any{"proxy", ls.Proxy.Addr().String(), "grpc", ls.GRPC.Addr().String(), "internal", ls.Internal.Addr().String(), "shares", shares != nil, "relay_id", d.RelayID}
+			if l := ls.Ports[config.SNIRouterPort]; l != nil {
+				attrs = append(attrs, "sni", l.Addr().String())
+			}
+			logger.Info("relay core serving", attrs...)
+			return nil
+		},
+		// The agents' gRPC port, the reaper and HTTP ingress's fanout until
+		// the drain lets the port stop.
+		Agents: func() *AgentPort {
+			return &AgentPort{Core: c, Logger: logger, Auth: auth, Listener: ls.GRPC, Fanout: host.HTTP().Fanout, Grace: grace, WaitClients: front.Clients.WaitDrained}
+		},
+		// The proxy port: on the drain (SIGTERM) it takes no new client; its
+		// open requests drain to the deadline (hijacked data connections are
+		// not its: Clients drains them), then the agents go and the gRPC port
+		// stops (Core.ServeAgents).
+		Serve: []func(context.Context) error{
+			func(context.Context) error { return serveHTTP(proxy, ls.Proxy) },
+			func(ctx context.Context) error {
+				<-ctx.Done()
+				sctx, cancel := context.WithDeadline(context.Background(), c.DrainBy())
+				defer cancel()
+				if proxy.Shutdown(sctx) != nil {
+					_ = proxy.Close()
+				}
+				return nil
+			},
+		},
+	}
+	return comp.Run(ctx)
+}
+
+// ErrNoProviders is Serve's error without an identity provider.
+var ErrNoProviders = errors.New("no identity provider")
+
+// ownRequests routes a share's visitor (<code>.<http.share_domain>,
+// visits: nil without shares) to the shared agent, and a key's own HTTP
+// request to its agent: the token (Authorization: Bearer) and X-Agent-Id
+// name the agent as the gRPC wire does (a service of the token's machine); the relay's credential never reaches the agent, and no
+// client sets the identity headers the relay sets. Anything else is 401.
+func ownRequests(auth *identity.Authenticator, serve http.Handler, visits *httpingress.Shares) http.Handler {
+	domain := "." + strings.ToLower(strings.TrimSuffix(strings.TrimSpace(viper.GetString("http.share_domain")), "."))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range []string{"X-Authenticated-Agent", "X-Auth-Method", "X-Fleet-Token-ID", services.CallerHeader, services.CallerPrincipalHeader, services.CallerMethodHeader, sharecode.RelayHeader} {
+			r.Header.Del(h)
+		}
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if code, ok := strings.CutSuffix(strings.ToLower(host), domain); ok && visits != nil && domain != "." && code != "" {
+			visits.Serve(w, r, serve, code)
+			return
+		}
+		p, header, err := connect.RequestPrincipal(auth, r, identity.Credential{Name: r.Header.Get("X-Agent-Id")})
+		if errors.Is(err, identity.ErrBalanceExhausted) {
+			relaystatus.WriteHTTP(w, http.StatusPaymentRequired, codes.FailedPrecondition, relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED, err.Error())
+			return
+		}
+		if errors.Is(err, identity.ErrMachineNotEnrolled) {
+			relaystatus.WriteHTTP(w, http.StatusUnauthorized, codes.Unauthenticated, relayv1.ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED, err.Error()) // says how to enrol
+			return
+		}
+		if err != nil || p.AgentID == "" {
+			http.Error(w, "missing authentication credentials", http.StatusUnauthorized)
+			return
+		}
+		r.Header.Del(header)
+		r.Header.Del("X-Agent-Id")
+		r.Header.Set(session.AgentIDKey, p.AgentID)
+		serve.ServeHTTP(w, r.WithContext(auth.Carry(r.Context(), p)))
+	})
+}
