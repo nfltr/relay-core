@@ -10,7 +10,8 @@
 #             AgentLinkIface.cfg (Refines on fewer bytes), spec/Handoff.cfg,
 #             spec/Move.cfg, spec/Presence.cfg, spec/Directory.cfg and
 #             DirectoryHeal.cfg, spec/NF1Claim.cfg, spec/NF1Anon.cfg, spec/NF1Cap.cfg, spec/Failover.cfg and FailoverShare.cfg, spec/Takeover.cfg, spec/AgentReplace.cfg, spec/HTTPPool.cfg: invariants; spec/AgentLinkWrite.cfg:
-#             WriteReturns (CI).
+#             WriteReturns (CI); Presence, PresenceLive, Directory and
+#             DirectoryHeal at one replica (one).
 #   nightly   TLC on spec/AgentLink.cfg with Refines and AgentLinkLarge.cfg:
 #             AgentLink's invariants at larger sizes; spec/PresenceLarge.cfg:
 #             Presence's with a crash; spec/NF1AnonLarge.cfg and NF1CapLarge.cfg: two sessions
@@ -86,6 +87,16 @@ run() {
 		tail -60 "$work/check.out"
 		exit $st
 	fi
+}
+
+# one CFG MODULE: TLC on CFG at one replica (R and W = {"r1"}, Pods =
+# {"p1"}): the standalone VM is a replica set of one, and every replica
+# model holds there too (relay-server
+# docs/decisions/one-replica-same-path-2026-11-27.md section 1h).
+one() {
+	sed -e 's/^\( *[RW] = \){[^}]*}/\1{"r1"}/' -e 's/^\( *Pods = \){[^}]*}/\1{"p1"}/' "spec/$1" >"$work/N1$1"
+	grep -E '^ *(R|Pods) = \{"(r|p)1"\}$' "$work/N1$1" >/dev/null || { echo "one: $1 has no R or Pods line"; exit 1; }
+	run "$work/N1$1" "$2"
 }
 
 # expect CFG MODULE NAME SED...: TLC on CFG edited by the sed expressions
@@ -537,6 +548,13 @@ check)
 	run Takeover.cfg Takeover.tla
 	run AgentReplace.cfg AgentReplace.tla
 	run HTTPPool.cfg HTTPPool.tla
+	# One replica (spec/README.md "One replica"): Presence's and the
+	# directory's make-spec configurations, and Presence's liveness, at
+	# one replica.
+	one Presence.cfg Presence.tla
+	one PresenceLive.cfg Presence.tla
+	one Directory.cfg Directory.tla
+	one DirectoryHeal.cfg Directory.tla
 	;;
 nightly)
 	run AgentLink.cfg MCAgentLink.tla

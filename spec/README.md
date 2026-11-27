@@ -1638,6 +1638,20 @@ Environment assumptions:
 | `Bind`: a QUIC bind retires the token's other QUIC connections | `core/session/agent_link.go` |
 | `Register`, `PrimEnd`: the route, `Streams` | `core/session/dispatcher_tcp_streams.go` |
 
+## One replica (lane MR-N1-HARNESS, 2026-11-27)
+
+The standalone VM is a replica set of one (relay-server
+`docs/decisions/one-replica-same-path-2026-11-27.md`), so the models with
+a replica set are also checked at one replica: `scripts/spec.sh`'s `one
+CFG MODULE` rewrites `R` and `W` to `{"r1"}` and `Pods` to `{"p1"}`.
+`make spec` runs `Presence.cfg`, `PresenceLive.cfg` (the wake is paid),
+`Directory.cfg` and `DirectoryHeal.cfg` that way (about 24 s of CPU,
+12 s wall on the Mac at load 10); every invariant and property holds.
+`Move.tla` is not: it models a move from replica A to replica B, and a
+lone replica's drain (no target: its agents are let go) is lane
+MR-N1-CORE's extension of it. relay-server's models run the same way
+(its spec/README.md "One replica").
+
 ## Layer contract: what the layer above may assume
 
 relay-server (its `spec/Replicas.tla`), the relay's clients and the agent
