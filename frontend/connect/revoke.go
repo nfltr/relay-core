@@ -4,8 +4,10 @@
 package connect
 
 import (
+	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/relay-core/core/identity"
@@ -53,7 +55,7 @@ func (o *sessionSet) abort(a *link.Abort) {
 	}
 	o.mu.Unlock()
 	for _, s := range open {
-		_ = s.AbortWith(a) // flushed before it returns: ahead of the connection's close
+		_ = s.AbortWith(a) // buffered, not always written: endData closes after it
 	}
 }
 
@@ -70,4 +72,22 @@ func credentialAbort(cause error) *link.Abort {
 		return &link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED), Msg: cause.Error()}
 	}
 	return nil
+}
+
+// endFlush bounds how long a cut data connection waits for its last
+// frames to be written (a peer that reads nothing is cut then).
+const endFlush = 2 * time.Second
+
+// endData ends a data connection whose credential's hold ended with
+// cause: each open session typed (credentialAbort), then the connection,
+// once those ABORTs are written. AbortWith only buffers its frame when a
+// write is in flight, and Mux.Close drops what is buffered, so the close
+// is a Drain: GOAWAY (the client opens nothing more here), the connection
+// closed with every frame written (lane BILLABORT,
+// TestCutSessionsReadTheReasonBeforeTheClose).
+func endData(m *dataplane.Mux, open *sessionSet, cause error) {
+	open.abort(credentialAbort(cause))
+	ctx, cancel := context.WithTimeout(context.Background(), endFlush)
+	defer cancel()
+	_ = m.Drain(ctx)
 }

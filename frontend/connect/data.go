@@ -53,10 +53,7 @@ func (f *Frontend) serveData(w http.ResponseWriter, r *http.Request, caller iden
 	if f.Hold != nil && caller.Provider != "" { // a connection with no credential holds none
 		if held, release, ok := f.Hold(r.Context(), caller); ok {
 			defer release()
-			stop := context.AfterFunc(held, func() {
-				open.abort(credentialAbort(context.Cause(held)))
-				_ = m.Close()
-			})
+			stop := context.AfterFunc(held, func() { endData(m, &open, context.Cause(held)) })
 			defer stop()
 		}
 	}

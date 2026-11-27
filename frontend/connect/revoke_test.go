@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,4 +115,103 @@ func unauthenticated(err error) bool {
 func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// gatedConn holds its writes while armed: a write in flight on the
+// relay's side of a data connection.
+type gatedConn struct {
+	net.Conn
+	armed   atomic.Bool
+	entered chan struct{} // a held write began
+	release chan struct{} // it may go on
+}
+
+func (c *gatedConn) Write(b []byte) (int, error) {
+	if c.armed.CompareAndSwap(true, false) {
+		close(c.entered)
+		<-c.release
+	}
+	return c.Conn.Write(b)
+}
+
+// TestCutSessionsReadTheReasonBeforeTheClose (lane BILLABORT): a data
+// connection whose credential's hold ends (a revocation, an expiry, an
+// exhausted balance) ends each open session with its typed abort, and the
+// client reads that abort before the connection's close, also when a
+// write was in flight as the cut came (link's flush then leaves the
+// ABORT buffered for that write's next turn; a close at once dropped it,
+// relay-server TestBillingRefusalTyped read a bare EOF on a Linux CI run).
+func TestCutSessionsReadTheReasonBeforeTheClose(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close() //nolint:errcheck
+	gc := &gatedConn{entered: make(chan struct{}), release: make(chan struct{})}
+	var open sessionSet
+	accepted := make(chan *dataplane.Session, 1)
+	var relay *dataplane.Mux
+	ready := make(chan struct{})
+	go func() {
+		nc, err := ln.Accept()
+		if err != nil {
+			close(ready)
+			return
+		}
+		if _, err := http.ReadRequest(bufio.NewReader(nc)); err != nil {
+			close(ready)
+			return
+		}
+		gc.Conn = nc
+		relay, err = dataplane.Accept(t.Context(), gc, 1<<20, "allow")
+		close(ready)
+		if err != nil {
+			return
+		}
+		_ = relay.Serve(func(_ *pb.TCPData, s *dataplane.Session) {
+			open.add(s)
+			accepted <- s
+		})
+	}()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _, err := dataplane.Upgrade(t.Context(), nc, "relay", "k", 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close() //nolint:errcheck
+	go func() { _ = m.Serve(nil) }()
+	<-ready
+	if relay == nil {
+		t.Fatal("the relay's side did not accept")
+	}
+	s, err := m.Open(&pb.TCPData{AgentId: "a", TargetAddr: "22"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	rs := <-accepted
+
+	gc.armed.Store(true)
+	go func() { _, _ = rs.Write([]byte("y")) }() // the write in flight
+	<-gc.entered
+	cut := make(chan struct{})
+	go func() { defer close(cut); endData(relay, &open, identity.ErrBalanceExhausted) }()
+	select { // the cut closes once its frames are written: it cannot return before the release
+	case <-cut:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(gc.release)
+
+	_ = s.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, err = io.ReadAll(s)
+	a, ok := errors.AsType[*link.Abort](err)
+	if reason, _ := dataplane.AbortReason(a); !ok || reason != relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED {
+		t.Fatalf("the cut session ended with %v, want reason ERROR_REASON_BALANCE_EXHAUSTED", err)
+	}
+	<-cut
 }
