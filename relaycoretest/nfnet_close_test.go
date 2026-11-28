@@ -15,9 +15,10 @@ import (
 
 // TestRelayedCloseThenExitDeliversTheTail (lane RELAYCLOSE, link
 // spec/RelayedClose.tla): an accepted relayed Conn writes, closes and its
-// program exits (its connections to the relay end) before the dialler
-// read anything; the dialler then reads every byte and a clean end. A
-// nil Close is the program's licence to exit. Before, the dialler read
+// program exits (its connections to the relay end) once its Close
+// returned; the dialler reads every byte and a clean end. A nil Close is
+// the program's licence to exit: since link ENDACK it returns once the
+// dialler's program read the end, so the dialler reads meanwhile. Before, the dialler read
 // every byte, then a reset (the relay passed the agent link's end on), or
 // a cut tail.
 func TestRelayedCloseThenExitDeliversTheTail(t *testing.T) {
@@ -26,23 +27,37 @@ func TestRelayedCloseThenExitDeliversTheTail(t *testing.T) {
 	l := s.listen(t, nfnet.ListenOptions{})
 	c, ac := s.pair(t, l)
 	want := bytes.Repeat([]byte("0123456789abcdef"), 1<<16) // 1 MiB: within the windows
+	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second)) // a bound against a hang only
+	read := readAll(c)
 	if _, err := ac.Write(want); err != nil {
 		t.Fatal(err)
 	}
 	if err := ac.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	p.Switch("")                                            // the program exits: its connections end
-	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second)) // a bound against a hang only
-	got, err := io.ReadAll(c)
-	if err != nil || !bytes.Equal(got, want) {
-		t.Fatalf("dialler read %d of %d bytes, then %v: want all, then EOF", len(got), len(want), err)
+	p.Switch("") // the program exits: its connections end
+	if r := <-read; r.err != nil || !bytes.Equal(r.got, want) {
+		t.Fatalf("dialler read %d of %d bytes, then %v: want all, then EOF", len(r.got), len(want), r.err)
 	}
+}
+
+// readAll reads c to its end in its own goroutine, as a program does: a
+// nil Close of the far end means this end's program read the end (link
+// ENDACK), so the reader runs while the writer closes.
+func readAll(c io.Reader) <-chan readResult {
+	ch := make(chan readResult, 1)
+	go func() { got, err := io.ReadAll(c); ch <- readResult{got, err} }()
+	return ch
+}
+
+type readResult struct {
+	got []byte
+	err error
 }
 
 // TestRelayedDialCloseThenExitDeliversTheTail: the same for the dialler:
 // it writes, closes and its program exits (its connections to the relay
-// end) before the accepted Conn read anything.
+// end) once its Close returned, the accepted Conn reading meanwhile.
 func TestRelayedDialCloseThenExitDeliversTheTail(t *testing.T) {
 	s := newSDK(t, nil)
 	p := newSwitchProxy(t, s.r.Proxy)
@@ -55,17 +70,17 @@ func TestRelayedDialCloseThenExitDeliversTheTail(t *testing.T) {
 	s.d = d
 	l := s.listen(t, nfnet.ListenOptions{})
 	c, ac := s.pair(t, l)
-	want := bytes.Repeat([]byte("0123456789abcdef"), 1<<16) // 1 MiB: within the windows
+	want := bytes.Repeat([]byte("0123456789abcdef"), 1<<16)  // 1 MiB: within the windows
+	_ = ac.SetReadDeadline(time.Now().Add(30 * time.Second)) // a bound against a hang only
+	read := readAll(ac)
 	if _, err := c.Write(want); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	p.Switch("")                                             // the program exits: its connections end
-	_ = ac.SetReadDeadline(time.Now().Add(30 * time.Second)) // a bound against a hang only
-	got, err := io.ReadAll(ac)
-	if err != nil || !bytes.Equal(got, want) {
-		t.Fatalf("accepted Conn read %d of %d bytes, then %v: want all, then EOF", len(got), len(want), err)
+	p.Switch("") // the program exits: its connections end
+	if r := <-read; r.err != nil || !bytes.Equal(r.got, want) {
+		t.Fatalf("accepted Conn read %d of %d bytes, then %v: want all, then EOF", len(r.got), len(want), r.err)
 	}
 }
