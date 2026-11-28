@@ -10,11 +10,11 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/nfltr/link v0.14.1-0.20261127184034-a90010beb342
-	github.com/nfltr/link/peerlink/quiclink v0.10.1-0.20261127184034-a90010beb342
+	github.com/nfltr/link v0.14.1
+	github.com/nfltr/link/peerlink/quiclink v0.10.1
 	github.com/nfltr/quic-go v0.63.1-nfltr.11
-	github.com/nfltr/relay/client v0.28.1-0.20261128021656-c8cafc8a996d
-	github.com/nfltr/relay/proto v0.23.1-0.20261128021656-c8cafc8a996d
+	github.com/nfltr/relay/client v0.28.1
+	github.com/nfltr/relay/proto v0.23.1
 	github.com/pires/go-proxyproto v0.16.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
@@ -45,7 +45,7 @@ require (
 	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nfltr/link/pathswitch v0.1.6-0.20261127184034-a90010beb342 // indirect
+	github.com/nfltr/link/pathswitch v0.1.6 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pion/datachannel v1.6.3 // indirect
 	github.com/pion/dtls/v3 v3.1.9 // indirect
